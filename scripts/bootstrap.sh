@@ -35,7 +35,12 @@ fi
 
 echo "==> building GhosttyKit (this takes a few minutes the first time)"
 pushd vendor/ghostty >/dev/null
-"$ZIG" build -Doptimize=ReleaseFast -Dapp-runtime=none -Demit-xcframework=true install
+# -Demit-macos-app=false: we only want the library, and building Ghostty's own
+  # app bundle drags in its Xcode project (slower, and it needs the exact Xcode
+  # version the app targets). -Dxcframework-target=native: one arch slice.
+  "$ZIG" build -Doptimize=ReleaseFast -Dapp-runtime=none \
+    -Demit-xcframework=true -Demit-macos-app=false \
+    -Dxcframework-target=native install
 popd >/dev/null
 
 FRAMEWORK="vendor/ghostty/macos/GhosttyKit.xcframework"

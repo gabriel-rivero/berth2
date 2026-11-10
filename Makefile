@@ -3,7 +3,8 @@
 
 SHELL := /bin/bash
 CONFIG ?= release
-ZIG_FLAGS := -Doptimize=ReleaseFast -Dapp-runtime=none -Demit-xcframework=true
+ZIG_FLAGS := -Doptimize=ReleaseFast -Dapp-runtime=none -Demit-xcframework=true \
+             -Demit-macos-app=false -Dxcframework-target=native
 
 .PHONY: help bootstrap build app run test test-core fmt fmt-check clean dist
 

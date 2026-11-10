@@ -26,7 +26,9 @@ open build/Berth.app
 `make bootstrap` runs, inside `vendor/ghostty`:
 
 ```sh
-zig build -Doptimize=ReleaseFast -Dapp-runtime=none -Demit-xcframework=true install
+zig build -Doptimize=ReleaseFast -Dapp-runtime=none \
+  -Demit-xcframework=true -Demit-macos-app=false \
+  -Dxcframework-target=native install
 ```
 
 which produces two things we consume:
@@ -35,6 +37,8 @@ which produces two things we consume:
 - `vendor/ghostty/zig-out/share/ghostty/` — terminfo, shell integration, themes. Copied into `Berth.app/Contents/Resources/ghostty`.
 
 Both are gitignored. `app/Package.swift` references the xcframework by path, so `swift build` fails until bootstrap has run.
+
+`-Demit-macos-app=false` matters: Ghostty defaults `emit-xcframework` to also build its own `.app` through Xcode, which is slower and pins us to whatever Xcode version Ghostty's app currently compiles with. We only consume the library. `-Dxcframework-target=native` emits one architecture slice instead of a universal fat archive.
 
 `-Dapp-runtime=none` is what selects Ghostty's GUI core library (the thing the Ghostty macOS app itself links) instead of the standalone desktop app. `-Demit-lib-vt` stays off: we are not building the renderer-less VT library.
 
