@@ -96,20 +96,90 @@ final class GhosttySurfaceView: NSView {
 
     // MARK: - Input
 
-    /// TODO(M0): full key routing. This only forwards printable characters, so
-    /// arrows/Esc/Ctrl-c do not work yet. The real path builds a
-    /// `ghostty_input_key_s` per event (action PRESS/RELEASE/REPEAT, mods,
-    /// consumed_mods, keycode, text, unshifted_codepoint, composing) and calls
-    /// `ghostty_surface_key`, and must also call
-    /// `ghostty_config_key_is_binding` first so app-level bindings win.
+    /// All key handling goes through `ghostty_surface_key`: Ghostty decides
+    /// whether the chord is a binding (perform the action) or terminal input
+    /// (encode and write to the PTY). We never pre-encode C-c/arrow keys
+    /// ourselves; the core needs the physical key to do that correctly.
     override func keyDown(with event: NSEvent) {
-        if let text = event.characters, !text.isEmpty, let surface {
-            text.withCString { ptr in
-                ghostty_surface_text(surface, ptr, UInt(strlen(ptr)))
-            }
+        guard let surface else {
+            super.keyDown(with: event)
             return
         }
-        super.keyDown(with: event)
+
+        let action: ghostty_input_action_e = event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS
+        let keyEvent = event.berthKeyEvent(
+            action,
+            translationFlags: BerthInput.translationFlags(event, surface: surface))
+        guard keyEvent.send(to: surface) else {
+            super.keyDown(with: event)
+            return
+        }
+    }
+
+    override func keyUp(with event: NSEvent) {
+        guard let surface else {
+            super.keyUp(with: event)
+            return
+        }
+
+        // Releases carry no text; Ghostty only needs the key and mods.
+        var keyEvent = event.berthKeyEvent(
+            GHOSTTY_ACTION_RELEASE,
+            translationFlags: BerthInput.translationFlags(event, surface: surface))
+        keyEvent.text = nil
+        _ = keyEvent.send(to: surface)
+    }
+
+    /// Modifier press/release. Ghostty tracks these for protocols that report
+    /// modifiers (Kitty keyboard protocol, terminal mouse reporting).
+    override func flagsChanged(with event: NSEvent) {
+        guard let surface else {
+            super.flagsChanged(with: event)
+            return
+        }
+
+        let mod: UInt32
+        switch event.keyCode {
+        case 0x39: mod = GHOSTTY_MODS_CAPS.rawValue
+        case 0x38, 0x3C: mod = GHOSTTY_MODS_SHIFT.rawValue
+        case 0x3B, 0x3E: mod = GHOSTTY_MODS_CTRL.rawValue
+        case 0x3A, 0x3D: mod = GHOSTTY_MODS_ALT.rawValue
+        case 0x37, 0x36: mod = GHOSTTY_MODS_SUPER.rawValue
+        default: return super.flagsChanged(with: event)
+        }
+
+        // Press if that modifier is now down, release otherwise. Sided keys
+        // (left vs right) are not distinguished yet; Ghostty treats the mod as
+        // pressed because the mask is set either way.
+        let pressed = BerthInput.mods(event.modifierFlags).rawValue & mod != 0
+        var keyEvent = event.berthKeyEvent(pressed ? GHOSTTY_ACTION_PRESS : GHOSTTY_ACTION_RELEASE)
+        keyEvent.text = nil
+        _ = keyEvent.send(to: surface)
+    }
+
+    /// AppKit offers Command chords to the menu bar before `keyDown`. Claim
+    /// the ones Ghostty binds, plus everything with Control, because macOS
+    /// otherwise interprets C-/ and C-return itself (beep, context menu).
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard event.type == .keyDown, window?.firstResponder === self, let surface else {
+            return super.performKeyEquivalent(with: event)
+        }
+
+        let keyEvent = event.berthKeyEvent(
+            GHOSTTY_ACTION_PRESS,
+            translationFlags: BerthInput.translationFlags(event, surface: surface))
+        if keyEvent.isBinding(on: surface) {
+            keyDown(with: event)
+            return true
+        }
+
+        if event.modifierFlags.contains(.control) {
+            keyDown(with: event)
+            return true
+        }
+
+        // Let the menu bar (⌘Q, ⌘W…) and the system have it.
+        return super.performKeyEquivalent(with: event)
     }
 
     override func mouseDown(with event: NSEvent) {
