@@ -8,7 +8,10 @@ import GhosttyKit
 final class GhosttySurfaceView: NSView {
     /// Core-assigned id (`srf_...`), used by the action callback to report
     /// titles/cwd/bells back to the core.
-    var berthSurfaceID: String?
+    /// Set by the shell, read from C callbacks. Both are plain values that
+    /// never change on a different thread, so they are intentionally
+    /// nonisolated: the clipboard/action callbacks run outside actor context.
+    nonisolated(unsafe) var berthSurfaceID: String?
 
     // `nonisolated(unsafe)`: NSView is MainActor-isolated, but C teardown has to
     // happen in `deinit`, which is nonisolated. Every other access is on the
@@ -104,7 +107,7 @@ final class GhosttySurfaceView: NSView {
 
     // MARK: - Core-facing accessors
 
-    var surfaceHandle: ghostty_surface_t? { surface }
+    nonisolated(unsafe) var surfaceHandle: ghostty_surface_t? { surface }
 
     /// Foreground process id, 0 until the child is running.
     func foregroundPID() -> UInt32 {

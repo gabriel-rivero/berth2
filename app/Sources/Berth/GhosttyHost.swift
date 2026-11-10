@@ -28,7 +28,11 @@ private func berthSurfaceView(_ userdata: UnsafeMutableRawPointer?) -> GhosttySu
 /// handles; `false` lets Ghostty apply its own default behaviour.
 private let berthActionCallback: ghostty_runtime_action_cb = { _, target, action in
     guard Thread.isMainThread else { return false }
-    return BerthCoreHost.shared.handleAction(target: target, action: action)
+    // Ghostty only invokes the runtime callbacks on the main thread, so this
+    // assumption is checked rather than hoped for.
+    return MainActor.assumeIsolated {
+        BerthCoreHost.shared.handleAction(target: target, action: action)
+    }
 }
 
 // MARK: - Clipboard
@@ -107,7 +111,7 @@ private enum ClipboardBridge {
             available_len: 0,
             confirmed: confirmed,
             remember: remember)
-        cContents.withUnsafeMutableBufferPointer { buffer in
+        cContents.withUnsafeBufferPointer { buffer in
             complete.contents = buffer.baseAddress
             complete.contents_len = buffer.count
             ghostty_surface_complete_clipboard_request(surface, &complete, state)
@@ -199,7 +203,9 @@ private let berthWriteClipboardCallback: ghostty_runtime_write_clipboard_cb = {
     // writes; anything else is left untouched rather than mangled.
     for i in 0..<len {
         let item = content[i]
-        guard let mime = item.mime, mime.hasPrefix("text/plain"), let data = item.data else {
+        guard let mime = item.mime, String(cString: mime).hasPrefix("text/plain"),
+              let data = item.data
+        else {
             continue
         }
         let text = String(decoding: Data(bytes: data, count: Int(item.len)), as: UTF8.self)

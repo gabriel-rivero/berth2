@@ -203,6 +203,7 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
         }
     }
 
+    @MainActor
     private func reconcile(_ workspaceID: String, name: String) {
         guard let engine else { return }
         let request = #"{"id":"layout","method":"workspace.layout","params":{"workspace_id":"\#(workspaceID)"}}"#
@@ -250,6 +251,7 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
     }
 
     /// The surface view that currently has focus, if any.
+    @MainActor
     var focusedSurfaceID: String? {
         for window in windows.values {
             if let view = window.firstResponder as? GhosttySurfaceView {
@@ -262,6 +264,7 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
     // MARK: - Ghostty actions
 
     /// Called from Ghostty's action callback (main thread, during tick).
+    @MainActor
     func handleAction(target: ghostty_target_s, action: ghostty_action_s) -> Bool {
         guard target.tag == GHOSTTY_TARGET_SURFACE,
               let handle = target.target.surface,

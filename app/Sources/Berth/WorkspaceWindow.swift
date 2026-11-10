@@ -54,6 +54,7 @@ final class WorkspaceWindow: NSWindow {
 /// Builds NSSplitView/leaf views from the core's tree. Leaves host the actual
 /// Ghostty surface views; everything else is a split with draggable dividers.
 enum LayoutBuilder {
+    @MainActor
     static func build(_ node: WorkspaceLayout.Node, views: [String: GhosttySurfaceView]) -> NSView? {
         switch node {
         case let .leaf(_, activeSurface):
