@@ -3,8 +3,13 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
+
+# Needed only by the release step; harmless elsewhere.
+permissions:
+  contents: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -102,3 +107,21 @@ jobs:
           path: Berth-*.zip
           if-no-files-found: error
           retention-days: 30
+
+      # A tag is the release trigger. The app is ad-hoc signed and not
+      # notarized, so it ships as a pre-release that people opt into.
+      - name: publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Berth-*.zip
+          prerelease: true
+          generate_release_notes: true
+          body: |
+            Berth ${{ github.ref_name }} — macOS 14+, Apple Silicon.
+
+            Download `Berth-*.zip`, unzip, and right-click → Open the first time
+            (the app is ad-hoc signed, not notarized).
+
+            This build is a daily-driver skeleton: Ghostty terminal, key routing,
+            JSON-RPC socket, and the CLI. Splits and the sidebar are not in yet.

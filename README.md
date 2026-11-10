@@ -4,6 +4,8 @@ A native macOS terminal workspace for running coding agents side by side — bui
 
 Status: M0. The engine is pinned, the AppKit shell renders a Ghostty terminal with full key routing, and the Rust core is bridged over UniFFI: the app boots from the core, serves the JSON-RPC socket, and `berth` can drive it. Split tree and sidebar are M1.
 
+Download: [latest release](https://github.com/gabriel-rivero/berth2/releases) (macOS 14+, Apple Silicon, ad-hoc signed).
+
 ```sh
 make test-core    # rust core, any platform
 make bootstrap    # macOS: build pinned GhosttyKit
