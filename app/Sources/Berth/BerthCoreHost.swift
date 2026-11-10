@@ -168,11 +168,16 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
         return view
     }
 
-    private func onMain<T>(_ body: () throws -> T) rethrows -> T {
+    /// Run `body` on the main thread. The closure is `@MainActor` so AppKit
+    /// calls inside it type-check; `sync` blocks the caller (a socket queue),
+    /// which is what the core's synchronous `HostOps` contract expects.
+    private func onMain<T>(_ body: @MainActor () throws -> T) rethrows -> T {
         if Thread.isMainThread {
-            return try body()
+            return try MainActor.assumeIsolated { try body() }
         }
-        return try DispatchQueue.main.sync(execute: body)
+        return try DispatchQueue.main.sync {
+            try MainActor.assumeIsolated { try body() }
+        }
     }
 
     private func requestNotificationPermissionIfNeeded() {
