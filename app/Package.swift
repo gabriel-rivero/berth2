@@ -52,11 +52,13 @@ let package = Package(
             // GhosttyKit is a bare static archive: it carries no link settings of
             // its own, so the C++ runtime its shader compiler needs and the
             // Carbon TIS symbols it uses for keyboard layouts must be named here.
-            // libberth_ffi.a is likewise a bare archive; its path is host-specific
-            // so it cannot be a `.linkedLibrary` name alone.
+            //
+            // libberth_ffi is named by absolute path, not `-lberth_ffi`: cargo
+            // emits a dylib next to the archive for bindgen, and `-l` would pick
+            // the dylib, baking the build machine's absolute path into
+            // LC_LOAD_DYLIB. The app must carry the core inside itself.
             linkerSettings: [
-                .unsafeFlags(["-L\(coreLibDir)"]),
-                .linkedLibrary("berth_ffi"),
+                .unsafeFlags(["\(coreLibDir)/libberth_ffi.a"]),
                 .linkedLibrary("c++"),
                 .linkedFramework("Carbon"),
             ]

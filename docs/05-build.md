@@ -117,4 +117,5 @@ bindings with `make bindings`; CI fails if they drift.
 | `ghostty_init` returns non-zero | resources not bundled; check `Berth.app/Contents/Resources/ghostty`, or set `GHOSTTY_RESOURCES_DIR` |
 | blank window, no prompt | surface never created — check `createSurface` logs, view size 0 at first layout |
 | app crashes on quit | a surface freed after its layer; free surfaces before `ghostty_app_free` |
+| `Library not loaded: /Users/.../libberth_ffi.dylib` | the core was linked as a dylib; `Package.swift` must name `libberth_ffi.a` by path (CI checks the bundle with `otool -L`) |
 | `zig: error: no module named ...` | wrong Zig version; `make bootstrap` prints the required one |

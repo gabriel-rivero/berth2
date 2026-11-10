@@ -98,6 +98,19 @@ jobs:
       - name: bundle app
         run: ./scripts/bundle.sh release
 
+      # A build that needs a library from the runner is not shippable: this is
+      # exactly how v0.1.0 shipped with /Users/runner/.../libberth_ffi.dylib.
+      - name: bundle is self-contained
+        run: |
+          bin=build/Berth.app/Contents/MacOS/Berth
+          bad=$(otool -L "$bin" | tail -n +2 | awk '{print $1}' \
+                | grep -vE '^(/usr/lib/|/System/Library/)' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::binary links libraries outside the system paths:"
+            echo "$bad"
+            exit 1
+          fi
+
       - name: archive
         run: ditto -c -k --keepParent build/Berth.app "Berth-${GITHUB_SHA::7}.zip"
 
