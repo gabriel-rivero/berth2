@@ -18,6 +18,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        MainMenu.install()
+
         let window = MainWindow()
         window.makeKeyAndOrderFront(nil)
         self.window = window

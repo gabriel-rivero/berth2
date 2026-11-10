@@ -55,7 +55,9 @@ The core is where the product logic lives and it is fully headless-testable, so 
 ## M0 smoke checklist (run on the Mac after every Ghostty bump)
 
 - [ ] Window opens, cursor blinks, prompt appears (default shell)
-- [ ] `vim` opens, arrows/Esc work, `:q` exits — **blocked until key routing lands** (see gaps)
+- [ ] `vim` opens, arrows/Esc work, `:q` exits
+- [ ] `ctrl-c` interrupts a `sleep 100`, `ctrl-r` searches history, `ctrl-a`/`ctrl-e` move the line
+- [ ] `⌘K` clears (Ghostty binding wins over the menu), `⌘Q` still quits
 - [ ] `htop` renders colors and boxes without tearing
 - [ ] `seq 1 100000 | less` scrolls smoothly; no dropped frames while tailing a log
 - [ ] Resize the window: no artifacts, no ghost cells, grid reflows
@@ -68,12 +70,13 @@ Until every line passes, M0 is not done.
 
 ## Known scaffold gaps (deliberate, ordered)
 
-1. **Key routing.** `keyDown` currently forwards printable characters only via `ghostty_surface_text`, so Esc/Ctrl/arrows do not work. Fix: build `ghostty_input_key_s` (action/mods/consumed_mods/keycode/text/unshifted_codepoint/composing) → `ghostty_surface_key`, and consult `ghostty_config_key_is_binding` first so terminal bindings win over app bindings.
-2. **Action callbacks.** `berthActionCallback` returns `false` for everything. Wire `SET_TITLE`, `PWD`, `PROGRESS_REPORT`, `RING_BELL`, `DESKTOP_NOTIFICATION`, `OPEN_URL`, `SHOW_CHILD_EXITED` into the core (docs/03-protocol.md §5).
+1. **Action callbacks.** `berthActionCallback` returns `false` for everything. Wire `SET_TITLE`, `PWD`, `PROGRESS_REPORT`, `RING_BELL`, `DESKTOP_NOTIFICATION`, `OPEN_URL`, `SHOW_CHILD_EXITED` into the core (docs/03-protocol.md §5).
+2. **IME.** No `NSTextInputClient` yet, so dead keys (é, ü) and CJK input do not work; `ghostty_surface_preedit` / `ime_point` are unused. Key events themselves are complete (`GhosttyInput.swift`).
 3. **Clipboard.** Read/write confirm callbacks are stubs.
-4. **IME.** `ghostty_surface_preedit` + `ime_point` are not called yet; no CJK input.
-5. **Core bridge.** `SocketServer` runs with `StubHandler`; UniFFI (`core/crates/berth-ffi`) is M2. `berth ping` works end to end once the socket is started from `AppDelegate`.
-6. **Split tree, sidebar, palette** — M1.
+4. **Core bridge.** `SocketServer` runs with `StubHandler`; UniFFI (`core/crates/berth-ffi`) is M2. `berth ping` works end to end once the socket is started from `AppDelegate`.
+5. **Split tree, sidebar, palette** — M1.
+
+Key routing landed in M0: `keyDown`/`keyUp`/`flagsChanged` build `ghostty_input_key_s` and hand it to `ghostty_surface_key`, and `performKeyEquivalent` claims Ghostty bindings plus Control chords so the menu bar and AppKit's beep/context-menu shortcuts do not swallow them.
 
 ## Upgrading Ghostty
 
