@@ -6,8 +6,11 @@ import AppKit
 import GhosttyKit
 
 final class GhosttySurfaceView: NSView {
-    private var surface: ghostty_surface_t?
-    private var workingDirectoryRef: UnsafeMutablePointer<CChar>?
+    // `nonisolated(unsafe)`: NSView is MainActor-isolated, but C teardown has to
+    // happen in `deinit`, which is nonisolated. Every other access is on the
+    // main thread, so this is a narrow, auditable escape hatch.
+    nonisolated(unsafe) private var surface: ghostty_surface_t?
+    nonisolated(unsafe) private var workingDirectoryRef: UnsafeMutablePointer<CChar>?
 
     override var isOpaque: Bool { true }
     override var acceptsFirstResponder: Bool { true }
