@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The portable core: pure logic, no GPU, no window. Fast and platform-neutral.
+  core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - name: fmt
+        run: cargo fmt --all --check
+        working-directory: core
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+        working-directory: core
+      - name: test
+        run: cargo test --workspace
+        working-directory: core
+
+  # The real product: pinned Ghostty engine + AppKit shell, built into a .app.
+  app:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: pinned engine
+        id: engine
+        run: |
+          echo "sha=$(git rev-parse HEAD:vendor/ghostty)" >> "$GITHUB_OUTPUT"
+          echo "zig=$(grep -o 'minimum_zig_version = "[^"]*"' vendor/ghostty/build.zig.zon | head -1 | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ steps.engine.outputs.zig }}
+
+      # Ghostty's build is expensive (~6 min cold); cache the compiler cache and
+      # the emitted framework per engine commit so most runs skip it entirely.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            vendor/ghostty/.zig-cache
+            vendor/ghostty/macos/GhosttyKit.xcframework
+            vendor/ghostty/zig-out
+          key: ghostty-${{ steps.engine.outputs.sha }}-${{ runner.arch }}-${{ steps.engine.outputs.zig }}
+
+      - name: build engine
+        run: ./scripts/bootstrap.sh
+
+      - name: swift build
+        run: swift build -c release --package-path app
+
+      - name: swift test
+        run: swift test --package-path app
+
+      - name: bundle app
+        run: ./scripts/bundle.sh release
+
+      - name: archive
+        run: ditto -c -k --keepParent build/Berth.app "Berth-${GITHUB_SHA::7}.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Berth-${{ github.sha }}
+          path: Berth-*.zip
+          if-no-files-found: error
+          retention-days: 30

@@ -1,0 +1,28 @@
+# macOS
+.DS_Store
+build/
+*.app/
+*.dSYM/
+DerivedData/
+xcuserdata/
+*.xcworkspace/
+*.xcodeproj/project.xcworkspace/
+
+# SwiftPM
+app/.build/
+app/.swiftpm/
+Package.resolved
+
+# Ghostty build artifacts (the submodule is tracked; its output is not)
+vendor/ghostty/macos/GhosttyKit.xcframework/
+vendor/ghostty/zig-out/
+vendor/ghostty/.zig-cache/
+vendor/ghostty/zig-cache/
+
+# Rust
+core/target/
+
+# Editors
+.idea/
+.vscode/
+*.swp

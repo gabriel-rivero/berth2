@@ -1,0 +1,14 @@
+[package]
+name = "berth-core"
+description = "Portable domain core for Berth: model, agent lifecycle, attention policy, protocol codec."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+
+[lib]
+name = "berth_core"
