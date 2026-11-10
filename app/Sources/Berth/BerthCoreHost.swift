@@ -134,7 +134,8 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
     }
 
     func notify(title: String, body: String, workspaceId: String?) {
-        onMain { [self] in
+        // Best effort: a missed banner must never fail the core call.
+        try? onMain { [self] in
             requestNotificationPermissionIfNeeded()
             let content = UNMutableNotificationContent()
             content.title = title
@@ -152,7 +153,7 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
 
     /// Drop a surface whose child exited, so the core can be told.
     func surfaceDidExit(_ id: String) {
-        onMain {
+        try? onMain {
             surfaces.removeValue(forKey: id)
             windows.removeValue(forKey: id)
         }
