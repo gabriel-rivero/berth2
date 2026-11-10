@@ -5,6 +5,10 @@
 // Threading: HostOps methods are called on whichever thread dispatched the
 // request (usually a socket client queue). All AppKit/Ghostty work hops to the
 // main thread synchronously — the core expects spawn/send/close results inline.
+//
+// Windows are not created here: `spawn` only makes the surface view, and
+// `reconcileAll()` then rebuilds every window from the core's pane tree. That
+// keeps one code path for boot, `berth new`, splits and session restore.
 
 import AppKit
 import BerthCore
@@ -17,11 +21,16 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
 
     /// Main-thread confined.
     private var surfaces: [String: GhosttySurfaceView] = [:]
-    private var windows: [String: MainWindow] = [:]
+    private var windows: [String: WorkspaceWindow] = [:]
+    private var surfaceWorkspace: [String: String] = [:]
     private var didAskForNotificationPermission = false
+    private var lastLayoutJSON: [String: String] = [:]
 
-    /// Called on the main thread when Ghostty reports a child exited.
-    var onSurfaceExited: ((String) -> Void)?
+    /// Set by AppDelegate once the engine exists; callbacks (titles, cwd, bells)
+    /// report through it.
+    weak var engine: Engine?
+    /// Called after a report so queued events reach socket subscribers.
+    var onEvents: (() -> Void)?
 
     private init() {}
 
@@ -33,8 +42,17 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
             guard let id = env["BERTH_SURFACE_ID"] else {
                 throw FfiError.Internal(message: "spawn request is missing BERTH_SURFACE_ID")
             }
+            if let existing = surfaces[id] {
+                let grid = existing.gridSize()
+                return FfiSpawned(
+                    pid: existing.foregroundPID(),
+                    tty: existing.ttyName(),
+                    cols: grid.cols,
+                    rows: grid.rows)
+            }
 
             let view = GhosttySurfaceView(frame: NSRect(x: 0, y: 0, width: 900, height: 600))
+            view.berthSurfaceID = id
             guard view.createSurface(
                 command: req.command,
                 workingDirectory: req.cwd,
@@ -44,13 +62,16 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
             }
 
             surfaces[id] = view
-            let window = MainWindow(surface: view)
-            windows[id] = window
-            window.makeKeyAndOrderFront(nil)
+            if let workspace = env["BERTH_WORKSPACE_ID"] {
+                surfaceWorkspace[id] = workspace
+            }
 
             let grid = view.gridSize()
-            let pid = view.surfaceHandle.map { UInt32(truncatingIfNeeded: ghostty_surface_foreground_pid($0)) } ?? 0
-            return FfiSpawned(pid: pid, tty: view.ttyName(), cols: grid.cols, rows: grid.rows)
+            return FfiSpawned(
+                pid: view.foregroundPID(),
+                tty: view.ttyName(),
+                cols: grid.cols,
+                rows: grid.rows)
         }
     }
 
@@ -77,20 +98,26 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
         }
     }
 
+    /// Detach a surface the core no longer wants. The window may still exist
+    /// with other panes; `reconcileAll` (right after this call) removes it from
+    /// the tree, and the last pane closing takes the window with it.
     func close(surfaceId: String) throws {
         try onMain {
-            guard let window = windows.removeValue(forKey: surfaceId) else {
-                throw FfiError.Internal(message: "unknown surface \(surfaceId)")
-            }
-            surfaces.removeValue(forKey: surfaceId)
-            window.close()
+            guard let view = surfaces.removeValue(forKey: surfaceId) else { return }
+            surfaceWorkspace.removeValue(forKey: surfaceId)
+            view.removeFromSuperview()
         }
     }
 
     func focus(surfaceId: String) throws {
         try onMain {
-            guard let window = windows[surfaceId], let view = surfaces[surfaceId] else {
+            guard let view = surfaces[surfaceId] else {
                 throw FfiError.Internal(message: "unknown surface \(surfaceId)")
+            }
+            let workspaceID = surfaceWorkspace[surfaceId]
+            guard let window = workspaceID.flatMap({ windows[$0] }) else {
+                // During restore the window is built by reconcileAll.
+                return
             }
             window.makeKeyAndOrderFront(nil)
             window.makeFirstResponder(view)
@@ -149,15 +176,190 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
         }
     }
 
-    // MARK: - Window bookkeeping
+    // MARK: - Layout
 
-    /// Drop a surface whose child exited, so the core can be told.
-    func surfaceDidExit(_ id: String) {
-        try? onMain {
-            surfaces.removeValue(forKey: id)
-            windows.removeValue(forKey: id)
+    /// Rebuild every window from the core's tree. Cheap when nothing changed:
+    /// the layout JSON is compared first and identical workspaces are skipped.
+    func reconcileAll() {
+        try? onMain { [self] in
+            guard let engine else { return }
+            let listed = engine.dispatch(
+                request: #"{"id":"sync","method":"workspace.list","params":{}}"#)
+            guard let result = Self.result(listed),
+                  let workspaces = result["workspaces"] as? [[String: Any]]
+            else { return }
+
+            var live = Set<String>()
+            for workspace in workspaces {
+                guard let id = workspace["id"] as? String else { continue }
+                live.insert(id)
+                reconcile(id, name: workspace["name"] as? String ?? "Berth")
+            }
+            for (id, window) in windows where !live.contains(id) {
+                windows.removeValue(forKey: id)
+                lastLayoutJSON.removeValue(forKey: id)
+                window.close()
+            }
         }
-        onSurfaceExited?(id)
+    }
+
+    private func reconcile(_ workspaceID: String, name: String) {
+        guard let engine else { return }
+        let request = #"{"id":"layout","method":"workspace.layout","params":{"workspace_id":"\#(workspaceID)"}}"#
+        let response = engine.dispatch(request: request)
+        guard let result = Self.result(response),
+              let data = try? JSONSerialization.data(withJSONObject: result),
+              let json = String(data: data, encoding: .utf8),
+              let layout = WorkspaceLayout.parse(json)
+        else { return }
+
+        if lastLayoutJSON[workspaceID] == json, let window = windows[workspaceID] {
+            // Same tree, but a surface may have run out of processes or the
+            // key window may have changed; focus is cheap to reapply.
+            if window.isKeyWindow, let active = layout.activeSurface, let view = surfaces[active],
+               window.firstResponder !== view {
+                window.makeFirstResponder(view)
+            }
+            return
+        }
+        lastLayoutJSON[workspaceID] = json
+
+        let isNew = windows[workspaceID] == nil
+        let window = windows[workspaceID] ?? WorkspaceWindow(workspaceID: workspaceID, name: name)
+        windows[workspaceID] = window
+        window.apply(layout: layout, views: surfaces)
+        if isNew {
+            window.makeKeyAndOrderFront(nil)
+            if let active = layout.activeSurface ?? layout.root.firstLeafSurface(),
+               let view = surfaces[active] {
+                window.makeFirstResponder(view)
+            }
+        }
+    }
+
+    /// Ghostty asked to close a surface (child exited and the config says so).
+    /// Goes through the core so pane/agent bookkeeping stays in one place.
+    func closeSurfaceFromTerminal(_ surfaceID: String) {
+        try? onMain { [self] in
+            guard let engine else { return }
+            _ = engine.dispatch(
+                request: #"{"id":"exit","method":"surface.close","params":{"surface_id":"\#(surfaceID)"}}"#)
+            reconcileAll()
+            onEvents?()
+        }
+    }
+
+    /// The surface view that currently has focus, if any.
+    var focusedSurfaceID: String? {
+        for window in windows.values {
+            if let view = window.firstResponder as? GhosttySurfaceView {
+                return view.berthSurfaceID
+            }
+        }
+        return nil
+    }
+
+    // MARK: - Ghostty actions
+
+    /// Called from Ghostty's action callback (main thread, during tick).
+    func handleAction(target: ghostty_target_s, action: ghostty_action_s) -> Bool {
+        guard target.tag == GHOSTTY_TARGET_SURFACE,
+              let handle = target.target.surface,
+              let userdata = ghostty_surface_userdata(handle)
+        else { return false }
+        let view = Unmanaged<GhosttySurfaceView>.fromOpaque(userdata).takeUnretainedValue()
+        guard let id = view.berthSurfaceID else { return false }
+
+        switch action.tag {
+        case GHOSTTY_ACTION_SET_TITLE:
+            guard let title = action.action.set_title.title else { return false }
+            let text = String(cString: title)
+            view.window?.title = text
+            report(id, ["title": text])
+            return true
+
+        case GHOSTTY_ACTION_PWD:
+            guard let pwd = action.action.pwd.pwd else { return false }
+            report(id, ["cwd": String(cString: pwd)])
+            return true
+
+        case GHOSTTY_ACTION_PROGRESS_REPORT:
+            let report = action.action.progress_report
+            switch report.state {
+            case GHOSTTY_PROGRESS_STATE_REMOVE:
+                self.report(id, ["clear_progress": true])
+            case GHOSTTY_PROGRESS_STATE_SET:
+                let percent = max(0, min(100, Int(report.progress)))
+                self.report(id, ["progress": Double(percent) / 100.0])
+            default:
+                break
+            }
+            return true
+
+        case GHOSTTY_ACTION_RING_BELL:
+            report(id, ["bell": true])
+            return true
+
+        case GHOSTTY_ACTION_DESKTOP_NOTIFICATION:
+            guard let title = action.action.desktop_notification.title,
+                  let body = action.action.desktop_notification.body
+            else { return false }
+            createNotification(
+                title: String(cString: title),
+                body: String(cString: body),
+                workspaceID: surfaceWorkspace[id])
+            return true
+
+        case GHOSTTY_ACTION_OPEN_URL:
+            let url = action.action.open_url
+            guard let ptr = url.url else { return false }
+            let string = String(decoding: UnsafeRawBufferPointer(start: ptr, count: Int(url.len)),
+                                as: UTF8.self)
+            if let parsed = URL(string: string) {
+                NSWorkspace.shared.open(parsed)
+                return true
+            }
+            return false
+
+        case GHOSTTY_ACTION_SHOW_CHILD_EXITED:
+            report(id, ["exited": true])
+            return false
+
+        default:
+            return false
+        }
+    }
+
+    /// Tell the core about something the terminal learned from escape
+    /// sequences. Deferred to the next runloop turn: dispatching re-enters
+    /// Ghostty for some actions (focus, spawn) and this callback runs inside
+    /// its tick.
+    private func report(_ surfaceID: String, _ fields: [String: Any]) {
+        var params = fields
+        params["surface_id"] = surfaceID
+        guard let data = try? JSONSerialization.data(withJSONObject: params),
+              let json = String(data: data, encoding: .utf8)
+        else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let engine = self.engine else { return }
+            _ = engine.dispatch(
+                request: #"{"id":"osc","method":"surface.update","params":\#(json)}"#)
+            self.onEvents?()
+        }
+    }
+
+    private func createNotification(title: String, body: String, workspaceID: String?) {
+        var params: [String: Any] = ["level": "info", "title": title, "body": body]
+        if let workspaceID { params["workspace_id"] = workspaceID }
+        guard let data = try? JSONSerialization.data(withJSONObject: params),
+              let json = String(data: data, encoding: .utf8)
+        else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let engine = self.engine else { return }
+            _ = engine.dispatch(
+                request: #"{"id":"osc","method":"notification.create","params":\#(json)}"#)
+            self.onEvents?()
+        }
     }
 
     // MARK: - Helpers
@@ -192,6 +394,15 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
 
     private final class Box<T>: @unchecked Sendable {
         var result: Result<T, Error>?
+    }
+
+    /// `ok:true` result object of a protocol response.
+    private static func result(_ response: String) -> [String: Any]? {
+        guard let data = response.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              object["ok"] as? Bool == true
+        else { return nil }
+        return object["result"] as? [String: Any]
     }
 
     private func requestNotificationPermissionIfNeeded() {

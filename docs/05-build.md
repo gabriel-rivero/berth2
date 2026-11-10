@@ -71,21 +71,23 @@ The core is where the product logic lives and it is fully headless-testable, so 
 
 Until every line passes, M0 is not done.
 
-## Known scaffold gaps (deliberate, ordered)
+## Known gaps (deliberate, ordered)
 
-1. **Action callbacks.** `berthActionCallback` returns `false` for everything. Wire `SET_TITLE`, `PWD`, `PROGRESS_REPORT`, `RING_BELL`, `DESKTOP_NOTIFICATION`, `OPEN_URL`, `SHOW_CHILD_EXITED` into the core (docs/03-protocol.md §5).
-2. **IME.** No `NSTextInputClient` yet, so dead keys (é, ü) and CJK input do not work; `ghostty_surface_preedit` / `ime_point` are unused. Key events themselves are complete (`GhosttyInput.swift`).
-3. **Clipboard.** Read/write confirm callbacks are stubs, so `⌘C`/`⌘V` are dead.
-4. **Socket auth.** v1 relies on the socket's `0600` permissions; the token handshake from docs/03-protocol.md §2 is not implemented.
-5. **Split tree, sidebar, palette** — M1. One workspace = one window until then.
-6. **Session journal.** State is snapshotted on quit only; a crash loses the last session (no `journal.ndjson` yet).
+1. **IME.** No `NSTextInputClient` yet, so CJK, emoji picker and dictation do not
+   reach the terminal. Plain typing and dead keys are unaffected.
+2. **Socket token auth.** The socket is `0600` in the user's Application Support
+   directory, but the token handshake described in docs/03-protocol.md §2 is not
+   implemented; access is "any process running as you".
+3. **Sidebar.** Workspaces exist in the core and each one is a window, but there
+   is no workspace list, no git branch, no unread badges.
+4. **Session journal.** Persistence is a snapshot on quit; a crash loses the last
+   structural change. The journal in docs/02 §2.3 is not written yet.
+5. **Geometric focus.** ⌘] / ⌘[ cycle surfaces in tree order; arrow-key
+   navigation between panes needs pane rectangles and lands with the sidebar.
 
-The core is wired: UniFFI (`core/crates/berth-ffi`) exposes `Engine.dispatch`,
-`drainEvents`, `snapshot`/`restore` and `sweepStale`, and Swift implements the
-`HostOps` callback interface in `BerthCoreHost.swift`. `SocketServer` is started
-at launch, so `berth ping` / `berth ls` work against a running app.
-
-Key routing landed in M0: `keyDown`/`keyUp`/`flagsChanged` build `ghostty_input_key_s` and hand it to `ghostty_surface_key`, and `performKeyEquivalent` claims Ghostty bindings plus Control chords so the menu bar and AppKit's beep/context-menu shortcuts do not swallow them.
+Done since the scaffold: key routing, core bridge over UniFFI, clipboard
+(including the paste-confirmation dialog), OSC reporting (title, cwd, progress,
+bell, notifications, URLs), split tree with draggable dividers, and ⌘D/⌘⇧D/⌘W.
 
 ## Upgrading Ghostty
 

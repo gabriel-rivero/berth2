@@ -6,6 +6,10 @@ import AppKit
 import GhosttyKit
 
 final class GhosttySurfaceView: NSView {
+    /// Core-assigned id (`srf_...`), used by the action callback to report
+    /// titles/cwd/bells back to the core.
+    var berthSurfaceID: String?
+
     // `nonisolated(unsafe)`: NSView is MainActor-isolated, but C teardown has to
     // happen in `deinit`, which is nonisolated. Every other access is on the
     // main thread, so this is a narrow, auditable escape hatch.
@@ -41,6 +45,10 @@ final class GhosttySurfaceView: NSView {
         config.platform_tag = GHOSTTY_PLATFORM_MACOS
         config.platform.macos.nsview = Unmanaged.passUnretained(self).toOpaque()
         config.scale_factor = Double(window?.backingScaleFactor ?? 2.0)
+        // Ghostty hands this pointer back to every runtime callback for this
+        // surface (clipboard, actions); it must stay valid for the surface's
+        // lifetime, which the window does.
+        config.userdata = Unmanaged.passUnretained(self).toOpaque()
         // Ghostty's field is a non-optional `const char*`; empty means inherit.
         config.working_directory = cString(workingDirectory ?? "")
 
@@ -97,6 +105,12 @@ final class GhosttySurfaceView: NSView {
     // MARK: - Core-facing accessors
 
     var surfaceHandle: ghostty_surface_t? { surface }
+
+    /// Foreground process id, 0 until the child is running.
+    func foregroundPID() -> UInt32 {
+        guard let surface else { return 0 }
+        return UInt32(truncatingIfNeeded: ghostty_surface_foreground_pid(surface))
+    }
 
     /// Terminal name (`/dev/ttys003`), empty until the PTY exists.
     func ttyName() -> String {

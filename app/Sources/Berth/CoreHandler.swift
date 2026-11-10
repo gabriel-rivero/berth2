@@ -26,6 +26,11 @@ final class CoreHandler: RequestHandler {
 
         let response = engine.dispatch(request: text)
         flushEvents()
+        // Structural changes (split/close/create) land in the core first; the
+        // window tree follows on the next runloop turn.
+        DispatchQueue.main.async {
+            BerthCoreHost.shared.reconcileAll()
+        }
         return response.data(using: .utf8)
     }
 

@@ -1,8 +1,9 @@
-// The application menu. Built in code so M0 has no nib and no Xcode project.
+// The application menu. Built in code so there is no nib and no Xcode project.
 //
-// Only what a terminal needs to quit, hide and manage its window: editing
-// commands live in Ghostty's own keybindings (⌘C/⌘V/⌘K), not in the menu bar,
-// so the terminal view keeps Control and Command chords.
+// Terminal commands (split, close pane, focus movement) live here because the
+// menu bar wins Command chords before the terminal view sees them. Editing
+// commands still belong to Ghostty's keybindings: ⌘C/⌘V/⌘K are handled inside
+// the terminal, so this menu must not steal them.
 
 import AppKit
 
@@ -10,6 +11,7 @@ enum MainMenu {
     @MainActor
     static func install(appName: String = "Berth") {
         let mainMenu = NSMenu()
+        let delegate = NSApp.delegate
 
         // Application menu. The first item is titled with the app name by
         // AppKit regardless of what we put here.
@@ -41,7 +43,35 @@ enum MainMenu {
             action: #selector(NSApplication.terminate(_:)),
             keyEquivalent: "q")
 
-        // Window menu.
+        // Terminal menu: the split-focus model of the core, exposed without a
+        // sidebar yet.
+        let terminalItem = NSMenuItem()
+        mainMenu.addItem(terminalItem)
+        let terminalMenu = NSMenu(title: "Terminal")
+        terminalItem.submenu = terminalMenu
+
+        func add(
+            _ title: String,
+            _ action: Selector,
+            _ key: String,
+            _ mask: NSEvent.ModifierFlags = [.command]
+        ) {
+            let item = terminalMenu.addItem(
+                withTitle: title, action: action, keyEquivalent: key)
+            item.keyEquivalentModifierMask = mask
+            item.target = delegate
+        }
+
+        add("Split Right", #selector(AppDelegate.splitRight(_:)), "d")
+        add("Split Down", #selector(AppDelegate.splitDown(_:)), "d", [.command, .shift])
+        terminalMenu.addItem(.separator())
+        add("Close Surface", #selector(AppDelegate.closeFocusedSurface(_:)), "w")
+        add("Next Surface", #selector(AppDelegate.nextSurface(_:)), "]")
+        add("Previous Surface", #selector(AppDelegate.previousSurface(_:)), "[")
+        terminalMenu.addItem(.separator())
+        add("New Workspace", #selector(AppDelegate.newWorkspace(_:)), "n")
+
+        // Window menu. ⌘W is the surface above; ⌘⇧W is the window itself.
         let windowItem = NSMenuItem()
         mainMenu.addItem(windowItem)
         let windowMenu = NSMenu(title: "Window")
@@ -55,10 +85,11 @@ enum MainMenu {
             action: #selector(NSWindow.performZoom(_:)),
             keyEquivalent: "")
         windowMenu.addItem(.separator())
-        windowMenu.addItem(
-            withTitle: "Close",
+        let closeWindow = windowMenu.addItem(
+            withTitle: "Close Window",
             action: #selector(NSWindow.performClose(_:)),
             keyEquivalent: "w")
+        closeWindow.keyEquivalentModifierMask = [.command, .shift]
 
         NSApp.mainMenu = mainMenu
         NSApp.windowsMenu = windowMenu

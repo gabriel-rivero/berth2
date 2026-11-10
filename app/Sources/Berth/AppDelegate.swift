@@ -1,6 +1,7 @@
-// App lifecycle. The shell no longer creates windows directly: the core decides
-// what exists (workspaces, surfaces), and its `HostOps` implementation opens
-// the windows. This is the same path `berth new` takes over the socket.
+// App lifecycle. The shell does not create surfaces directly: the core decides
+// what exists (workspaces, panes, surfaces), and its `HostOps` implementation
+// opens the windows. `reconcileAll()` after every mutation is what makes boot,
+// `berth split`, menu commands and session restore share one code path.
 
 import AppKit
 import BerthCore
@@ -29,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let engine = Engine(host: BerthCoreHost.shared)
         self.engine = engine
+        BerthCoreHost.shared.engine = engine
 
         let handler = CoreHandler(engine: engine)
         self.handler = handler
@@ -40,12 +42,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSLog("berth: socket unavailable at \(Self.socketPath): \(error)")
         }
         self.socket = socket
-
-        BerthCoreHost.shared.onSurfaceExited = { id in
-            // The core learns about exits through `surface.close`; a crash inside
-            // the child is reported as an event once Ghostty's action callback
-            // is wired (docs/05-build.md, gap 1).
-            NSLog("berth: surface \(id) child exited")
+        BerthCoreHost.shared.onEvents = { [weak handler] in
+            handler?.flushEvents()
         }
 
         restoreOrBootstrap(engine)
@@ -65,6 +63,75 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         GhosttyHost.shared.stop()
     }
 
+    // MARK: - Terminal commands
+
+    @objc func splitRight(_ sender: Any?) {
+        split(direction: "right")
+    }
+
+    @objc func splitDown(_ sender: Any?) {
+        split(direction: "down")
+    }
+
+    @objc func closeFocusedSurface(_ sender: Any?) {
+        guard let id = BerthCoreHost.shared.focusedSurfaceID else { return }
+        send("surface.close", ["surface_id": id])
+    }
+
+    @objc func nextSurface(_ sender: Any?) {
+        cycleSurface(1)
+    }
+
+    @objc func previousSurface(_ sender: Any?) {
+        cycleSurface(-1)
+    }
+
+    @objc func newWorkspace(_ sender: Any?) {
+        send("workspace.create", ["name": "workspace"])
+    }
+
+    private func split(direction: String) {
+        guard let id = BerthCoreHost.shared.focusedSurfaceID else { return }
+        send("surface.split", ["surface_id": id, "direction": direction, "focus": true])
+    }
+
+    /// Linear focus movement in tree order. Geometric navigation (left/right
+    /// relative to the cursor) needs pane rectangles and lands with the sidebar.
+    private func cycleSurface(_ step: Int) {
+        guard let engine else { return }
+        let response = engine.dispatch(
+            request: #"{"id":"cycle","method":"surface.list","params":{}}"#)
+        guard let data = response.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let result = object["result"] as? [String: Any],
+              let surfaces = result["surfaces"] as? [[String: Any]]
+        else { return }
+
+        let current = BerthCoreHost.shared.focusedSurfaceID
+        let currentWorkspace = surfaces
+            .first { $0["id"] as? String == current }?["workspace_id"] as? String
+        let sameWorkspace = surfaces.filter {
+            ($0["workspace_id"] as? String) == currentWorkspace
+        }
+        guard sameWorkspace.count > 1 else { return }
+
+        let index = sameWorkspace.firstIndex { $0["id"] as? String == current } ?? 0
+        let next = sameWorkspace[(index + step + sameWorkspace.count) % sameWorkspace.count]
+        guard let nextID = next["id"] as? String else { return }
+        send("surface.focus", ["surface_id": nextID])
+    }
+
+    /// Fire a protocol request, then rebuild the window tree.
+    private func send(_ method: String, _ params: [String: Any]) {
+        guard let engine,
+              let data = try? JSONSerialization.data(withJSONObject: params),
+              let json = String(data: data, encoding: .utf8)
+        else { return }
+        _ = engine.dispatch(request: #"{"id":"ui","method":"\#(method)","params":\#(json)}"#)
+        handler?.flushEvents()
+        BerthCoreHost.shared.reconcileAll()
+    }
+
     // MARK: - Session
 
     private func restoreOrBootstrap(_ engine: Engine) {
@@ -75,6 +142,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let restored = try engine.restore(snapshot: text)
                 if restored > 0 {
                     NSLog("berth: restored \(restored) surface(s)")
+                    BerthCoreHost.shared.reconcileAll()
                     return
                 }
             } catch {
@@ -85,6 +153,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let response = engine.dispatch(
             request: #"{"id":"boot","method":"workspace.create","params":{"name":"main"}}"#)
         NSLog("berth: bootstrap → \(response)")
+        BerthCoreHost.shared.reconcileAll()
     }
 
     private func saveSession() {

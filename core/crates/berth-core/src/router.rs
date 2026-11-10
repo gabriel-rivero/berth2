@@ -75,6 +75,21 @@ fn handle(
                 .ok_or_else(|| CoreError::not_found(format!("no workspace {}", p.workspace_id)))?;
             Ok(json!({"workspace": ws}))
         }
+        "workspace.layout" => {
+            let p: IdParam = params(raw)?;
+            let snap = state
+                .snapshot()
+                .workspaces
+                .into_iter()
+                .find(|w| w.workspace.id == p.workspace_id)
+                .ok_or_else(|| CoreError::not_found(format!("no workspace {}", p.workspace_id)))?;
+            Ok(json!({
+                "workspace": snap.workspace,
+                "panes": snap.panes,
+                "surfaces": snap.surfaces,
+                "agents": snap.agents,
+            }))
+        }
         "workspace.select" => {
             let p: IdParam = params(raw)?;
             state.select_workspace(&p.workspace_id)?;
@@ -257,6 +272,64 @@ fn handle(
             let p: SurfaceIdParam = params(raw)?;
             state.close_surface(&p.surface_id, ops)?;
             Ok(json!({}))
+        }
+        "surface.update" => {
+            let p: SurfaceUpdate = params(raw)?;
+            let mut title = None;
+            let mut pwd = None;
+            let mut progress = None;
+            let mut bells = None;
+            {
+                let s = state
+                    .surface_mut(&p.surface_id)
+                    .ok_or_else(|| CoreError::not_found(format!("no surface {}", p.surface_id)))?;
+                if let Some(t) = p.title {
+                    s.title = t.clone();
+                    title = Some(t);
+                }
+                if let Some(c) = p.cwd {
+                    s.cwd = c.clone();
+                    pwd = Some(c);
+                }
+                if p.clear_progress.unwrap_or(false) {
+                    s.progress = None;
+                    progress = Some(None);
+                } else if let Some(v) = p.progress {
+                    let v = v.clamp(0.0, 1.0) as f32;
+                    s.progress = Some(v);
+                    progress = Some(Some(v));
+                }
+                if p.bell.unwrap_or(false) {
+                    s.bell_count = s.bell_count.saturating_add(1);
+                    bells = Some(s.bell_count);
+                }
+            }
+            let id = p.surface_id;
+            if let Some(t) = title {
+                state.emit(
+                    names::SURFACE_TITLE_CHANGED,
+                    json!({"surface_id": id, "title": t}),
+                );
+            }
+            if let Some(c) = pwd {
+                state.emit(
+                    names::SURFACE_PWD_CHANGED,
+                    json!({"surface_id": id, "cwd": c}),
+                );
+            }
+            if let Some(v) = progress {
+                state.emit(
+                    names::SURFACE_PROGRESS,
+                    json!({"surface_id": id, "progress": v}),
+                );
+            }
+            if let Some(n) = bells {
+                state.emit(names::SURFACE_BELL, json!({"surface_id": id, "count": n}));
+            }
+            if p.exited.unwrap_or(false) {
+                state.emit("surface.exited", json!({"surface_id": id}));
+            }
+            Ok(json!({"surface": state.surface(&id)}))
         }
         "surface.send_text" => {
             let p: SendText = params(raw)?;
@@ -617,6 +690,22 @@ struct SurfaceIdParam {
     surface_id: String,
 }
 #[derive(Debug, Deserialize)]
+struct SurfaceUpdate {
+    surface_id: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    progress: Option<f64>,
+    #[serde(default)]
+    clear_progress: Option<bool>,
+    #[serde(default)]
+    bell: Option<bool>,
+    #[serde(default)]
+    exited: Option<bool>,
+}
+#[derive(Debug, Deserialize)]
 struct SendText {
     surface_id: String,
     text: String,
@@ -714,6 +803,7 @@ pub const METHODS: &[&str] = &[
     "workspace.list",
     "workspace.create",
     "workspace.get",
+    "workspace.layout",
     "workspace.update",
     "workspace.select",
     "workspace.close",
@@ -726,6 +816,7 @@ pub const METHODS: &[&str] = &[
     "surface.split",
     "surface.focus",
     "surface.close",
+    "surface.update",
     "surface.send_text",
     "surface.send_key",
     "surface.read_text",
@@ -763,6 +854,68 @@ mod tests {
         let r = dispatch(state, &NullOps, &req(method, params));
         assert!(r.ok, "{} failed: {:?}", method, r.error);
         r.result.unwrap()
+    }
+
+    #[test]
+    fn surface_update_reports_osc_state_and_events() {
+        let mut st = AppState::default();
+        call(&mut st, "workspace.create", json!({"name":"main"}));
+        let sid = call(&mut st, "surface.list", json!({}))["surfaces"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        st.drain_events();
+
+        let v = call(
+            &mut st,
+            "surface.update",
+            json!({
+                "surface_id": sid,
+                "title": "vim README.md",
+                "cwd": "/tmp/project",
+                "progress": 0.42,
+                "bell": true,
+            }),
+        );
+        assert_eq!(v["surface"]["title"], "vim README.md");
+        assert_eq!(v["surface"]["cwd"], "/tmp/project");
+        assert_eq!(v["surface"]["bell_count"], 1);
+
+        let events: Vec<String> = st.drain_events().into_iter().map(|e| e.event).collect();
+        assert!(events.contains(&names::SURFACE_TITLE_CHANGED.to_string()));
+        assert!(events.contains(&names::SURFACE_PWD_CHANGED.to_string()));
+        assert!(events.contains(&names::SURFACE_PROGRESS.to_string()));
+        assert!(events.contains(&names::SURFACE_BELL.to_string()));
+
+        // Clearing is explicit so 0% is not confused with "no progress".
+        call(
+            &mut st,
+            "surface.update",
+            json!({"surface_id": sid, "clear_progress": true}),
+        );
+        assert!(call(&mut st, "surface.list", json!({}))["surfaces"][0]["progress"].is_null());
+    }
+
+    #[test]
+    fn workspace_layout_describes_tree_and_surfaces() {
+        let mut st = AppState::default();
+        let ws = call(&mut st, "workspace.create", json!({"name":"main"}));
+        let wsid = ws["workspace"]["id"].as_str().unwrap().to_string();
+        let sid = call(&mut st, "surface.list", json!({}))["surfaces"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        call(
+            &mut st,
+            "surface.split",
+            json!({"surface_id": sid, "direction": "right"}),
+        );
+
+        let layout = call(&mut st, "workspace.layout", json!({"workspace_id": wsid}));
+        assert_eq!(layout["workspace"]["root"]["type"], "split");
+        assert_eq!(layout["panes"].as_array().unwrap().len(), 2);
+        assert_eq!(layout["surfaces"].as_array().unwrap().len(), 2);
+        assert!(layout["workspace"]["active_surface"].is_string());
     }
 
     #[test]
