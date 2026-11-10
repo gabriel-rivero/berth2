@@ -7,6 +7,7 @@
 import AppKit
 
 enum MainMenu {
+    @MainActor
     static func install(appName: String = "Berth") {
         let mainMenu = NSMenu()
 
