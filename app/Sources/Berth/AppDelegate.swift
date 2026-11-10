@@ -6,6 +6,7 @@
 import AppKit
 import BerthCore
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var engine: Engine?
     private var socket: SocketServer?
