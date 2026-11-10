@@ -1,0 +1,23 @@
+[package]
+name = "berth-ffi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "berth_ffi"
+crate-type = ["staticlib", "cdylib", "lib"]
+
+[dependencies]
+berth-core = { path = "../berth-core" }
+serde_json = { workspace = true }
+uniffi = { version = "0.32" }
+
+[features]
+cli = ["uniffi/cli"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]

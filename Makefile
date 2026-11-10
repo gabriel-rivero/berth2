@@ -6,10 +6,12 @@ CONFIG ?= release
 ZIG_FLAGS := -Doptimize=ReleaseFast -Dapp-runtime=none -Demit-xcframework=true \
              -Demit-macos-app=false -Dxcframework-target=native
 
-.PHONY: help bootstrap build app run test test-core fmt fmt-check clean dist
+.PHONY: help bootstrap core-lib bindings build app run test test-core fmt fmt-check clean engine-clean
 
 help:
 	@echo "make bootstrap   fetch pinned Ghostty submodule + build GhosttyKit (macOS)"
+	@echo "make core-lib    build libberth_ffi.a for this Mac"
+	@echo "make bindings    regenerate UniFFI Swift bindings (commit them)"
 	@echo "make build       swift build ($(CONFIG))"
 	@echo "make app         assemble + ad-hoc sign build/Berth.app"
 	@echo "make run         launch the app"
@@ -21,10 +23,17 @@ help:
 bootstrap:
 	./scripts/bootstrap.sh
 
-build:
+core-lib:
+	./scripts/core-lib.sh
+
+bindings:
+	./scripts/bindings.sh
+
+# The app links libberth_ffi.a, so it must exist before SwiftPM evaluates.
+build: core-lib
 	swift build -c $(CONFIG) --package-path app
 
-app:
+app: build
 	./scripts/bundle.sh $(CONFIG)
 
 run: app

@@ -10,7 +10,9 @@ final class GhosttySurfaceView: NSView {
     // happen in `deinit`, which is nonisolated. Every other access is on the
     // main thread, so this is a narrow, auditable escape hatch.
     nonisolated(unsafe) private var surface: ghostty_surface_t?
-    nonisolated(unsafe) private var workingDirectoryRef: UnsafeMutablePointer<CChar>?
+    // C strings handed to Ghostty must outlive the surface: Ghostty may keep
+    // pointers into them (command, env values). Freeing happens in `deinit`.
+    nonisolated(unsafe) private var cStrings: [UnsafeMutablePointer<CChar>] = []
 
     override var isOpaque: Bool { true }
     override var acceptsFirstResponder: Bool { true }
@@ -24,35 +26,158 @@ final class GhosttySurfaceView: NSView {
 
     // MARK: - Lifecycle
 
-    func createSurface(workingDirectory: String?) -> Bool {
-        guard let app = GhosttyHost.shared.app else { return false }
-        // Ghostty's field is a non-optional `const char*`; an empty string means
-        // "inherit", which is what we want when the caller has no preference.
-        workingDirectoryRef = strdup(workingDirectory ?? "")
+    /// Create the PTY, child process and renderer state. Called explicitly by
+    /// the core bridge with the session's command/env; the lazy path in
+    /// `viewDidMoveToWindow` only covers views created outside the core.
+    @discardableResult
+    func createSurface(
+        command: String? = nil,
+        workingDirectory: String? = nil,
+        env: [String] = []
+    ) -> Bool {
+        guard let app = GhosttyHost.shared.app, surface == nil else { return false }
 
         var config = ghostty_surface_config_new()
         config.platform_tag = GHOSTTY_PLATFORM_MACOS
         config.platform.macos.nsview = Unmanaged.passUnretained(self).toOpaque()
         config.scale_factor = Double(window?.backingScaleFactor ?? 2.0)
-        config.working_directory = UnsafePointer(workingDirectoryRef!)
-        config.context = GHOSTTY_SURFACE_CONTEXT_WINDOW
+        // Ghostty's field is a non-optional `const char*`; empty means inherit.
+        config.working_directory = cString(workingDirectory ?? "")
 
-        guard let surface = withUnsafePointer(to: &config, { ghostty_surface_new(app, $0) }) else {
+        if let command, !command.isEmpty {
+            config.command = cString(command)
+        }
+
+        // `KEY=VALUE` pairs from the core (BERTH_SURFACE_ID and friends).
+        var envVars: [ghostty_env_var_s] = []
+        envVars.reserveCapacity(env.count)
+        for pair in env {
+            guard let sep = pair.firstIndex(of: "=") else { continue }
+            let key = String(pair[pair.startIndex..<sep])
+            let value = String(pair[pair.index(after: sep)...])
+            envVars.append(ghostty_env_var_s(key: cString(key), value: cString(value)))
+        }
+        let created = envVars.withUnsafeMutableBufferPointer { buffer -> Bool in
+            config.env_vars = buffer.baseAddress
+            config.env_var_count = buffer.count
+            config.context = GHOSTTY_SURFACE_CONTEXT_WINDOW
+            guard let surface = withUnsafePointer(to: &config, { ghostty_surface_new(app, $0) }) else {
+                return false
+            }
+            self.surface = surface
+            return true
+        }
+        guard created else {
             NSLog("berth: ghostty_surface_new failed")
             return false
         }
-        self.surface = surface
+
         syncSize()
-        ghostty_surface_set_focus(surface, true)
+        ghostty_surface_set_focus(surface!, true)
         needsDisplay = true
         return true
+    }
+
+    /// Keeps a `strdup`'d C string alive for the lifetime of the view.
+    private func cString(_ value: String) -> UnsafePointer<CChar> {
+        let copy = strdup(value)!
+        cStrings.append(copy)
+        return UnsafePointer(copy)
     }
 
     deinit {
         if let surface {
             ghostty_surface_free(surface)
         }
-        free(workingDirectoryRef)
+        for copy in cStrings {
+            free(copy)
+        }
+    }
+
+    // MARK: - Core-facing accessors
+
+    var surfaceHandle: ghostty_surface_t? { surface }
+
+    /// Terminal name (`/dev/ttys003`), empty until the PTY exists.
+    func ttyName() -> String {
+        guard let surface else { return "" }
+        let str = ghostty_surface_tty_name(surface)
+        defer { ghostty_string_free(str) }
+        guard let ptr = str.ptr else { return "" }
+        return String(cString: ptr)
+    }
+
+    /// Visible grid dimensions, as Ghostty computed them from the view size.
+    func gridSize() -> (cols: UInt16, rows: UInt16) {
+        guard let surface else { return (0, 0) }
+        let size = ghostty_surface_size(surface)
+        return (size.columns, size.rows)
+    }
+
+    /// Screen text for automation, via Ghostty's own text extraction.
+    func readText(scrollback: Bool) -> String {
+        guard let surface else { return "" }
+        var text = ghostty_text_s()
+        let tag = scrollback ? GHOSTTY_POINT_SCREEN : GHOSTTY_POINT_VIEWPORT
+        let selection = ghostty_selection_s(
+            top_left: ghostty_point_s(
+                tag: tag, coord: GHOSTTY_POINT_COORD_TOP_LEFT, x: 0, y: 0),
+            bottom_right: ghostty_point_s(
+                tag: tag, coord: GHOSTTY_POINT_COORD_BOTTOM_RIGHT, x: 0, y: 0),
+            rectangle: false)
+        guard ghostty_surface_read_text(surface, selection, &text) else { return "" }
+        defer { ghostty_surface_free_text(surface, &text) }
+        guard let ptr = text.text else { return "" }
+        return String(decoding: UnsafeBufferPointer(start: ptr, count: Int(text.text_len)), as: UTF8.self)
+    }
+
+    /// Resize the grid by columns/rows, keeping the cell size Ghostty chose.
+    func resizeGrid(cols: UInt16, rows: UInt16) {
+        guard let surface else { return }
+        let size = ghostty_surface_size(surface)
+        guard size.columns > 0, size.rows > 0 else { return }
+        let cellW = Double(size.width_px) / Double(size.columns)
+        let cellH = Double(size.height_px) / Double(size.rows)
+        ghostty_surface_set_size(
+            surface,
+            UInt32(Double(cols) * cellW),
+            UInt32(Double(rows) * cellH))
+    }
+
+    func sendText(_ text: String) {
+        guard let surface, !text.isEmpty else { return }
+        text.withCString { ptr in
+            ghostty_surface_text(surface, ptr, UIntPtr(text.utf8.count))
+        }
+    }
+
+    /// Synthetic key press for `berth surface send_key`. Keys that arrive from a
+    /// real keyboard go through `keyDown` instead; this path has no NSEvent.
+    func sendKey(keycode: UInt32, mods: ghostty_input_mods_e, text: String?) {
+        guard let surface else { return }
+        if let text {
+            text.withCString { ptr in
+                let input = ghostty_input_key_s(
+                    action: GHOSTTY_ACTION_PRESS,
+                    mods: mods,
+                    consumed_mods: GHOSTTY_MODS_NONE,
+                    keycode: keycode,
+                    text: ptr,
+                    unshifted_codepoint: 0,
+                    composing: false)
+                _ = ghostty_surface_key(surface, input)
+            }
+        } else {
+            let input = ghostty_input_key_s(
+                action: GHOSTTY_ACTION_PRESS,
+                mods: mods,
+                consumed_mods: GHOSTTY_MODS_NONE,
+                keycode: keycode,
+                text: nil,
+                unshifted_codepoint: 0,
+                composing: false)
+            _ = ghostty_surface_key(surface, input)
+        }
     }
 
     // MARK: - Sizing
@@ -61,7 +186,7 @@ final class GhosttySurfaceView: NSView {
         super.viewDidMoveToWindow()
         guard window != nil else { return }
         if surface == nil {
-            _ = createSurface(workingDirectory: nil)
+            _ = createSurface()
         } else {
             syncSize()
         }

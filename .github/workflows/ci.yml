@@ -32,6 +32,13 @@ jobs:
         run: cargo test --workspace
         working-directory: core
 
+      # The generated Swift bindings are committed; regenerate and fail if the
+      # checked-in copy drifted from the Rust definitions.
+      - name: bindings are current
+        run: |
+          ./scripts/bindings.sh
+          git diff --exit-code -- app/Sources/BerthCore app/Sources/berth_ffiFFI
+
   # The real product: pinned Ghostty engine + AppKit shell, built into a .app.
   app:
     runs-on: macos-15
@@ -51,6 +58,14 @@ jobs:
         with:
           version: ${{ steps.engine.outputs.zig }}
 
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+          key: ffi
+
       # Ghostty's build is expensive (~6 min cold); cache the compiler cache and
       # the emitted framework per engine commit so most runs skip it entirely.
       - uses: actions/cache@v4
@@ -64,6 +79,10 @@ jobs:
 
       - name: build engine
         run: ./scripts/bootstrap.sh
+
+      # The app links the Rust core as a static library.
+      - name: build core library
+        run: ./scripts/core-lib.sh
 
       - name: swift build
         run: swift build -c release --package-path app

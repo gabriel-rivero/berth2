@@ -2,7 +2,7 @@
 
 A native macOS terminal workspace for running coding agents side by side — built on Ghostty's renderer, with a typed agent lifecycle and a push-based protocol.
 
-Status: M0 scaffold. The engine is pinned, the app shell boots a single Ghostty terminal, and the portable core (agent lifecycle, protocol, persistence) is implemented and tested on Linux. Full key routing and the core↔app bridge are the next two tasks.
+Status: M0. The engine is pinned, the AppKit shell renders a Ghostty terminal with full key routing, and the Rust core is bridged over UniFFI: the app boots from the core, serves the JSON-RPC socket, and `berth` can drive it. Split tree and sidebar are M1.
 
 ```sh
 make test-core    # rust core, any platform

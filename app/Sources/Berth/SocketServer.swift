@@ -1,40 +1,17 @@
 // Unix-socket JSON-RPC server. Transport only: bytes in, bytes out. All domain
 // decisions belong to berth-core (docs/03-protocol.md).
-//
-// TODO(M2): wire `handler` to the UniFFI bridge. Today the default handler
-// answers `system.ping` and reports `internal` for everything else, which is
-// enough to exercise framing and the CLI end to end.
 
 import Darwin
 import Foundation
 
-protocol RequestHandler: AnyObject {
-    /// One complete NDJSON line in, one NDJSON line out (no newline needed).
-    func handle(_ line: Data) -> Data?
+/// A place to send unsolicited lines (events) back to one connection.
+protocol ClientSink: AnyObject {
+    func setSubscribed(_ value: Bool)
 }
 
-final class StubHandler: RequestHandler {
-    func handle(_ line: Data) -> Data? {
-        guard
-            let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
-            let id = obj["id"],
-            let method = obj["method"] as? String
-        else {
-            return Self.encode(["id": NSNull(), "ok": false,
-                                "error": ["code": "bad_request", "message": "malformed request"]])
-        }
-        if method == "system.ping" {
-            return Self.encode(["id": id, "ok": true, "result": ["pong": true, "uptime_ms": 0]])
-        }
-        return Self.encode([
-            "id": id, "ok": false,
-            "error": ["code": "internal", "message": "berth-core bridge not wired yet"],
-        ])
-    }
-
-    private static func encode(_ obj: [String: Any]) -> Data? {
-        try? JSONSerialization.data(withJSONObject: obj, options: [])
-    }
+protocol RequestHandler: AnyObject {
+    /// One complete NDJSON line in, one NDJSON line out (no newline needed).
+    func handle(_ line: Data, from sink: ClientSink) -> Data?
 }
 
 final class SocketServer {
@@ -54,6 +31,9 @@ final class SocketServer {
     deinit { stop() }
 
     func start() throws {
+        try FileManager.default.createDirectory(
+            at: URL(fileURLWithPath: path).deletingLastPathComponent(),
+            withIntermediateDirectories: true)
         unlink(path)
 
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
@@ -80,6 +60,8 @@ final class SocketServer {
             close(fd)
             throw err
         }
+        // 0600 is the whole of the v1 auth model (docs/03-protocol.md §2);
+        // the token handshake lands with the client library.
         chmod(path, 0o600)
         guard listen(fd, 16) == 0 else {
             let err = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
@@ -98,11 +80,29 @@ final class SocketServer {
     func stop() {
         acceptSource?.cancel()
         acceptSource = nil
+        clientsLock.lock()
+        let all = Array(clients.values)
+        clients.removeAll()
+        clientsLock.unlock()
+        for client in all {
+            client.close()
+        }
         if listenFD >= 0 {
             close(listenFD)
             listenFD = -1
         }
         unlink(path)
+    }
+
+    /// Deliver event lines to every subscribed client. `ndjson` may hold several
+    /// newline-separated events; each is framed independently.
+    func broadcast(_ ndjson: String) {
+        clientsLock.lock()
+        let targets = Array(clients.values)
+        clientsLock.unlock()
+        for client in targets {
+            client.sendIfSubscribed(ndjson)
+        }
     }
 
     private func acceptPending() {
@@ -122,11 +122,12 @@ final class SocketServer {
     }
 }
 
-private final class Client {
+private final class Client: ClientSink {
     private let fd: Int32
     private let queue: DispatchQueue
     private var source: DispatchSourceRead?
     private var frames = NDJSONBuffer()
+    private var subscribed = false
     private let handler: RequestHandler
     private let onClose: (Int32) -> Void
 
@@ -146,6 +147,23 @@ private final class Client {
         self.source = source
     }
 
+    func close() {
+        queue.async { self.source?.cancel() }
+    }
+
+    func setSubscribed(_ value: Bool) {
+        queue.async { self.subscribed = value }
+    }
+
+    func sendIfSubscribed(_ ndjson: String) {
+        queue.async {
+            guard self.subscribed else { return }
+            for line in ndjson.split(separator: "\n") where !line.isEmpty {
+                self.write(Data(line.utf8))
+            }
+        }
+    }
+
     private func readAvailable() {
         var chunk = [UInt8](repeating: 0, count: 16 * 1024)
         let n = read(fd, &chunk, chunk.count)
@@ -155,16 +173,20 @@ private final class Client {
             return
         }
         for line in frames.append(Data(chunk[0..<n])) {
-            guard let response = handler.handle(line) else { continue }
-            var out = response
-            out.append(0x0A)
-            out.withUnsafeBytes { raw in
-                var written = 0
-                while written < raw.count {
-                    let w = write(fd, raw.baseAddress!.advanced(by: written), raw.count - written)
-                    if w <= 0 { return }
-                    written += w
-                }
+            guard let response = handler.handle(line, from: self) else { continue }
+            write(response)
+        }
+    }
+
+    private func write(_ data: Data) {
+        var out = data
+        out.append(0x0A)
+        out.withUnsafeBytes { raw in
+            var written = 0
+            while written < raw.count {
+                let w = Darwin.write(fd, raw.baseAddress!.advanced(by: written), raw.count - written)
+                if w <= 0 { return }
+                written += w
             }
         }
     }

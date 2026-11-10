@@ -9,6 +9,7 @@ Two toolchains, two halves. The Rust core builds anywhere; the app needs macOS.
 | macOS | 14+ | Apple Silicon; Metal required |
 | Xcode | 16+ | Swift 6 toolchain, macOS SDK |
 | Zig | 0.17.x | `vendor/ghostty/build.zig.zon` pins the minimum; `scripts/bootstrap.sh` checks |
+| Rust | stable | the portable core; `make core-lib` builds the static library |
 | git | any | submodule handling |
 
 No Homebrew packages required. Nothing is installed system-wide except Zig.
@@ -18,7 +19,7 @@ No Homebrew packages required. Nothing is installed system-wide except Zig.
 ```sh
 git submodule update --init --recursive   # or: make bootstrap
 make bootstrap                            # builds GhosttyKit.xcframework (minutes)
-make build                                # swift build -c release
+make build                                # builds libberth_ffi.a, then swift build
 make app                                  # assembles + ad-hoc signs build/Berth.app
 open build/Berth.app
 ```
@@ -65,6 +66,8 @@ The core is where the product logic lives and it is fully headless-testable, so 
 - [ ] Paste with `⌘V`, copy with `⌘C` (selection mouse-drag)
 - [ ] Close the window: child process is gone (`pgrep -P` empty), no zombie
 - [ ] Idle CPU < 1 %, RSS sane for one pane
+- [ ] `berth ping`, `berth ls`, `berth agents` answer from a terminal in the app
+- [ ] `berth new -- sh` opens a second window; `berth surface read_text` returns that screen
 
 Until every line passes, M0 is not done.
 
@@ -72,9 +75,15 @@ Until every line passes, M0 is not done.
 
 1. **Action callbacks.** `berthActionCallback` returns `false` for everything. Wire `SET_TITLE`, `PWD`, `PROGRESS_REPORT`, `RING_BELL`, `DESKTOP_NOTIFICATION`, `OPEN_URL`, `SHOW_CHILD_EXITED` into the core (docs/03-protocol.md §5).
 2. **IME.** No `NSTextInputClient` yet, so dead keys (é, ü) and CJK input do not work; `ghostty_surface_preedit` / `ime_point` are unused. Key events themselves are complete (`GhosttyInput.swift`).
-3. **Clipboard.** Read/write confirm callbacks are stubs.
-4. **Core bridge.** `SocketServer` runs with `StubHandler`; UniFFI (`core/crates/berth-ffi`) is M2. `berth ping` works end to end once the socket is started from `AppDelegate`.
-5. **Split tree, sidebar, palette** — M1.
+3. **Clipboard.** Read/write confirm callbacks are stubs, so `⌘C`/`⌘V` are dead.
+4. **Socket auth.** v1 relies on the socket's `0600` permissions; the token handshake from docs/03-protocol.md §2 is not implemented.
+5. **Split tree, sidebar, palette** — M1. One workspace = one window until then.
+6. **Session journal.** State is snapshotted on quit only; a crash loses the last session (no `journal.ndjson` yet).
+
+The core is wired: UniFFI (`core/crates/berth-ffi`) exposes `Engine.dispatch`,
+`drainEvents`, `snapshot`/`restore` and `sweepStale`, and Swift implements the
+`HostOps` callback interface in `BerthCoreHost.swift`. `SocketServer` is started
+at launch, so `berth ping` / `berth ls` work against a running app.
 
 Key routing landed in M0: `keyDown`/`keyUp`/`flagsChanged` build `ghostty_input_key_s` and hand it to `ghostty_surface_key`, and `performKeyEquivalent` claims Ghostty bindings plus Control chords so the menu bar and AppKit's beep/context-menu shortcuts do not swallow them.
 
@@ -85,15 +94,18 @@ cd vendor/ghostty && git fetch --tags && git checkout v1.4.x
 cd ../.. && make engine-clean && make bootstrap
 ```
 
-Then run the M0 smoke checklist. Cost budget: one day per bump, all C access confined to `GhosttyHost.swift` / `GhosttySurfaceView.swift`. If a bump breaks the adapter twice in a row, invoke the kill criterion in docs/04-roadmap.md.
+Then run the M0 smoke checklist. Cost budget: one day per bump, all C access confined to `GhosttyHost.swift` / `GhosttySurfaceView.swift` / `BerthCoreHost.swift`. If a bump breaks the adapter twice in a row, invoke the kill criterion in docs/04-roadmap.md.
 
 ## Rust core
 
 ```sh
 cd core
-cargo test --workspace        # 35 tests
-cargo run -p berth-cli -- ls  # needs a running app with a wired socket
+cargo test --workspace        # 40 tests, no window needed
+cargo run -p berth-cli -- ls  # needs a running Berth (socket in Application Support)
 ```
+
+After changing anything in `core/crates/berth-ffi`, regenerate the committed
+bindings with `make bindings`; CI fails if they drift.
 
 `core/` has no platform dependencies and no I/O in `berth-core`; the only impure surface is the `SurfaceOps` trait, implemented by the shell.
 

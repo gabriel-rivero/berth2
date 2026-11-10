@@ -20,6 +20,7 @@ pub mod model;
 pub mod protocol;
 pub mod providers;
 pub mod router;
+pub mod shell;
 pub mod state;
 pub mod store;
 pub mod time;
