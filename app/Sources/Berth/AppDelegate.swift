@@ -172,15 +172,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Agent staleness: an agent that stops reporting for three minutes is
     /// treated as blocked, which is how a crashed CLI surfaces in the sidebar.
     private func scheduleStaleSweep(_ engine: Engine) {
-        let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
-            let changed = engine.sweepStale(ttlMs: 180_000)
-            if !changed.isEmpty {
-                NSLog("berth: \(changed.count) agent(s) went stale")
-            }
-            self?.handler?.flushEvents()
-        }
+        // Target/selector rather than the block API: the block is @Sendable and
+        // the engine and handler are not, and a MainActor timer is the honest
+        // model anyway.
+        let timer = Timer(
+            timeInterval: 30,
+            target: self,
+            selector: #selector(sweepAgents),
+            userInfo: nil,
+            repeats: true)
         RunLoop.main.add(timer, forMode: .common)
         sweepTimer = timer
+    }
+
+    @objc private func sweepAgents() {
+        guard let engine else { return }
+        let changed = engine.sweepStale(ttlMs: 180_000)
+        if !changed.isEmpty {
+            NSLog("berth: \(changed.count) agent(s) went stale")
+        }
+        handler?.flushEvents()
     }
 
     // MARK: - Paths
