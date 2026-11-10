@@ -31,12 +31,15 @@ private let berthActionCallback: ghostty_runtime_action_cb = { _, _, _ in
     false
 }
 
-private let berthReadClipboardCallback: ghostty_runtime_read_clipboard_cb = { _, _, _ in
-    nil
+private let berthReadClipboardCallback: ghostty_runtime_read_clipboard_cb = {
+    _, _, _, _, _, _ in
+    // TODO(M0): real clipboard reads. Refusing is the safe default: Ghostty
+    // then tells the terminal side the read is unsupported instead of hanging.
+    GHOSTTY_CLIPBOARD_READ_UNAVAILABLE
 }
 
 private let berthConfirmReadClipboardCallback: ghostty_runtime_confirm_read_clipboard_cb = {
-    _, _, _, _, _ in
+    _, _, _, _ in
 }
 
 private let berthWriteClipboardCallback: ghostty_runtime_write_clipboard_cb = {
@@ -47,8 +50,11 @@ private let berthCloseSurfaceCallback: ghostty_runtime_close_surface_cb = { _, _
     // TODO(M0): close the surface view that owns `userdata`.
 }
 
+/// Process-wide Ghostty instance. Lives on the main thread only; the
+/// `nonisolated(unsafe)` is the explicit opt-out from Swift 6's Sendable check
+/// for a singleton that AppKit already guarantees is single-threaded.
 final class GhosttyHost {
-    static let shared = GhosttyHost()
+    nonisolated(unsafe) static let shared = GhosttyHost()
 
     private(set) var app: ghostty_app_t?
     private var config: ghostty_config_t?

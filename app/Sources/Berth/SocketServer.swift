@@ -76,13 +76,13 @@ final class SocketServer {
             }
         }
         guard bound == 0 else {
-            let err = POSIXError(rawValue: errno) ?? .EIO
+            let err = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
             close(fd)
             throw err
         }
         chmod(path, 0o600)
         guard listen(fd, 16) == 0 else {
-            let err = POSIXError(rawValue: errno) ?? .EIO
+            let err = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
             close(fd)
             throw err
         }

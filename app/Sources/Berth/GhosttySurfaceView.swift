@@ -23,13 +23,15 @@ final class GhosttySurfaceView: NSView {
 
     func createSurface(workingDirectory: String?) -> Bool {
         guard let app = GhosttyHost.shared.app else { return false }
-        if let wd = workingDirectory { workingDirectoryRef = strdup(wd) }
+        // Ghostty's field is a non-optional `const char*`; an empty string means
+        // "inherit", which is what we want when the caller has no preference.
+        workingDirectoryRef = strdup(workingDirectory ?? "")
 
         var config = ghostty_surface_config_new()
         config.platform_tag = GHOSTTY_PLATFORM_MACOS
         config.platform.macos.nsview = Unmanaged.passUnretained(self).toOpaque()
         config.scale_factor = Double(window?.backingScaleFactor ?? 2.0)
-        config.working_directory = workingDirectoryRef
+        config.working_directory = UnsafePointer(workingDirectoryRef!)
         config.context = GHOSTTY_SURFACE_CONTEXT_WINDOW
 
         guard let surface = withUnsafePointer(to: &config, { ghostty_surface_new(app, $0) }) else {
