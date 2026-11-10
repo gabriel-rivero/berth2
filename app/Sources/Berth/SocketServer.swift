@@ -142,7 +142,7 @@ private final class Client: ClientSink {
     func start() {
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
         source.setEventHandler { [weak self] in self?.readAvailable() }
-        source.setCancelHandler { [fd] in close(fd) }
+        source.setCancelHandler { [fd] in Darwin.close(fd) }
         source.resume()
         self.source = source
     }

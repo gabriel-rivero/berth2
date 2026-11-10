@@ -128,7 +128,8 @@ final class GhosttySurfaceView: NSView {
         guard ghostty_surface_read_text(surface, selection, &text) else { return "" }
         defer { ghostty_surface_free_text(surface, &text) }
         guard let ptr = text.text else { return "" }
-        return String(decoding: UnsafeBufferPointer(start: ptr, count: Int(text.text_len)), as: UTF8.self)
+        let bytes = UnsafeRawBufferPointer(start: ptr, count: Int(text.text_len))
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     /// Resize the grid by columns/rows, keeping the cell size Ghostty chose.
@@ -147,7 +148,7 @@ final class GhosttySurfaceView: NSView {
     func sendText(_ text: String) {
         guard let surface, !text.isEmpty else { return }
         text.withCString { ptr in
-            ghostty_surface_text(surface, ptr, UIntPtr(text.utf8.count))
+            ghostty_surface_text(surface, ptr, UInt(text.utf8.count))
         }
     }
 

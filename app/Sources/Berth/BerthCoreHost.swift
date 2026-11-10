@@ -171,13 +171,26 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
     /// Run `body` on the main thread. The closure is `@MainActor` so AppKit
     /// calls inside it type-check; `sync` blocks the caller (a socket queue),
     /// which is what the core's synchronous `HostOps` contract expects.
-    private func onMain<T>(_ body: @MainActor () throws -> T) rethrows -> T {
+    ///
+    /// The result travels in a box because `assumeIsolated` only hands back
+    /// `Sendable` values, and UniFFI's generated records are not marked so.
+    private func onMain<T>(_ body: @MainActor () throws -> T) throws -> T {
+        let box = Box<T>()
         if Thread.isMainThread {
-            return try MainActor.assumeIsolated { try body() }
+            MainActor.assumeIsolated { box.result = Result { try body() } }
+        } else {
+            DispatchQueue.main.sync {
+                MainActor.assumeIsolated { box.result = Result { try body() } }
+            }
         }
-        return try DispatchQueue.main.sync {
-            try MainActor.assumeIsolated { try body() }
+        guard let result = box.result else {
+            throw FfiError.Internal(message: "main-actor hop produced no result")
         }
+        return try result.get()
+    }
+
+    private final class Box<T>: @unchecked Sendable {
+        var result: Result<T, Error>?
     }
 
     private func requestNotificationPermissionIfNeeded() {
