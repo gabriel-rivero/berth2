@@ -42,6 +42,15 @@ private struct ClipboardContent {
     let data: Data
 }
 
+/// The confirm callback runs on the main thread, but the dialog is async and
+/// the completion needs the surface plus Ghostty's opaque request state. Both
+/// are plain pointers whose lifetime Ghostty guarantees until completion, so
+/// boxing them is deliberate rather than careless.
+private struct ClipboardRequest: @unchecked Sendable {
+    let surface: ghostty_surface_t
+    let state: UnsafeMutableRawPointer?
+}
+
 private enum ClipboardBridge {
     /// NSPasteboard for a Ghostty clipboard kind. Selection/primary have no
     /// macOS equivalent, so they are unsupported rather than silently wrong.
@@ -173,6 +182,7 @@ private let berthConfirmReadClipboardCallback: ghostty_runtime_confirm_read_clip
         .flatMap { String(data: $0.data, encoding: .utf8) }
         .map { String($0.prefix(1200)) } ?? "(binary data)"
 
+    let pending = ClipboardRequest(surface: surface, state: state)
     DispatchQueue.main.async {
         let alert = NSAlert()
         alert.messageText = "Allow paste from \(name)?"
@@ -183,13 +193,13 @@ private let berthConfirmReadClipboardCallback: ghostty_runtime_confirm_read_clip
         let accepted = alert.runModal() == .alertFirstButtonReturn
         if accepted {
             ClipboardBridge.complete(
-                surface: surface,
+                surface: pending.surface,
                 contents: contents,
                 confirmed: true,
                 remember: canRemember,
-                state: state)
+                state: pending.state)
         } else {
-            ghostty_surface_deny_clipboard_request(surface, state)
+            ghostty_surface_deny_clipboard_request(pending.surface, pending.state)
         }
     }
 }

@@ -107,7 +107,7 @@ final class GhosttySurfaceView: NSView {
 
     // MARK: - Core-facing accessors
 
-    nonisolated(unsafe) var surfaceHandle: ghostty_surface_t? { surface }
+    nonisolated var surfaceHandle: ghostty_surface_t? { surface }
 
     /// Foreground process id, 0 until the child is running.
     func foregroundPID() -> UInt32 {
