@@ -20,7 +20,14 @@ let package = Package(
         .executableTarget(
             name: "Berth",
             dependencies: ["GhosttyKit"],
-            path: "Sources/Berth"
+            path: "Sources/Berth",
+            // GhosttyKit is a bare static archive: it carries no link settings of
+            // its own, so the C++ runtime its shader compiler needs and the
+            // Carbon TIS symbols it uses for keyboard layouts must be named here.
+            linkerSettings: [
+                .linkedLibrary("c++"),
+                .linkedFramework("Carbon"),
+            ]
         ),
         .testTarget(
             name: "BerthTests",
