@@ -83,9 +83,25 @@ fn handle(
                 .into_iter()
                 .find(|w| w.workspace.id == p.workspace_id)
                 .ok_or_else(|| CoreError::not_found(format!("no workspace {}", p.workspace_id)))?;
+            // `Pane::active` is an index into `Pane::surfaces`. That is an
+            // implementation detail, not something a UI should have to mirror
+            // (the first Swift port read it as an id and rendered gray panes),
+            // so each pane also carries the resolved id.
+            let panes: Vec<Value> = snap
+                .panes
+                .iter()
+                .map(|pane| {
+                    let mut value = serde_json::to_value(pane).unwrap_or(Value::Null);
+                    if let (Some(id), Some(object)) = (pane.active_surface(), value.as_object_mut())
+                    {
+                        object.insert("active_surface".into(), json!(id));
+                    }
+                    value
+                })
+                .collect();
             Ok(json!({
                 "workspace": snap.workspace,
-                "panes": snap.panes,
+                "panes": panes,
                 "surfaces": snap.surfaces,
                 "agents": snap.agents,
             }))
@@ -914,6 +930,11 @@ mod tests {
         let layout = call(&mut st, "workspace.layout", json!({"workspace_id": wsid}));
         assert_eq!(layout["workspace"]["root"]["type"], "split");
         assert_eq!(layout["panes"].as_array().unwrap().len(), 2);
+        for pane in layout["panes"].as_array().unwrap() {
+            let active = pane["active_surface"].as_str().expect("active_surface id");
+            let surfaces = pane["surfaces"].as_array().unwrap();
+            assert!(surfaces.iter().any(|s| s.as_str() == Some(active)));
+        }
         assert_eq!(layout["surfaces"].as_array().unwrap().len(), 2);
         assert!(layout["workspace"]["active_surface"].is_string());
     }

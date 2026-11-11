@@ -59,8 +59,9 @@ enum LayoutBuilder {
         switch node {
         case let .leaf(_, activeSurface):
             guard let surfaceID = activeSurface, let view = views[surfaceID] else {
-                let placeholder = PlaceholderPane()
-                return placeholder
+                // Never fail silently: a placeholder is a visible bug report.
+                NSLog("berth: no view for pane leaf \(activeSurface ?? "<none>")")
+                return PlaceholderPane()
             }
             let pane = PaneView(surfaceID: surfaceID, surface: view)
             return pane

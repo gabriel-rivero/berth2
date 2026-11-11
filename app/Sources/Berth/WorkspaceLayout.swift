@@ -36,10 +36,19 @@ struct WorkspaceLayout {
               let tree = workspace["root"]
         else { return nil }
 
+        // The core resolves the active surface id for us (`active_surface`).
+        // The older `active` index is still understood so a mismatched app and
+        // core do not silently render empty panes.
         var activeByPane: [String: String] = [:]
         for pane in (root["panes"] as? [[String: Any]]) ?? [] {
             guard let paneID = pane["id"] as? String else { continue }
-            activeByPane[paneID] = pane["active"] as? String
+            if let id = pane["active_surface"] as? String {
+                activeByPane[paneID] = id
+            } else if let index = pane["active"] as? Int,
+                      let list = pane["surfaces"] as? [String],
+                      list.indices.contains(index) {
+                activeByPane[paneID] = list[index]
+            }
         }
 
         var surfaceIDs = Set<String>()
