@@ -5,7 +5,7 @@
 import AppKit
 import GhosttyKit
 
-final class GhosttySurfaceView: NSView, NSTextInputClient {
+final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClient {
     /// Core-assigned id (`srf_...`), used by the action callback to report
     /// titles/cwd/bells back to the core.
     /// Set by the shell, read from C callbacks. Both are plain values that
