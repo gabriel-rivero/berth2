@@ -62,7 +62,7 @@ struct SidebarWorkspace {
     let pinned: Bool
     let groupID: String?
     let pid: Int?
-    let agent: SidebarAgent? = nil
+    var agent: SidebarAgent? = nil
 }
 
 struct SidebarGroupInfo {
