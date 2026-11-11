@@ -161,6 +161,29 @@ fn provider_for(argv: &[String]) -> String {
     }
 }
 
+/// Ghostty launches commands through a login shell with a minimal environment,
+/// so `claude` on the user's PATH is invisible unless we resolve it here and
+/// pass that PATH along. Absolute paths also keep restore independent of PATH.
+fn resolve_program(program: &str) -> Option<String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    fn executable(path: &std::path::Path) -> bool {
+        path.metadata()
+            .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+
+    if program.contains('/') {
+        let path = std::path::Path::new(program);
+        return executable(path).then(|| program.to_string());
+    }
+    let paths = std::env::var_os("PATH")?;
+    std::env::split_paths(&paths)
+        .map(|dir| dir.join(program))
+        .find(|path| executable(path))
+        .map(|path| path.display().to_string())
+}
+
 fn agent_id() -> String {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -380,12 +403,16 @@ fn run() -> Result<(), String> {
             if argv.is_empty() {
                 return Err("run: missing command after --".into());
             }
+            let program = resolve_program(&argv[0])
+                .ok_or_else(|| format!("run: {} not found on PATH", argv[0]))?;
+            let mut argv = argv.to_vec();
+            argv[0] = program;
             let cwd = arg_after(flags, "--cwd").or_else(|| {
                 std::env::current_dir()
                     .ok()
                     .map(|p| p.display().to_string())
             });
-            let provider = arg_after(flags, "--provider").unwrap_or_else(|| provider_for(argv));
+            let provider = arg_after(flags, "--provider").unwrap_or_else(|| provider_for(&argv));
             let name = arg_after(flags, "--name")
                 .unwrap_or_else(|| argv[0].rsplit('/').next().unwrap_or("agent").to_string());
 
@@ -395,12 +422,16 @@ fn run() -> Result<(), String> {
             }
 
             let id = agent_id();
+            let mut env = vec![vec!["BERTH_AGENT_ID".to_string(), id.clone()]];
+            if let Ok(path) = std::env::var("PATH") {
+                env.push(vec!["PATH".to_string(), path]);
+            }
             let created = c.call(
                 "surface.create",
                 json!({
                     "argv": argv,
                     "cwd": cwd.clone(),
-                    "env": [["BERTH_AGENT_ID", id.clone()]],
+                    "env": env,
                     "focus": true,
                 }),
             )?;
