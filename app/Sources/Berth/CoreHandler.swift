@@ -27,7 +27,7 @@ final class CoreHandler: RequestHandler {
             }
         }
 
-        let response = engine.dispatch(request: text)
+        let response = dispatch(text)
         flushEvents()
         // Structural changes (split/close/create) land in the core first; the
         // window tree follows on the next runloop turn.
@@ -39,8 +39,8 @@ final class CoreHandler: RequestHandler {
 
     /// The server's greeting: protocol/app/instance facts, no event sequence.
     func hello() -> Data? {
-        let response = engine.dispatch(
-            request: #"{"id":"hello","method":"system.hello","params":{}}"#)
+        let response = dispatch(
+            #"{"id":"hello","method":"system.hello","params":{}}"#)
         guard let data = response.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let result = object["result"]
@@ -48,6 +48,20 @@ final class CoreHandler: RequestHandler {
         let event: [String: Any] = ["event": "hello", "data": result]
         guard let encoded = try? JSONSerialization.data(withJSONObject: event) else { return nil }
         return encoded
+    }
+
+    /// Run the core on the main thread. Core dispatch holds its state lock while
+    /// it calls back into the host, and host callbacks synchronously hop to the
+    /// main thread; dispatching from a socket thread would deadlock against any
+    /// main-thread dispatch (timer, reconcile, UI command) waiting on that lock.
+    private func dispatch(_ request: String) -> String {
+        if Thread.isMainThread {
+            return engine.dispatch(request: request)
+        }
+        let engine = self.engine
+        return DispatchQueue.main.sync {
+            engine.dispatch(request: request)
+        }
     }
 
     /// Move queued events from the core to the server's replay ring and
