@@ -296,7 +296,8 @@ final class GhosttyHost {
 
     /// Ghostty's C config loader only reads files, so write the app's one
     /// override next to the session files and load it after the defaults.
-    private func writeFontConfig(fontSize: Double, config: ghostty_config_t) {
+    private func writeFontConfig(fontSize: Double, config: ghostty_config_t?) {
+        guard let config else { return }
         let directory = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Berth", isDirectory: true)
