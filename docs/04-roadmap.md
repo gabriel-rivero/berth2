@@ -75,8 +75,18 @@ not be mistaken for missing architecture.
   implemented.
 - **Journal semantics.** `journal.ndjson` stores snapshots (newest wins) instead
   of replayable structural events; a crash can lose the last 500 ms.
-- **Socket token auth.** The socket is `0600` but the token handshake is not
-  implemented, so any process running as the user can connect.
+- **Headless app-test mode.** `scripts/m2-acceptance.sh` drives the real GUI app
+  over the socket. There is no test-mode app loop that runs the windowless
+  surface layer on CI, so the end-to-end criterion is still a manual Mac check.
+- **Acceptance ergonomics.** There is no `make acceptance` target; the flow is
+  `make cli && ./scripts/m2-acceptance.sh` (running both as make targets builds
+  the CLI but does not execute the script).
+- **Generated JSON Schema.** `docs/03-protocol.md` promises a schema generated
+  from the Rust types under `docs/schema/`; `berth schema` currently prints the
+  method/event capability list only.
+- **Socket hardening.** Token auth, read-only classification, and replay are in
+  place. Remaining: no peer-UID/audit-token verification, `BERTH_TOKEN` is
+  visible to child processes, and `trusted` mode bypasses the token entirely.
 - **Discoverability and input polish.** Workspace/tab creation buttons,
   double-click/middle-click gestures, and font sizing are in place as of 0.4.1;
   keep testing them on a real Mac.
