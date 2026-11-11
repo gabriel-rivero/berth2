@@ -78,6 +78,9 @@ not be mistaken for missing architecture.
 - **Discoverability and input polish.** Workspace/tab creation buttons,
   double-click/middle-click gestures, and font sizing are in place as of 0.4.1;
   keep testing them on a real Mac.
+- **Live font reload.** The font size is written into Ghostty's config before
+  startup, so changing it in Settings needs a relaunch. Apply it to live
+  surfaces without restarting the app.
 
 MVP gate stays the M1 restore criterion plus the M0 smoke checklist, not this
 list.

@@ -6,7 +6,7 @@
 //   { workspace: {id,name,root,active_surface,group_id,pinned,unread},
 //     panes: [{id,surfaces,active_surface}], surfaces: [...] }
 // where root is either
-//   {type:"split", id, orientation:"Horizontal"|"Vertical", children:[...], weights:[...]}
+//   {type:"split", id, orientation:"horizontal"|"vertical", children:[...], weights:[...]}
 // or
 //   {type:"leaf", pane_id}
 
@@ -138,11 +138,14 @@ struct WorkspaceLayout {
             guard let children = object["children"] as? [Any] else { return nil }
             let parsed = children.compactMap { parseNode($0, activeByPane: activeByPane) }
             guard !parsed.isEmpty else { return nil }
-            // "Horizontal" puts children side by side (a vertical divider).
-            let orientation = object["orientation"] as? String ?? "Horizontal"
+            // The core serializes `Orientation` in snake_case: "horizontal"
+            // puts children side by side (a vertical divider), "vertical"
+            // stacks them. Compare case-insensitively so older "Horizontal"
+            // dumps keep working.
+            let orientation = (object["orientation"] as? String ?? "horizontal").lowercased()
             return .split(
                 id: object["id"] as? String ?? UUID().uuidString,
-                isVertical: orientation == "Horizontal",
+                isVertical: orientation == "horizontal",
                 children: parsed)
         default:
             return nil
