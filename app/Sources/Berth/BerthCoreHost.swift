@@ -391,7 +391,7 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
         for workspace in workspaces {
             guard !workspace.cwd.isEmpty,
                   workspace.pid != nil,
-                  metadataInFlight[workspace.id] == nil
+                  !metadataInFlight.contains(workspace.id)
             else { continue }
             if let last = lastMetadataAt[workspace.id], now - last < 2 { continue }
             metadataInFlight.insert(workspace.id)

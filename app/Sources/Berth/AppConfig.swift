@@ -90,6 +90,7 @@ enum ShortcutAction: String, CaseIterable {
     }
 }
 
+@MainActor
 final class AppConfig {
     static let shared = AppConfig()
 
