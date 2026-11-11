@@ -64,6 +64,9 @@ The core is where the product logic lives and it is fully headless-testable, so 
 - [ ] Resize the window: no artifacts, no ghost cells, grid reflows
 - [ ] Move between Retina and non-Retina displays: text stays crisp
 - [ ] Paste with `⌘V`, copy with `⌘C` (selection mouse-drag)
+- [ ] Wheel scrolls back through `seq 1 5000`; drag-select highlights and copies
+- [ ] `htop` responds to clicks and wheel (terminal mouse reporting)
+- [ ] On a Spanish layout, `´` then `a` types `á`; emoji picker inserts text
 - [ ] Close the window: child process is gone (`pgrep -P` empty), no zombie
 - [ ] Idle CPU < 1 %, RSS sane for one pane
 - [ ] `berth ping`, `berth ls`, `berth agents` answer from a terminal in the app
@@ -73,21 +76,23 @@ Until every line passes, M0 is not done.
 
 ## Known gaps (deliberate, ordered)
 
-1. **IME.** No `NSTextInputClient` yet, so CJK, emoji picker and dictation do not
-   reach the terminal. Plain typing and dead keys are unaffected.
-2. **Socket token auth.** The socket is `0600` in the user's Application Support
+1. **Socket token auth.** The socket is `0600` in the user's Application Support
    directory, but the token handshake described in docs/03-protocol.md §2 is not
    implemented; access is "any process running as you".
-3. **Sidebar.** Workspaces exist in the core and each one is a window, but there
+2. **Sidebar.** Workspaces exist in the core and each one is a window, but there
    is no workspace list, no git branch, no unread badges.
+3. **Per-pane tabs.** A pane holds one surface; the model already supports a
+   stack, the UI does not expose it.
 4. **Session journal.** Persistence is a snapshot on quit; a crash loses the last
    structural change. The journal in docs/02 §2.3 is not written yet.
 5. **Geometric focus.** ⌘] / ⌘[ cycle surfaces in tree order; arrow-key
    navigation between panes needs pane rectangles and lands with the sidebar.
 
-Done since the scaffold: key routing, core bridge over UniFFI, clipboard
-(including the paste-confirmation dialog), OSC reporting (title, cwd, progress,
-bell, notifications, URLs), split tree with draggable dividers, and ⌘D/⌘⇧D/⌘W.
+Done since the scaffold: key routing, IME and dead keys, mouse (wheel
+scrollback, drag selection, terminal mouse reporting, right/middle buttons),
+core bridge over UniFFI, clipboard with paste confirmation, OSC reporting
+(title, cwd, progress, bell, notifications, URLs), split tree with draggable
+dividers, and ⌘D/⌘⇧D/⌘W.
 
 ## Upgrading Ghostty
 

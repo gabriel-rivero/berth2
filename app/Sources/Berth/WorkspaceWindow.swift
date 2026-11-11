@@ -23,6 +23,9 @@ final class WorkspaceWindow: NSWindow {
         isReleasedWhenClosed = false
         collectionBehavior = [.fullScreenPrimary]
         cascadeTopLeft(from: NSPoint(x: 40, y: 40))
+        // Terminal surfaces need mouse-moved events for hover, link detection
+        // and terminal mouse reporting; AppKit does not deliver them by default.
+        acceptsMouseMovedEvents = true
         contentView = NSView(frame: contentRect(forFrameRect: frame))
     }
 

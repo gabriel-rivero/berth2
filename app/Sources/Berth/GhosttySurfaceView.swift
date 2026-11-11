@@ -5,7 +5,7 @@
 import AppKit
 import GhosttyKit
 
-final class GhosttySurfaceView: NSView {
+final class GhosttySurfaceView: NSView, NSTextInputClient {
     /// Core-assigned id (`srf_...`), used by the action callback to report
     /// titles/cwd/bells back to the core.
     /// Set by the shell, read from C callbacks. Both are plain values that
@@ -239,23 +239,60 @@ final class GhosttySurfaceView: NSView {
 
     // MARK: - Input
 
+    /// Text accumulated by `interpretKeyEvents` during a single keyDown. The
+    /// input method calls `insertText` synchronously, which appends here; the
+    /// key event is then sent with that text instead of `event.characters`,
+    /// which is empty for composed input.
+    private var keyTextAccumulator: [String]?
+    /// In-progress composition (`marked text` in AppKit terms). Ghostty shows
+    /// it as preedit, underlined, without writing to the PTY.
+    private var markedText = NSMutableAttributedString()
+
     /// All key handling goes through `ghostty_surface_key`: Ghostty decides
     /// whether the chord is a binding (perform the action) or terminal input
     /// (encode and write to the PTY). We never pre-encode C-c/arrow keys
     /// ourselves; the core needs the physical key to do that correctly.
+    ///
+    /// `interpretKeyEvents` runs first so input methods (CJK, dictation, dead
+    /// keys like ´ + a) can commit text. That also means `doCommand` must be
+    /// swallowed, or every arrow key would beep.
     override func keyDown(with event: NSEvent) {
         guard let surface else {
             super.keyDown(with: event)
             return
         }
 
+        keyTextAccumulator = []
+        defer { keyTextAccumulator = nil }
+
+        let markedBefore = markedText.length > 0
+        interpretKeyEvents([event])
+        syncPreedit(clearIfNeeded: markedBefore)
+
+        let composing = markedText.length > 0 || markedBefore
         let action: ghostty_input_action_e = event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS
         let keyEvent = event.berthKeyEvent(
             action,
             translationFlags: BerthInput.translationFlags(event, surface: surface))
-        guard keyEvent.send(to: surface) else {
-            super.keyDown(with: event)
+
+        // Committed composition (or a plain character interpreted by AppKit):
+        // send the text with the physical key so Ghostty can encode both.
+        if let accumulated = keyTextAccumulator, !accumulated.isEmpty {
+            for text in accumulated {
+                guard !text.isEmpty else { continue }
+                var commit = keyEvent
+                commit.text = text
+                commit.composing = false
+                _ = commit.send(to: surface)
+            }
             return
+        }
+
+        var normal = keyEvent
+        normal.composing = composing
+        if composing { normal.text = nil }
+        if !normal.send(to: surface), !composing {
+            super.keyDown(with: event)
         }
     }
 
@@ -272,6 +309,11 @@ final class GhosttySurfaceView: NSView {
         keyEvent.text = nil
         _ = keyEvent.send(to: surface)
     }
+
+    /// AppKit calls this for keys that produce no text (arrows, function keys)
+    /// when it is interpreting events for an NSTextInputClient. Doing nothing
+    /// keeps the key on the path to `ghostty_surface_key` instead of beeping.
+    override func doCommand(by selector: Selector) {}
 
     /// Modifier press/release. Ghostty tracks these for protocols that report
     /// modifiers (Kitty keyboard protocol, terminal mouse reporting).
@@ -325,8 +367,247 @@ final class GhosttySurfaceView: NSView {
         return super.performKeyEquivalent(with: event)
     }
 
+    // MARK: - Text input client (IME)
+
+    func insertText(_ string: Any, replacementRange: NSRange) {
+        unmarkText()
+        let text: String
+        switch string {
+        case let value as NSAttributedString: text = value.string
+        case let value as NSString: text = value as String
+        default: return
+        }
+        guard !text.isEmpty else { return }
+
+        // Inside keyDown: hand the text back so it rides on the key event.
+        if keyTextAccumulator != nil {
+            keyTextAccumulator?.append(text)
+            return
+        }
+
+        // Outside keyDown (dictation, external commit): no NSEvent exists, so
+        // there is no keycode to encode. Write it as terminal input.
+        sendText(text)
+    }
+
+    func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        switch string {
+        case let value as NSAttributedString:
+            markedText = NSMutableAttributedString(attributedString: value)
+        case let value as String:
+            markedText = NSMutableAttributedString(string: value)
+        default:
+            return
+        }
+
+        // Outside keyDown (e.g. a keyboard layout change mid-composition) the
+        // preedit must update immediately.
+        if keyTextAccumulator == nil {
+            syncPreedit()
+        }
+    }
+
+    func unmarkText() {
+        guard markedText.length > 0 else { return }
+        markedText.mutableString.setString("")
+        syncPreedit()
+    }
+
+    func hasMarkedText() -> Bool { markedText.length > 0 }
+
+    func markedRange() -> NSRange {
+        markedText.length > 0
+            ? NSRange(location: 0, length: markedText.length)
+            : NSRange()
+    }
+
+    func selectedRange() -> NSRange {
+        guard let surface else { return NSRange() }
+        var text = ghostty_text_s()
+        guard ghostty_surface_read_selection(surface, &text) else { return NSRange() }
+        defer { ghostty_surface_free_text(surface, &text) }
+        return NSRange(location: Int(text.offset_start), length: Int(text.offset_len))
+    }
+
+    func validAttributesForMarkedText() -> [NSAttributedString.Key] { [] }
+
+    func attributedSubstring(
+        forProposedRange range: NSRange,
+        actualRange: NSRangePointer?
+    ) -> NSAttributedString? { nil }
+
+    func characterIndex(for point: NSPoint) -> Int { NSNotFound }
+
+    /// Where the candidate window should appear: Ghostty tells us the cursor
+    /// cell in top-left coordinates, AppKit wants screen coordinates.
+    func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
+        guard let surface else { return .zero }
+        var x = 0.0
+        var y = 0.0
+        var width = 0.0
+        var height = 0.0
+        ghostty_surface_ime_point(surface, &x, &y, &width, &height)
+        let inView = NSRect(x: x, y: bounds.height - y, width: width, height: height)
+        let inWindow = convert(inView, to: nil)
+        guard let window else { return inWindow }
+        return window.convertToScreen(inWindow)
+    }
+
+    private func syncPreedit(clearIfNeeded: Bool = true) {
+        guard let surface else { return }
+        if markedText.length > 0 {
+            let string = markedText.string
+            string.withCString { pointer in
+                ghostty_surface_preedit(surface, pointer, UInt(string.utf8.count))
+            }
+        } else if clearIfNeeded {
+            ghostty_surface_preedit(surface, nil, 0)
+        }
+    }
+
+    // MARK: - Mouse
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas { removeTrackingArea(area) }
+        addTrackingArea(NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .mouseMoved, .activeInActiveApp, .inVisibleRect],
+            owner: self))
+    }
+
+    /// Ghostty's mouse coordinates are in points from the top-left of the view.
+    private func mousePosition(_ event: NSEvent) -> (Double, Double, ghostty_input_mods_e) {
+        let point = convert(event.locationInWindow, from: nil)
+        return (Double(point.x), Double(bounds.height - point.y),
+                BerthInput.mods(event.modifierFlags))
+    }
+
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
-        super.mouseDown(with: event)
+        guard let surface else { return super.mouseDown(with: event) }
+        let (x, y, mods) = mousePosition(event)
+        ghostty_surface_mouse_pos(surface, x, y, mods)
+        _ = ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT, mods)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard let surface else { return super.mouseUp(with: event) }
+        let (x, y, mods) = mousePosition(event)
+        ghostty_surface_mouse_pos(surface, x, y, mods)
+        _ = ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_LEFT, mods)
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        guard let surface else { return super.rightMouseDown(with: event) }
+        let (x, y, mods) = mousePosition(event)
+        ghostty_surface_mouse_pos(surface, x, y, mods)
+        if !ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_RIGHT, mods) {
+            super.rightMouseDown(with: event)
+        }
+    }
+
+    override func rightMouseUp(with event: NSEvent) {
+        guard let surface else { return super.rightMouseUp(with: event) }
+        let (x, y, mods) = mousePosition(event)
+        ghostty_surface_mouse_pos(surface, x, y, mods)
+        if !ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_RIGHT, mods) {
+            super.rightMouseUp(with: event)
+        }
+    }
+
+    override func otherMouseDown(with event: NSEvent) {
+        guard let surface else { return super.otherMouseDown(with: event) }
+        let (x, y, mods) = mousePosition(event)
+        ghostty_surface_mouse_pos(surface, x, y, mods)
+        _ = ghostty_surface_mouse_button(
+            surface, GHOSTTY_MOUSE_PRESS, Self.mouseButton(event.buttonNumber), mods)
+    }
+
+    override func otherMouseUp(with event: NSEvent) {
+        guard let surface else { return super.otherMouseUp(with: event) }
+        let (x, y, mods) = mousePosition(event)
+        ghostty_surface_mouse_pos(surface, x, y, mods)
+        _ = ghostty_surface_mouse_button(
+            surface, GHOSTTY_MOUSE_RELEASE, Self.mouseButton(event.buttonNumber), mods)
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        guard let surface else { return }
+        let (x, y, mods) = mousePosition(event)
+        ghostty_surface_mouse_pos(surface, x, y, mods)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        mouseMoved(with: event)
+    }
+
+    override func rightMouseDragged(with event: NSEvent) {
+        mouseMoved(with: event)
+    }
+
+    override func otherMouseDragged(with event: NSEvent) {
+        mouseMoved(with: event)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        mouseMoved(with: event)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        // A drag keeps reporting outside the view; only a clean exit tells the
+        // terminal the pointer left the viewport.
+        guard let surface, NSEvent.pressedMouseButtons == 0 else { return }
+        ghostty_surface_mouse_pos(surface, -1, -1, BerthInput.mods(event.modifierFlags))
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        guard let surface else { return super.scrollWheel(with: event) }
+        let precise = event.hasPreciseScrollingDeltas
+        // Trackpads report many small deltas; 2x matches how Ghostty feels.
+        let multiplier: CGFloat = precise ? 2 : 1
+        ghostty_surface_mouse_scroll(
+            surface,
+            Double(event.scrollingDeltaX * multiplier),
+            Double(event.scrollingDeltaY * multiplier),
+            Self.scrollMods(precision: precise, phase: event.momentumPhase))
+    }
+
+    private static func mouseButton(_ number: Int) -> ghostty_input_mouse_button_e {
+        // AppKit numbers: 2 is middle, 3+ are the extra buttons in order.
+        switch number {
+        case 0: return GHOSTTY_MOUSE_LEFT
+        case 1: return GHOSTTY_MOUSE_RIGHT
+        case 2: return GHOSTTY_MOUSE_MIDDLE
+        case 3: return GHOSTTY_MOUSE_FOUR
+        case 4: return GHOSTTY_MOUSE_FIVE
+        case 5: return GHOSTTY_MOUSE_SIX
+        case 6: return GHOSTTY_MOUSE_SEVEN
+        case 7: return GHOSTTY_MOUSE_EIGHT
+        case 8: return GHOSTTY_MOUSE_NINE
+        case 9: return GHOSTTY_MOUSE_TEN
+        case 10: return GHOSTTY_MOUSE_ELEVEN
+        default: return GHOSTTY_MOUSE_UNKNOWN
+        }
+    }
+
+    /// Packed `ghostty_input_scroll_mods_t`: bit 0 precision, bits 1..3 momentum.
+    private static func scrollMods(precision: Bool, phase: NSEvent.Phase) -> ghostty_input_scroll_mods_t {
+        var value: Int32 = precision ? 1 : 0
+        let momentum: Int32
+        switch phase {
+        case .began: momentum = 1
+        case .stationary: momentum = 2
+        case .changed: momentum = 3
+        case .ended: momentum = 4
+        case .cancelled: momentum = 5
+        case .mayBegin: momentum = 6
+        default: momentum = 0
+        }
+        value |= momentum << 1
+        return value
     }
 }
