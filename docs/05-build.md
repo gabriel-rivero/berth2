@@ -113,7 +113,7 @@ berth ping
 berth schema | head
 berth new --name m2-check
 berth active                                    # active surface id
-make cli && ./scripts/m2-acceptance.sh
+make acceptance                                 # builds the CLI, then runs the check
 ```
 
 The script creates a workspace, splits twice, types into the deepest pane, reads the screen back, and runs two independent `events --since 0` clients. It fails unless both clients see identical NDJSON with strictly increasing `seq`. It cleans up the workspace on exit.
@@ -135,24 +135,21 @@ mistaken for missing architecture.
 
 1. **Headless app-test mode.** The acceptance script needs the GUI app running;
    there is no windowless app loop for CI.
-2. **Acceptance ergonomics.** Run `make cli && ./scripts/m2-acceptance.sh`; there
-   is no `make acceptance` target, and `make cli ./scripts/m2-acceptance.sh`
-   treats the script as a build target instead of running it.
-3. **Generated JSON Schema.** `berth schema` prints the capability list; the
+2. **Generated JSON Schema.** `berth schema` prints the capability list; the
    generated `docs/schema/` promised by the protocol doc does not exist yet.
-4. **Socket hardening.** Token auth is implemented; peer-UID checks, hiding
+3. **Socket hardening.** Token auth is implemented; peer-UID checks, hiding
    `BERTH_TOKEN` from children, and non-bypassable `trusted` mode are not.
-5. **Group management UI.** Groups render and collapse, and the protocol has
+4. **Group management UI.** Groups render and collapse, and the protocol has
    `group.create/update/delete`, but there is no create/rename/color picker yet.
-6. **Split weights.** The core stores per-split weights; the Swift shell rebuilds
+5. **Split weights.** The core stores per-split weights; the Swift shell rebuilds
    `NSSplitView` from the tree and does not feed weights back into the core, so
    divider positions are not restored across launches.
-7. **Journal semantics.** `journal.ndjson` stores whole snapshots (newest wins)
+6. **Journal semantics.** `journal.ndjson` stores whole snapshots (newest wins)
    rather than replayable structural events, because events cannot recreate
    PTYs. A crash loses at most the last 500 ms debounce window.
-8. **Geometric focus.** ⌘] / ⌘[ move between panes in tree order; rectangle-based
+7. **Geometric focus.** ⌘] / ⌘[ move between panes in tree order; rectangle-based
    arrow navigation is not implemented.
-9. **Live font reload.** Font size applies on relaunch.
+8. **Live font reload.** Font size applies on relaunch.
 
 Done since the scaffold: key routing, IME and dead keys, mouse (wheel
 scrollback, drag selection, terminal mouse reporting, right/middle buttons),

@@ -13,6 +13,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var handler: CoreHandler?
     private var sweepTimer: Timer?
     private var saveTimer: Timer?
+    /// A second copy must not bootstrap a second in-memory session on top of
+    /// the socket owner's state, and must not overwrite session.json on exit.
+    private var isDuplicateInstance = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard GhosttyHost.shared.start(fontSize: AppConfig.shared.fontSize) else {
@@ -56,10 +59,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             handler.server = socket
             do {
                 try socket.start()
+                self.socket = socket
             } catch {
+                // The socket path is the single-instance lock. A second copy
+                // that fails to bind must exit instead of creating a divergent
+                // window and state.
                 NSLog("berth: socket unavailable at \(Self.socketPath): \(error)")
+                NSLog("berth: another Berth instance owns the socket; exiting")
+                isDuplicateInstance = true
+                NSApp.terminate(nil)
+                return
             }
-            self.socket = socket
         }
         BerthCoreHost.shared.onEvents = { [weak handler, weak self] in
             handler?.flushEvents()
@@ -76,6 +86,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        if isDuplicateInstance {
+            GhosttyHost.shared.stop()
+            return
+        }
         saveTimer?.invalidate()
         saveSession(truncateJournal: true)
         sweepTimer?.invalidate()

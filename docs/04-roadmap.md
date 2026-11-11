@@ -78,9 +78,6 @@ not be mistaken for missing architecture.
 - **Headless app-test mode.** `scripts/m2-acceptance.sh` drives the real GUI app
   over the socket. There is no test-mode app loop that runs the windowless
   surface layer on CI, so the end-to-end criterion is still a manual Mac check.
-- **Acceptance ergonomics.** There is no `make acceptance` target; the flow is
-  `make cli && ./scripts/m2-acceptance.sh` (running both as make targets builds
-  the CLI but does not execute the script).
 - **Generated JSON Schema.** `docs/03-protocol.md` promises a schema generated
   from the Rust types under `docs/schema/`; `berth schema` currently prints the
   method/event capability list only.

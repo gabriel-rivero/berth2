@@ -1,10 +1,22 @@
 #!/usr/bin/env bash
 # M2 acceptance: drive a running Berth app over its socket and prove the
 # protocol spine end to end. Requires the app running with socket mode `local`
-# or `trusted`, and `berth` on PATH (or BERTH_CLI set).
+# or `trusted`.
+#
+# The CLI defaults to the repo build at core/target/release/berth, so
+# `make cli && ./scripts/m2-acceptance.sh` works without changing PATH and
+# without picking up an unrelated `berth` from the environment. Override with
+# BERTH_CLI=/path/to/berth.
 set -euo pipefail
 
-CLI=${BERTH_CLI:-berth}
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+if [[ -n "${BERTH_CLI:-}" ]]; then
+    CLI=$BERTH_CLI
+elif [[ -x "$root/core/target/release/berth" ]]; then
+    CLI="$root/core/target/release/berth"
+else
+    CLI=berth
+fi
 work=$(mktemp -d "${TMPDIR:-/tmp}/berth-m2.XXXXXX")
 ws=""
 pids=()

@@ -226,7 +226,10 @@ fn run() -> Result<(), String> {
                 params["cwd"] = json!(d);
             }
             let v = c.call("workspace.create", params)?;
-            println!("{}", v["workspace"]["id"].as_str().unwrap_or("?"));
+            let id = v["workspace"]["id"]
+                .as_str()
+                .ok_or("workspace.create returned no workspace id")?;
+            println!("{id}");
         }
 
         "close-workspace" => {
@@ -251,7 +254,10 @@ fn run() -> Result<(), String> {
                 "surface.split",
                 json!({"surface_id": sid, "direction": dir}),
             )?;
-            println!("{}", v["surface_id"].as_str().unwrap_or("?"));
+            let new_id = v["surface_id"]
+                .as_str()
+                .ok_or("surface.split returned no surface id")?;
+            println!("{new_id}");
         }
 
         "send" => {

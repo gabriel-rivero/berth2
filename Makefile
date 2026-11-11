@@ -6,7 +6,7 @@ CONFIG ?= release
 ZIG_FLAGS := -Doptimize=ReleaseFast -Dapp-runtime=none -Demit-xcframework=true \
              -Demit-macos-app=false -Dxcframework-target=native
 
-.PHONY: help bootstrap core-lib bindings build app run cli test test-core fmt fmt-check clean engine-clean
+.PHONY: help bootstrap core-lib bindings build app run cli acceptance test test-core fmt fmt-check clean engine-clean
 
 help:
 	@echo "make bootstrap   fetch pinned Ghostty submodule + build GhosttyKit (macOS)"
@@ -16,6 +16,7 @@ help:
 	@echo "make app         assemble + ad-hoc sign build/Berth.app"
 	@echo "make run         launch the app"
 	@echo "make cli         build the berth CLI at core/target/release/berth"
+	@echo "make acceptance  run the M2 protocol check against the running app"
 	@echo "make test        swift tests (no window)"
 	@echo "make test-core   cargo test --workspace (any platform)"
 	@echo "make fmt         rustfmt + swift-format (if present)"
@@ -42,6 +43,9 @@ run: app
 
 cli:
 	cd core && cargo build --release -p berth-cli
+
+acceptance: cli
+	./scripts/m2-acceptance.sh
 
 test:
 	swift test --package-path app
