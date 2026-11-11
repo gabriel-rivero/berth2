@@ -79,20 +79,24 @@ Until every line passes, M0 is not done.
 1. **Socket token auth.** The socket is `0600` in the user's Application Support
    directory, but the token handshake described in docs/03-protocol.md §2 is not
    implemented; access is "any process running as you".
-2. **Sidebar.** Workspaces exist in the core and each one is a window, but there
-   is no workspace list, no git branch, no unread badges.
-3. **Per-pane tabs.** A pane holds one surface; the model already supports a
-   stack, the UI does not expose it.
-4. **Session journal.** Persistence is a snapshot on quit; a crash loses the last
-   structural change. The journal in docs/02 §2.3 is not written yet.
-5. **Geometric focus.** ⌘] / ⌘[ cycle surfaces in tree order; arrow-key
-   navigation between panes needs pane rectangles and lands with the sidebar.
+2. **Group management UI.** Groups render and collapse, and the protocol has
+   `group.create/update/delete`, but there is no create/rename/color picker yet.
+3. **Split weights.** The core stores per-split weights; the Swift shell rebuilds
+   `NSSplitView` from the tree and does not feed weights back into the core, so
+   divider positions are not restored across launches.
+4. **Journal semantics.** `journal.ndjson` stores whole snapshots (newest wins)
+   rather than replayable structural events, because events cannot recreate
+   PTYs. A crash loses at most the last 500 ms debounce window.
+5. **Geometric focus.** ⌘] / ⌘[ move between panes in tree order; rectangle-based
+   arrow navigation is not implemented.
 
 Done since the scaffold: key routing, IME and dead keys, mouse (wheel
 scrollback, drag selection, terminal mouse reporting, right/middle buttons),
 core bridge over UniFFI, clipboard with paste confirmation, OSC reporting
 (title, cwd, progress, bell, notifications, URLs), split tree with draggable
-dividers, and ⌘D/⌘⇧D/⌘W.
+dividers, sidebar with live metadata and drag reorder, per-pane tab stacks,
+command palette, editable shortcuts, and session restore with cwd and active
+tab.
 
 ## Upgrading Ghostty
 

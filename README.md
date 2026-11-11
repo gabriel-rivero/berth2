@@ -2,7 +2,7 @@
 
 A native macOS terminal workspace for running coding agents side by side — built on Ghostty's renderer, with a typed agent lifecycle and a push-based protocol.
 
-Status: M0. The engine is pinned, the AppKit shell renders a Ghostty terminal with full key routing, and the Rust core is bridged over UniFFI: the app boots from the core, serves the JSON-RPC socket, and `berth` can drive it. Split tree and sidebar are M1.
+Status: M1. The AppKit shell is a workspace app: sidebar with live title, cwd, git branch, listening ports and unread state; n-ary split tree with per-pane tabs; keyboard navigation; command palette; shortcut settings; and crash-tolerant session restore (tree, tabs, cwd, selection). Agent features are M2+.
 
 Download: [latest release](https://github.com/gabriel-rivero/berth2/releases) (macOS 14+, Apple Silicon, ad-hoc signed).
 

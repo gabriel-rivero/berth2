@@ -113,6 +113,10 @@ pub mod names {
     pub const WORKSPACE_CLOSED: &str = "workspace.closed";
     pub const WORKSPACE_CHANGED: &str = "workspace.changed";
     pub const WORKSPACE_SELECTED: &str = "workspace.selected";
+    pub const WORKSPACE_MOVED: &str = "workspace.moved";
+    pub const GROUP_CREATED: &str = "group.created";
+    pub const GROUP_UPDATED: &str = "group.updated";
+    pub const GROUP_DELETED: &str = "group.deleted";
     pub const PANE_FOCUS_CHANGED: &str = "pane.focus_changed";
     pub const SURFACE_CREATED: &str = "surface.created";
     pub const SURFACE_CLOSED: &str = "surface.closed";
@@ -134,6 +138,10 @@ pub mod names {
         WORKSPACE_CLOSED,
         WORKSPACE_CHANGED,
         WORKSPACE_SELECTED,
+        WORKSPACE_MOVED,
+        GROUP_CREATED,
+        GROUP_UPDATED,
+        GROUP_DELETED,
         PANE_FOCUS_CHANGED,
         SURFACE_CREATED,
         SURFACE_CLOSED,

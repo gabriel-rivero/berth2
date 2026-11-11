@@ -21,10 +21,26 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
 
     /// Main-thread confined.
     private var surfaces: [String: GhosttySurfaceView] = [:]
-    private var windows: [String: WorkspaceWindow] = [:]
+    private var window: MainWindow?
     private var surfaceWorkspace: [String: String] = [:]
     private var didAskForNotificationPermission = false
     private var lastLayoutJSON: [String: String] = [:]
+
+    private var sidebarBase: [SidebarWorkspace] = []
+    private var sidebarGroups: [SidebarGroupInfo] = []
+    private var selectedWorkspaceID: String?
+    private var lastAppliedStructure: String?
+    private var lastSelectedWorkspace: String?
+    private var lastActiveSurface: String?
+
+    private struct WorkspaceMeta {
+        var branch: String?
+        var ports: [Int]
+    }
+
+    private var metadata: [String: WorkspaceMeta] = [:]
+    private var metadataInFlight: Set<String> = []
+    private var lastMetadataAt: [String: TimeInterval] = [:]
 
     /// Set by AppDelegate once the engine exists; callbacks (titles, cwd, bells)
     /// report through it.
@@ -114,8 +130,7 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
             guard let view = surfaces[surfaceId] else {
                 throw FfiError.Internal(message: "unknown surface \(surfaceId)")
             }
-            let workspaceID = surfaceWorkspace[surfaceId]
-            guard let window = workspaceID.flatMap({ windows[$0] }) else {
+            guard let window else {
                 // During restore the window is built by reconcileAll.
                 return
             }
@@ -178,8 +193,9 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
 
     // MARK: - Layout
 
-    /// Rebuild every window from the core's tree. Cheap when nothing changed:
-    /// the layout JSON is compared first and identical workspaces are skipped.
+    /// Rebuild the window from the core's state. Cheap when nothing changed:
+    /// structural JSON is compared per workspace and only the selected
+    /// workspace's tree is actually applied.
     func reconcileAll() {
         try? onMain { [self] in
             guard let engine else { return }
@@ -189,57 +205,162 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
                   let workspaces = result["workspaces"] as? [[String: Any]]
             else { return }
 
-            var live = Set<String>()
-            for workspace in workspaces {
-                guard let id = workspace["id"] as? String else { continue }
-                live.insert(id)
-                reconcile(id, name: workspace["name"] as? String ?? "Berth")
+            let groups = (result["groups"] as? [[String: Any]] ?? []).compactMap {
+                item -> SidebarGroupInfo? in
+                guard let id = item["id"] as? String else { return nil }
+                return SidebarGroupInfo(
+                    id: id,
+                    name: item["name"] as? String ?? "Group",
+                    collapsed: item["collapsed"] as? Bool ?? false)
             }
-            for (id, window) in windows where !live.contains(id) {
-                windows.removeValue(forKey: id)
-                lastLayoutJSON.removeValue(forKey: id)
-                window.close()
+            sidebarGroups = groups
+            selectedWorkspaceID = result["selected_workspace"] as? String
+
+            if workspaces.isEmpty {
+                window?.close()
+                window = nil
+                sidebarBase = []
+                lastAppliedStructure = nil
+                lastSelectedWorkspace = nil
+                return
             }
+
+            var base: [SidebarWorkspace] = []
+            var layouts: [String: WorkspaceLayout] = [:]
+            for item in workspaces {
+                guard let id = item["id"] as? String,
+                      let json = layoutJSON(id),
+                      let layout = WorkspaceLayout.parse(json)
+                else { continue }
+                layouts[id] = layout
+                lastLayoutJSON[id] = json
+                let active = layout.surface(layout.activeSurface)
+                let known = metadata[id]
+                base.append(SidebarWorkspace(
+                    id: id,
+                    name: item["name"] as? String ?? layout.name,
+                    title: active?.title ?? "",
+                    cwd: active?.cwd ?? "",
+                    branch: known?.branch,
+                    ports: known?.ports ?? [],
+                    unread: layout.unread,
+                    pinned: layout.pinned,
+                    groupID: layout.groupID,
+                    pid: active?.pid))
+            }
+            sidebarBase = base
+            lastLayoutJSON = lastLayoutJSON.filter { layouts[$0.key] != nil }
+
+            let win = window ?? MainWindow()
+            if window == nil {
+                window = win
+                win.sidebar.onSelect = { [weak self] id in
+                    self?.sendFromUI("workspace.select", ["workspace_id": id])
+                }
+                win.sidebar.onMove = { [weak self] id, index in
+                    self?.sendFromUI(
+                        "workspace.move", ["workspace_id": id, "index": index])
+                }
+                win.sidebar.onToggleGroup = { [weak self] id, collapsed in
+                    self?.sendFromUI(
+                        "group.update", ["group_id": id, "collapsed": collapsed])
+                }
+                win.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+            }
+            publishSidebar()
+
+            let selected = selectedWorkspaceID.flatMap { layouts[$0] != nil ? $0 : nil }
+                ?? layouts.keys.sorted().first
+            if let selected, let layout = layouts[selected] {
+                let structuralChange = lastSelectedWorkspace != selected
+                    || lastAppliedStructure != layout.structureKey
+                if structuralChange {
+                    win.apply(layout: layout, views: surfaces, actions: paneActions)
+                    lastAppliedStructure = layout.structureKey
+                    lastSelectedWorkspace = selected
+                } else if win.isKeyWindow,
+                          let active = layout.activeSurface,
+                          let view = surfaces[active],
+                          win.firstResponder !== view {
+                    win.makeFirstResponder(view)
+                }
+                lastActiveSurface = layout.activeSurface ?? layout.root.firstLeafSurface()
+            }
+            refreshMetadata(base)
         }
     }
 
     @MainActor
-    private func reconcile(_ workspaceID: String, name: String) {
-        guard let engine else { return }
+    private func layoutJSON(_ workspaceID: String) -> String? {
+        guard let engine else { return nil }
         let request = #"{"id":"layout","method":"workspace.layout","params":{"workspace_id":"\#(workspaceID)"}}"#
-        let response = engine.dispatch(request: request)
-        guard let result = Self.result(response),
-              let data = try? JSONSerialization.data(withJSONObject: result),
-              let json = String(data: data, encoding: .utf8),
-              let layout = WorkspaceLayout.parse(json)
+        guard let result = Self.result(engine.dispatch(request: request)),
+              let data = try? JSONSerialization.data(withJSONObject: result)
+        else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    @MainActor
+    private func publishSidebar() {
+        guard let window else { return }
+        let selected = selectedWorkspaceID ?? sidebarBase.first?.id
+        let workspaces = sidebarBase.map { workspace in
+            let known = metadata[workspace.id]
+            return SidebarWorkspace(
+                id: workspace.id,
+                name: workspace.name,
+                title: workspace.title,
+                cwd: workspace.cwd,
+                branch: known?.branch,
+                ports: known?.ports ?? [],
+                unread: workspace.unread,
+                pinned: workspace.pinned,
+                groupID: workspace.groupID,
+                pid: workspace.pid)
+        }
+        window.updateSidebar(SidebarModel(
+            groups: sidebarGroups,
+            workspaces: workspaces,
+            selectedWorkspace: selected))
+    }
+
+    /// Dispatch a request that originated in AppKit. Always main thread.
+    @MainActor
+    private func sendFromUI(_ method: String, _ params: [String: Any]) {
+        guard let engine,
+              let data = try? JSONSerialization.data(withJSONObject: params),
+              let json = String(data: data, encoding: .utf8)
         else { return }
+        _ = engine.dispatch(
+            request: #"{"id":"ui","method":"\#(method)","params":\#(json)}"#)
+        onEvents?()
+        reconcileAll()
+    }
 
-        if lastLayoutJSON[workspaceID] == json, let window = windows[workspaceID] {
-            // Same tree, but a surface may have run out of processes or the
-            // key window may have changed; focus is cheap to reapply.
-            if window.isKeyWindow, let active = layout.activeSurface, let view = surfaces[active],
-               window.firstResponder !== view {
-                window.makeFirstResponder(view)
-            }
-            return
-        }
-        lastLayoutJSON[workspaceID] = json
-
-        let isNew = windows[workspaceID] == nil
-        let window = windows[workspaceID] ?? WorkspaceWindow(workspaceID: workspaceID, name: name)
-        windows[workspaceID] = window
-        window.apply(layout: layout, views: surfaces)
-        if isNew {
-            window.makeKeyAndOrderFront(nil)
-            if let active = layout.activeSurface ?? layout.root.firstLeafSurface(),
-               let view = surfaces[active] {
-                window.makeFirstResponder(view)
-            }
-        }
+    @MainActor
+    private var paneActions: PaneActions {
+        PaneActions(
+            activate: { [weak self] id in
+                self?.sendFromUI("surface.activate", ["surface_id": id])
+            },
+            close: { [weak self] id in
+                self?.sendFromUI("surface.close", ["surface_id": id])
+            },
+            newTab: { [weak self] pane in
+                self?.sendFromUI(
+                    "surface.create", ["pane_id": pane, "focus": true])
+            })
     }
 
     /// Ghostty asked to close a surface (child exited and the config says so).
     /// Goes through the core so pane/agent bookkeeping stays in one place.
+    func toggleSidebar() {
+        try? onMain { [self] in
+            window?.toggleSidebar()
+        }
+    }
+
     func closeSurfaceFromTerminal(_ surfaceID: String) {
         try? onMain { [self] in
             guard let engine else { return }
@@ -253,12 +374,80 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
     /// The surface view that currently has focus, if any.
     @MainActor
     var focusedSurfaceID: String? {
-        for window in windows.values {
-            if let view = window.firstResponder as? GhosttySurfaceView {
-                return view.berthSurfaceID
+        if let view = window?.firstResponder as? GhosttySurfaceView {
+            return view.berthSurfaceID
+        }
+        return lastActiveSurface
+    }
+
+    // MARK: - Sidebar metadata
+
+    /// Git branch and listening ports are shell facts, not core facts. Query
+    /// them off the main thread, cache the answer per workspace for a couple of
+    /// seconds, and publish once per refresh.
+    @MainActor
+    private func refreshMetadata(_ workspaces: [SidebarWorkspace]) {
+        let now = Date.timeIntervalSinceReferenceDate
+        for workspace in workspaces {
+            guard !workspace.cwd.isEmpty,
+                  workspace.pid != nil,
+                  metadataInFlight[workspace.id] == nil
+            else { continue }
+            if let last = lastMetadataAt[workspace.id], now - last < 2 { continue }
+            metadataInFlight.insert(workspace.id)
+            lastMetadataAt[workspace.id] = now
+
+            let id = workspace.id
+            let cwd = workspace.cwd
+            let pid = workspace.pid
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                let branch = Self.gitBranch(cwd)
+                let ports = pid.map(Self.listeningPorts) ?? []
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.metadata[id] = WorkspaceMeta(branch: branch, ports: ports)
+                    self.metadataInFlight.remove(id)
+                    self.publishSidebar()
+                }
             }
         }
-        return nil
+    }
+
+    private static func gitBranch(_ cwd: String) -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = ["-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"]
+        process.standardError = FileHandle.nullDevice
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        guard (try? process.run()) != nil else { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { return nil }
+        let branch = String(decoding: data, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return branch.isEmpty || branch == "HEAD" ? nil : branch
+    }
+
+    private static func listeningPorts(pid: Int) -> [Int] {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+        process.arguments = ["-nP", "-a", "-p", "\(pid)", "-iTCP", "-sTCP:LISTEN", "-F", "n"]
+        process.standardError = FileHandle.nullDevice
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        guard (try? process.run()) != nil else { return [] }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        let output = String(decoding: data, as: UTF8.self)
+        var ports: [Int] = []
+        for line in output.split(separator: "\n") where line.hasPrefix("n") {
+            guard let colon = line.lastIndex(of: ":") else { continue }
+            if let port = Int(line[line.index(after: colon)...]), !ports.contains(port) {
+                ports.append(port)
+            }
+        }
+        return ports.sorted()
     }
 
     // MARK: - Ghostty actions
@@ -277,7 +466,6 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
         case GHOSTTY_ACTION_SET_TITLE:
             guard let title = action.action.set_title.title else { return false }
             let text = String(cString: title)
-            view.window?.title = text
             report(id, ["title": text])
             return true
 
@@ -347,6 +535,7 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
             guard let self, let engine = self.engine else { return }
             _ = engine.dispatch(
                 request: #"{"id":"osc","method":"surface.update","params":\#(json)}"#)
+            self.reconcileAll()
             self.onEvents?()
         }
     }

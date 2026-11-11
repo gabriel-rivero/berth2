@@ -99,6 +99,22 @@ impl AppState {
             .map(|s| s.workspace_id.as_str())
     }
 
+    /// The surface a workspace should show: the remembered one when it is
+    /// still alive, otherwise the active tab of the first pane.
+    pub fn active_surface_of_workspace(&self, workspace_id: &str) -> Option<String> {
+        let ws = self.workspace(workspace_id)?;
+        if let Some(id) = &ws.active_surface {
+            if self.surfaces.contains_key(id) {
+                return Some(id.clone());
+            }
+        }
+        ws.root
+            .leaves()
+            .iter()
+            .find_map(|pid| self.panes.get(*pid).and_then(Pane::active_surface))
+            .map(str::to_string)
+    }
+
     fn require_surface(&self, id: &str) -> Result<&Surface, CoreError> {
         self.surface(id)
             .ok_or_else(|| CoreError::not_found(format!("no surface {id}")))
@@ -254,6 +270,66 @@ impl AppState {
         Ok(surface)
     }
 
+    /// Make an existing tab the visible surface for its pane and workspace.
+    pub fn activate_surface(
+        &mut self,
+        surface_id: &str,
+        ops: &dyn SurfaceOps,
+    ) -> Result<Surface, CoreError> {
+        let surface = self.require_surface(surface_id)?.clone();
+        if let Some(pane) = self.panes.get_mut(&surface.pane_id) {
+            if let Some(idx) = pane.surfaces.iter().position(|s| s == surface_id) {
+                pane.active = idx;
+            }
+        }
+        ops.focus(surface_id)?;
+        self.selected_workspace = Some(surface.workspace_id.clone());
+        self.selected_surface = Some(surface.id.clone());
+
+        let mut changed = None;
+        if let Some(w) = self.workspace_mut(&surface.workspace_id) {
+            if w.active_surface.as_deref() != Some(surface_id) || w.unread != 0 {
+                w.active_surface = Some(surface.id.clone());
+                w.unread = 0;
+                changed = Some(w.clone());
+            }
+        }
+        self.emit(
+            names::PANE_FOCUS_CHANGED,
+            serde_json::json!({"pane_id": surface.pane_id, "surface_id": surface.id}),
+        );
+        if let Some(snapshot) = changed {
+            self.emit(names::WORKSPACE_CHANGED, serde_json::json!(snapshot));
+        }
+        Ok(surface)
+    }
+
+    /// Cycle tabs inside the surface's pane. Wraps in both directions.
+    pub fn cycle_surface(
+        &mut self,
+        surface_id: &str,
+        delta: i32,
+        ops: &dyn SurfaceOps,
+    ) -> Result<Surface, CoreError> {
+        let surface = self.require_surface(surface_id)?.clone();
+        let pane = self
+            .panes
+            .get(&surface.pane_id)
+            .ok_or_else(|| CoreError::not_found("pane for surface"))?;
+        if pane.surfaces.len() < 2 {
+            return self.activate_surface(surface_id, ops);
+        }
+        let current = pane
+            .surfaces
+            .iter()
+            .position(|s| s == surface_id)
+            .unwrap_or(pane.active) as i32;
+        let len = pane.surfaces.len() as i32;
+        let next = (current + delta).rem_euclid(len) as usize;
+        let target = pane.surfaces[next].clone();
+        self.activate_surface(&target, ops)
+    }
+
     pub fn split_surface(
         &mut self,
         surface_id: &str,
@@ -356,9 +432,9 @@ impl AppState {
             pane_empty = pane.surfaces.is_empty();
         }
 
+        let ws_id = surface.workspace_id.clone();
         if pane_empty {
             self.panes.remove(&surface.pane_id);
-            let ws_id = surface.workspace_id.clone();
             let mut ws_gone = false;
             if let Some(ws) = self.workspace_mut(&ws_id) {
                 let root_was_leaf = matches!(
@@ -380,12 +456,26 @@ impl AppState {
             }
         }
 
+        // A surviving workspace must point at a live tab after the close.
+        let active = self.active_surface_of_workspace(&ws_id);
+        if let Some(ws) = self.workspace_mut(&ws_id) {
+            if ws.active_surface != active {
+                ws.active_surface = active.clone();
+                let snapshot = ws.clone();
+                self.emit(names::WORKSPACE_CHANGED, serde_json::json!(snapshot));
+            }
+        }
+        if self.selected_workspace.as_deref() == Some(ws_id.as_str()) {
+            if let Some(s) = active {
+                self.selected_surface = Some(s);
+            }
+        }
+
         if self.selected_surface.as_deref() == Some(surface_id) {
             let next = self
-                .workspaces
-                .iter()
-                .find(|w| w.id == surface.workspace_id)
-                .and_then(|w| w.active_surface.clone())
+                .selected_workspace
+                .as_deref()
+                .and_then(|w| self.active_surface_of_workspace(w))
                 .or_else(|| self.surfaces.keys().next().cloned());
             self.selected_surface = next;
         }
@@ -397,16 +487,79 @@ impl AppState {
             return Err(CoreError::not_found(format!("no workspace {workspace_id}")));
         }
         self.selected_workspace = Some(workspace_id.to_string());
-        let surface = self
-            .workspace(workspace_id)
-            .and_then(|w| w.active_surface.clone());
-        if let Some(s) = surface.as_deref() {
-            self.selected_surface = Some(s.to_string());
+        let surface = self.active_surface_of_workspace(workspace_id);
+        let mut changed = None;
+        if let Some(w) = self.workspace_mut(workspace_id) {
+            w.active_surface = surface.clone();
+            if w.unread != 0 {
+                w.unread = 0;
+                changed = Some(w.clone());
+            }
+        }
+        if let Some(s) = surface {
+            self.selected_surface = Some(s);
         }
         self.emit(
             names::WORKSPACE_SELECTED,
             serde_json::json!({"workspace_id": workspace_id}),
         );
+        if let Some(snapshot) = changed {
+            self.emit(names::WORKSPACE_CHANGED, serde_json::json!(snapshot));
+        }
+        Ok(())
+    }
+
+    // ---- groups -------------------------------------------------------
+
+    pub fn create_group(&mut self, name: &str, color: Option<String>) -> Group {
+        let group = Group {
+            id: ids::mint(ids::GROUP),
+            name: name.to_string(),
+            color,
+            collapsed: false,
+        };
+        self.groups.push(group.clone());
+        self.emit(names::GROUP_CREATED, serde_json::json!(group));
+        group
+    }
+
+    pub fn update_group(
+        &mut self,
+        id: &str,
+        name: Option<String>,
+        color: Option<Option<String>>,
+        collapsed: Option<bool>,
+    ) -> Result<Group, CoreError> {
+        let group = self
+            .groups
+            .iter_mut()
+            .find(|g| g.id == id)
+            .ok_or_else(|| CoreError::not_found(format!("no group {id}")))?;
+        if let Some(n) = name {
+            group.name = n;
+        }
+        if let Some(c) = color {
+            group.color = c;
+        }
+        if let Some(c) = collapsed {
+            group.collapsed = c;
+        }
+        let snapshot = group.clone();
+        self.emit(names::GROUP_UPDATED, serde_json::json!(snapshot));
+        Ok(snapshot)
+    }
+
+    pub fn delete_group(&mut self, id: &str) -> Result<(), CoreError> {
+        if !self.groups.iter().any(|g| g.id == id) {
+            return Err(CoreError::not_found(format!("no group {id}")));
+        }
+        self.groups.retain(|g| g.id != id);
+        for ws in self.workspaces.iter_mut() {
+            if ws.group_id.as_deref() == Some(id) {
+                ws.group_id = None;
+            }
+        }
+        self.emit(names::GROUP_DELETED, serde_json::json!({"group_id": id}));
         Ok(())
     }
 

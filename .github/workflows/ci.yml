@@ -136,5 +136,7 @@ jobs:
             Download `Berth-*.zip`, unzip, and right-click → Open the first time
             (the app is ad-hoc signed, not notarized).
 
-            This build is a daily-driver skeleton: Ghostty terminal, key routing,
-            JSON-RPC socket, and the CLI. Splits and the sidebar are not in yet.
+            This build is the M1 workspace shell: split tree, per-pane tabs,
+            sidebar with live title/cwd/git/ports and unread state, command
+            palette, editable shortcuts, and session restore. Agent features
+            land in M2.

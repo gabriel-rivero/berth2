@@ -30,6 +30,8 @@ pub struct Snapshot {
     #[serde(default)]
     pub selected_workspace: Option<String>,
     #[serde(default)]
+    pub selected_surface: Option<String>,
+    #[serde(default)]
     pub groups: Vec<Group>,
     pub workspaces: Vec<WorkspaceSnapshot>,
 }
@@ -83,6 +85,7 @@ impl AppState {
             version: SESSION_VERSION,
             saved_ms: time::now_ms(),
             selected_workspace: self.selected_workspace.clone(),
+            selected_surface: self.selected_surface.clone(),
             groups: self.groups.clone(),
             workspaces,
         }
@@ -109,6 +112,7 @@ impl Default for Snapshot {
             version: SESSION_VERSION,
             saved_ms: 0,
             selected_workspace: None,
+            selected_surface: None,
             groups: Vec::new(),
             workspaces: Vec::new(),
         }
@@ -129,10 +133,16 @@ pub fn restore(
     for wsnap in snapshot.workspaces {
         let ws = wsnap.workspace;
         let ws_id = ws.id.clone();
+        let saved_active = ws.active_surface.clone();
 
-        // Ensure every pane exists even if a surface failed to spawn.
+        // Ensure every pane exists even if a surface failed to spawn. The
+        // active tab index is part of the saved layout, so keep it.
         for pane in &wsnap.panes {
-            state.panes.insert(pane.id.clone(), pane.clone());
+            let mut pane = pane.clone();
+            if pane.active >= pane.surfaces.len() {
+                pane.active = 0;
+            }
+            state.panes.insert(pane.id.clone(), pane);
         }
         state.workspaces.push(Workspace {
             active_surface: None,
@@ -183,7 +193,7 @@ pub fn restore(
             }
         }
 
-        if let Some(first) = state
+        let fallback = state
             .workspace(&ws_id)
             .and_then(|w| w.root.leaves().first().map(|p| p.to_string()))
             .and_then(|p| {
@@ -191,11 +201,12 @@ pub fn restore(
                     .panes
                     .get(&p)
                     .and_then(|pane| pane.active_surface().map(str::to_string))
-            })
-        {
-            if let Some(w) = state.workspace_mut(&ws_id) {
-                w.active_surface = Some(first);
-            }
+            });
+        let active = saved_active
+            .filter(|id| state.surfaces.contains_key(id))
+            .or(fallback);
+        if let Some(w) = state.workspace_mut(&ws_id) {
+            w.active_surface = active;
         }
     }
 
@@ -211,6 +222,20 @@ pub fn restore(
         state.selected_workspace = state.workspaces.first().map(|w| w.id.clone());
     }
     state.groups = snapshot.groups;
+
+    let selected_ws = state.selected_workspace.clone();
+    state.selected_surface = snapshot
+        .selected_surface
+        .filter(|id| {
+            state
+                .surface(id)
+                .is_some_and(|s| selected_ws.as_deref().is_none_or(|w| s.workspace_id == w))
+        })
+        .or_else(|| {
+            selected_ws
+                .as_deref()
+                .and_then(|w| state.active_surface_of_workspace(w))
+        });
     Ok(restored)
 }
 
@@ -310,6 +335,51 @@ mod tests {
                 .as_deref(),
             Some(agent.id.as_str())
         );
+    }
+
+    #[test]
+    fn restore_keeps_active_tab_and_selection() {
+        let mut st = AppState::default();
+        let ws = st
+            .create_workspace(Some("tabs"), Some("/tmp"), None, &NullOps)
+            .unwrap();
+        let pane_id = ws.root.leaves()[0].to_string();
+        let first = st
+            .panes
+            .get(&pane_id)
+            .and_then(|p| p.active_surface())
+            .unwrap()
+            .to_string();
+        st.add_surface(
+            &pane_id,
+            SpawnRequest {
+                cwd: Some("/tmp".into()),
+                ..Default::default()
+            },
+            &NullOps,
+            true,
+        )
+        .unwrap();
+        st.activate_surface(&first, &NullOps).unwrap();
+        let snap = st.snapshot();
+        assert_eq!(snap.selected_surface.as_deref(), Some(first.as_str()));
+        assert_eq!(
+            snap.workspaces[0].panes[0].active,
+            snap.workspaces[0].panes[0]
+                .surfaces
+                .iter()
+                .position(|s| s == &first)
+                .unwrap()
+        );
+
+        let mut fresh = AppState::default();
+        restore(&mut fresh, snap, &NullOps).unwrap();
+        assert_eq!(
+            fresh.workspace(&ws.id).unwrap().active_surface.as_deref(),
+            Some(first.as_str())
+        );
+        assert_eq!(fresh.selected_surface.as_deref(), Some(first.as_str()));
+        assert_eq!(fresh.panes[&pane_id].active_surface(), Some(first.as_str()));
     }
 
     #[test]

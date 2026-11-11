@@ -60,11 +60,22 @@ fn handle(
         })),
 
         // ---- workspace -------------------------------------------------
-        "workspace.list" => Ok(json!({"workspaces": state.workspaces})),
+        "workspace.list" => Ok(json!({
+            "workspaces": state.workspaces,
+            "groups": state.groups,
+            "selected_workspace": state.selected_workspace,
+            "selected_surface": state.selected_surface,
+        })),
         "workspace.create" => {
             let p: WorkspaceCreate = params(raw)?;
             let ws =
                 state.create_workspace(p.name.as_deref(), p.cwd.as_deref(), p.group_id, ops)?;
+            if p.focus.unwrap_or(true) {
+                state.select_workspace(&ws.id)?;
+                if let Some(s) = state.active_surface_of_workspace(&ws.id) {
+                    let _ = ops.focus(&s);
+                }
+            }
             Ok(json!({"workspace": ws}))
         }
         "workspace.get" => {
@@ -131,7 +142,9 @@ fn handle(
             if p.color.is_some() {
                 ws.color = p.color;
             }
-            if p.group_id.is_some() {
+            if p.clear_group_id.unwrap_or(false) {
+                ws.group_id = None;
+            } else if p.group_id.is_some() {
                 ws.group_id = p.group_id;
             }
             if let Some(pinned) = p.pinned {
@@ -149,6 +162,33 @@ fn handle(
         "workspace.move" => {
             let p: WorkspaceMove = params(raw)?;
             move_workspace(state, &p.workspace_id, p.index)?;
+            state.emit(
+                names::WORKSPACE_MOVED,
+                json!({"workspace_id": p.workspace_id, "index": p.index}),
+            );
+            Ok(json!({}))
+        }
+
+        // ---- group -----------------------------------------------------
+        "group.list" => Ok(json!({"groups": state.groups})),
+        "group.create" => {
+            let p: GroupCreate = params(raw)?;
+            let group = state.create_group(&p.name, p.color);
+            Ok(json!({"group": group}))
+        }
+        "group.update" => {
+            let p: GroupUpdate = params(raw)?;
+            let color = if p.clear_color.unwrap_or(false) {
+                Some(None)
+            } else {
+                p.color.map(Some)
+            };
+            let group = state.update_group(&p.group_id, p.name, color, p.collapsed)?;
+            Ok(json!({"group": group}))
+        }
+        "group.delete" => {
+            let p: GroupIdParam = params(raw)?;
+            state.delete_group(&p.group_id)?;
             Ok(json!({}))
         }
 
@@ -175,13 +215,8 @@ fn handle(
                 .cloned()
                 .ok_or_else(|| CoreError::not_found(format!("no pane {}", p.pane_id)))?;
             if let Some(s) = pane.active_surface() {
-                ops.focus(s)?;
-                state.selected_surface = Some(s.to_string());
-                state.selected_workspace = Some(pane.workspace_id.clone());
-                state.emit(
-                    names::PANE_FOCUS_CHANGED,
-                    json!({"pane_id": pane.id, "surface_id": s}),
-                );
+                let s = s.to_string();
+                state.activate_surface(&s, ops)?;
             }
             Ok(json!({}))
         }
@@ -271,18 +306,28 @@ fn handle(
         }
         "surface.focus" => {
             let p: SurfaceIdParam = params(raw)?;
-            let s = state
-                .surface(&p.surface_id)
-                .cloned()
-                .ok_or_else(|| CoreError::not_found(format!("no surface {}", p.surface_id)))?;
-            ops.focus(&s.id)?;
-            state.selected_surface = Some(s.id.clone());
-            state.selected_workspace = Some(s.workspace_id.clone());
-            state.emit(
-                names::PANE_FOCUS_CHANGED,
-                json!({"pane_id": s.pane_id, "surface_id": s.id}),
-            );
-            Ok(json!({}))
+            let s = state.activate_surface(&p.surface_id, ops)?;
+            Ok(json!({"surface_id": s.id}))
+        }
+        "surface.activate" => {
+            let p: SurfaceIdParam = params(raw)?;
+            let s = state.activate_surface(&p.surface_id, ops)?;
+            Ok(json!({"surface_id": s.id}))
+        }
+        "surface.cycle" => {
+            let p: SurfaceCycle = params(raw)?;
+            let delta = match p.direction.as_str() {
+                "next" => 1,
+                "prev" | "previous" => -1,
+                other => {
+                    return Err(CoreError::new(
+                        ErrorCode::BadRequest,
+                        format!("unknown direction {other}"),
+                    ));
+                }
+            };
+            let s = state.cycle_surface(&p.surface_id, delta, ops)?;
+            Ok(json!({"surface_id": s.id}))
         }
         "surface.close" => {
             let p: SurfaceIdParam = params(raw)?;
@@ -295,6 +340,7 @@ fn handle(
             let mut pwd = None;
             let mut progress = None;
             let mut bells = None;
+            let mut bell_workspace = None;
             {
                 let s = state
                     .surface_mut(&p.surface_id)
@@ -318,9 +364,19 @@ fn handle(
                 if p.bell.unwrap_or(false) {
                     s.bell_count = s.bell_count.saturating_add(1);
                     bells = Some(s.bell_count);
+                    bell_workspace = Some(s.workspace_id.clone());
                 }
             }
             let id = p.surface_id;
+            if let Some(ws_id) = bell_workspace {
+                if state.selected_workspace.as_deref() != Some(ws_id.as_str()) {
+                    if let Some(ws) = state.workspace_mut(&ws_id) {
+                        ws.unread = ws.unread.saturating_add(1);
+                        let snapshot = ws.clone();
+                        state.emit(names::WORKSPACE_CHANGED, json!(snapshot));
+                    }
+                }
+            }
             if let Some(t) = title {
                 state.emit(
                     names::SURFACE_TITLE_CHANGED,
@@ -650,6 +706,30 @@ struct WorkspaceCreate {
     cwd: Option<String>,
     #[serde(default)]
     group_id: Option<String>,
+    #[serde(default)]
+    focus: Option<bool>,
+}
+#[derive(Debug, Deserialize)]
+struct GroupCreate {
+    name: String,
+    #[serde(default)]
+    color: Option<String>,
+}
+#[derive(Debug, Deserialize)]
+struct GroupUpdate {
+    group_id: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    color: Option<String>,
+    #[serde(default)]
+    clear_color: Option<bool>,
+    #[serde(default)]
+    collapsed: Option<bool>,
+}
+#[derive(Debug, Deserialize)]
+struct GroupIdParam {
+    group_id: String,
 }
 #[derive(Debug, Deserialize)]
 struct WorkspaceUpdate {
@@ -662,6 +742,8 @@ struct WorkspaceUpdate {
     color: Option<String>,
     #[serde(default)]
     group_id: Option<String>,
+    #[serde(default)]
+    clear_group_id: Option<bool>,
     #[serde(default)]
     pinned: Option<bool>,
 }
@@ -704,6 +786,11 @@ struct SurfaceSplit {
 #[derive(Debug, Deserialize)]
 struct SurfaceIdParam {
     surface_id: String,
+}
+#[derive(Debug, Deserialize)]
+struct SurfaceCycle {
+    surface_id: String,
+    direction: String,
 }
 #[derive(Debug, Deserialize)]
 struct SurfaceUpdate {
@@ -824,6 +911,10 @@ pub const METHODS: &[&str] = &[
     "workspace.select",
     "workspace.close",
     "workspace.move",
+    "group.list",
+    "group.create",
+    "group.update",
+    "group.delete",
     "pane.list",
     "pane.focus",
     "pane.resize",
@@ -831,6 +922,8 @@ pub const METHODS: &[&str] = &[
     "surface.create",
     "surface.split",
     "surface.focus",
+    "surface.activate",
+    "surface.cycle",
     "surface.close",
     "surface.update",
     "surface.send_text",
@@ -937,6 +1030,122 @@ mod tests {
         }
         assert_eq!(layout["surfaces"].as_array().unwrap().len(), 2);
         assert!(layout["workspace"]["active_surface"].is_string());
+    }
+
+    #[test]
+    fn tabs_activate_cycle_and_keep_workspace_pointer_in_sync() {
+        let mut st = AppState::default();
+        let ws = call(&mut st, "workspace.create", json!({"name":"main"}));
+        let wsid = ws["workspace"]["id"].as_str().unwrap().to_string();
+        let layout = call(&mut st, "workspace.layout", json!({"workspace_id": wsid}));
+        let pane_id = layout["panes"][0]["id"].as_str().unwrap().to_string();
+        let first = layout["panes"][0]["active_surface"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let second = call(
+            &mut st,
+            "surface.create",
+            json!({"pane_id": pane_id, "focus": true}),
+        )["surface_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        st.drain_events();
+
+        // Cycling from the newest tab wraps back to the first.
+        let cycled = call(
+            &mut st,
+            "surface.cycle",
+            json!({"surface_id": second, "direction": "next"}),
+        );
+        assert_eq!(cycled["surface_id"], first);
+        let list = call(&mut st, "workspace.list", json!({}));
+        assert_eq!(list["selected_surface"], first);
+        assert_eq!(list["workspaces"][0]["active_surface"], first);
+        let events: Vec<String> = st.drain_events().into_iter().map(|e| e.event).collect();
+        assert!(events.contains(&names::PANE_FOCUS_CHANGED.to_string()));
+        assert!(events.contains(&names::WORKSPACE_CHANGED.to_string()));
+
+        // Closing the visible tab promotes the surviving one.
+        call(&mut st, "surface.close", json!({"surface_id": first}));
+        let list = call(&mut st, "workspace.list", json!({}));
+        assert_eq!(list["workspaces"][0]["active_surface"], second);
+        assert_eq!(list["selected_surface"], second);
+        let layout = call(&mut st, "workspace.layout", json!({"workspace_id": wsid}));
+        assert_eq!(layout["panes"].as_array().unwrap().len(), 1);
+        assert_eq!(layout["panes"][0]["surfaces"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn bells_in_background_workspaces_increment_unread() {
+        let mut st = AppState::default();
+        let first = call(&mut st, "workspace.create", json!({"name":"one"}));
+        let first_ws = first["workspace"]["id"].as_str().unwrap().to_string();
+        let first_sid = call(&mut st, "surface.list", json!({}))["surfaces"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let second = call(&mut st, "workspace.create", json!({"name":"two"}));
+        assert_eq!(
+            second["workspace"]["id"],
+            call(&mut st, "workspace.list", json!({}))["selected_workspace"]
+        );
+
+        call(
+            &mut st,
+            "surface.update",
+            json!({"surface_id": first_sid, "bell": true}),
+        );
+        let list = call(&mut st, "workspace.list", json!({}));
+        let one = list["workspaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|w| w["id"] == first_ws)
+            .unwrap();
+        assert_eq!(one["unread"], 1);
+
+        // Selecting the workspace clears the dot.
+        call(
+            &mut st,
+            "workspace.select",
+            json!({"workspace_id": first_ws}),
+        );
+        let list = call(&mut st, "workspace.list", json!({}));
+        assert_eq!(list["workspaces"][0]["unread"], 0);
+    }
+
+    #[test]
+    fn groups_can_be_created_and_deleted() {
+        let mut st = AppState::default();
+        let ws = call(&mut st, "workspace.create", json!({"name":"main"}));
+        let wsid = ws["workspace"]["id"].as_str().unwrap().to_string();
+        let group = call(
+            &mut st,
+            "group.create",
+            json!({"name":"work", "color":"blue"}),
+        );
+        let gid = group["group"]["id"].as_str().unwrap().to_string();
+        call(
+            &mut st,
+            "workspace.update",
+            json!({"workspace_id": wsid, "group_id": gid}),
+        );
+        call(
+            &mut st,
+            "group.update",
+            json!({"group_id": gid, "name":"client", "collapsed":true}),
+        );
+        let list = call(&mut st, "workspace.list", json!({}));
+        assert_eq!(list["groups"][0]["name"], "client");
+        assert_eq!(list["groups"][0]["collapsed"], true);
+        assert_eq!(list["workspaces"][0]["group_id"], gid);
+
+        call(&mut st, "group.delete", json!({"group_id": gid}));
+        let list = call(&mut st, "workspace.list", json!({}));
+        assert!(list["groups"].as_array().unwrap().is_empty());
+        assert!(list["workspaces"][0]["group_id"].is_null());
     }
 
     #[test]
