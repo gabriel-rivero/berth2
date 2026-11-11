@@ -8,6 +8,7 @@
 // survive re-parenting because they are owned by BerthCoreHost.
 
 import AppKit
+import QuartzCore
 
 struct PaneActions {
     let activate: @MainActor (String) -> Void
@@ -92,6 +93,23 @@ final class MainWindow: NSWindow {
         sidebar.isHidden.toggle()
         splitView.adjustSubviews()
     }
+
+    /// Flash the pane that holds a surface, used when an agent starts needing
+    /// attention while the user is looking elsewhere.
+    func ring(surfaceID: String) {
+        guard let pane = Self.pane(in: contentHost, containing: surfaceID) else { return }
+        pane.ring()
+    }
+
+    private static func pane(in view: NSView, containing surfaceID: String) -> PaneView? {
+        if let pane = view as? PaneView, pane.surfaceIDs.contains(surfaceID) {
+            return pane
+        }
+        for child in view.subviews {
+            if let found = Self.pane(in: child, containing: surfaceID) { return found }
+        }
+        return nil
+    }
 }
 
 /// Builds NSSplitView/leaf views from the core's tree. Leaves host the actual
@@ -143,6 +161,7 @@ enum LayoutBuilder {
 /// for single-tab panes is what makes tab creation discoverable.
 final class PaneView: NSView {
     let surfaceID: String
+    let surfaceIDs: [String]
     private let terminalHost = NSView()
     private let tabBar: PaneTabBar
     private static let tabHeight: CGFloat = 28
@@ -157,6 +176,7 @@ final class PaneView: NSView {
         surface: GhosttySurfaceView
     ) {
         self.surfaceID = surfaceID
+        surfaceIDs = (pane?.surfaceIDs.isEmpty == false) ? pane!.surfaceIDs : [surfaceID]
         tabBar = PaneView.makeTabBar(
             paneID: paneID,
             pane: pane,
@@ -202,6 +222,17 @@ final class PaneView: NSView {
             activeIndex: activeIndex,
             activeSurface: pane?.activeSurface,
             actions: actions)
+    }
+
+    func ring() {
+        guard let layer else { return }
+        layer.borderWidth = 2
+        let flash = CABasicAnimation(keyPath: "borderColor")
+        flash.fromValue = NSColor.controlAccentColor.cgColor
+        flash.toValue = NSColor.separatorColor.cgColor
+        flash.duration = 1.2
+        layer.borderColor = NSColor.separatorColor.cgColor
+        layer.add(flash, forKey: "attention")
     }
 
     override func layout() {

@@ -12,7 +12,7 @@ use crate::protocol::{
     APP_NAME, APP_VERSION, ErrorCode, PROTOCOL_VERSION, Request, Response, names,
 };
 use crate::providers;
-use crate::state::AppState;
+use crate::state::{AgentRegistration, AppState};
 use crate::{CoreError, ReadScope, SpawnRequest, SurfaceOps};
 
 /// Handle one request. Emits events into `state.pending`; the caller is
@@ -465,14 +465,22 @@ fn handle(
         // ---- agent -----------------------------------------------------
         "agent.register" => {
             let p: AgentRegister = params(raw)?;
-            let agent = state.register_agent(
-                &p.surface_id,
-                p.provider.as_deref(),
-                p.name.as_deref(),
-                p.resume,
-                p.meta.unwrap_or(Value::Null),
+            let agent = state.register_agent_with_id(
+                AgentRegistration {
+                    surface_id: &p.surface_id,
+                    id: p.agent_id.as_deref(),
+                    provider: p.provider.as_deref(),
+                    name: p.name.as_deref(),
+                    resume: p.resume,
+                    meta: p.meta.unwrap_or(Value::Null),
+                },
                 ops,
             )?;
+            Ok(json!({"agent": agent}))
+        }
+        "agent.detect" => {
+            let p: SurfaceIdParam = params(raw)?;
+            let agent = state.detect_agent(&p.surface_id, ops)?;
             Ok(json!({"agent": agent}))
         }
         "agent.update" => {
@@ -529,7 +537,7 @@ fn handle(
                 Some(r) => {
                     let provider = providers::by_id(&agent.provider);
                     let argv = match provider {
-                        Some(p) if !p.resume.is_empty() => {
+                        Some(p) if r.session_ref.is_some() && !p.resume.is_empty() => {
                             providers::resume_argv(p, r.session_ref.as_deref(), &[])
                         }
                         _ => r.argv.clone(),
@@ -858,6 +866,8 @@ struct SurfaceResize {
 struct AgentRegister {
     surface_id: String,
     #[serde(default)]
+    agent_id: Option<String>,
+    #[serde(default)]
     provider: Option<String>,
     #[serde(default)]
     name: Option<String>,
@@ -956,6 +966,7 @@ pub const METHODS: &[&str] = &[
     "surface.read_text",
     "surface.resize",
     "agent.register",
+    "agent.detect",
     "agent.update",
     "agent.get",
     "agent.list",
@@ -1417,5 +1428,92 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    struct ClaudeOps;
+
+    impl SurfaceOps for ClaudeOps {
+        fn spawn(&self, req: crate::SpawnRequest) -> Result<crate::Spawned, CoreError> {
+            NullOps.spawn(req)
+        }
+        fn send_text(&self, a: &str, b: &str) -> Result<(), CoreError> {
+            NullOps.send_text(a, b)
+        }
+        fn send_key(&self, a: &str, b: &str, c: &[String]) -> Result<(), CoreError> {
+            NullOps.send_key(a, b, c)
+        }
+        fn read_text(
+            &self,
+            a: &str,
+            b: crate::ReadScope,
+            c: usize,
+        ) -> Result<crate::Readback, CoreError> {
+            NullOps.read_text(a, b, c)
+        }
+        fn close(&self, a: &str) -> Result<(), CoreError> {
+            NullOps.close(a)
+        }
+        fn focus(&self, a: &str) -> Result<(), CoreError> {
+            NullOps.focus(a)
+        }
+        fn resize(&self, a: &str, b: u16, c: u16) -> Result<(), CoreError> {
+            NullOps.resize(a, b, c)
+        }
+        fn pid_info(&self, _: &str) -> Result<crate::PidInfo, CoreError> {
+            Ok(crate::PidInfo {
+                pid: Some(4242),
+                comm: Some("claude".into()),
+                argv: vec!["claude".into()],
+            })
+        }
+        fn notify_os(&self, n: &crate::Notification) -> Result<(), CoreError> {
+            NullOps.notify_os(n)
+        }
+    }
+
+    #[test]
+    fn agent_register_accepts_an_explicit_id() {
+        let mut st = AppState::default();
+        call(&mut st, "workspace.create", json!({}));
+        let sid = call(&mut st, "surface.list", json!({}))["surfaces"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let v = call(
+            &mut st,
+            "agent.register",
+            json!({"surface_id": sid, "agent_id": "agt_wrapper", "provider": "custom", "name": "wrapped"}),
+        );
+        assert_eq!(v["agent"]["id"], "agt_wrapper");
+        assert_eq!(v["agent"]["state"], "idle");
+    }
+
+    #[test]
+    fn agent_detect_is_passive_and_idempotent() {
+        let mut st = AppState::default();
+        call(&mut st, "workspace.create", json!({}));
+        let sid = call(&mut st, "surface.list", json!({}))["surfaces"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let ops = ClaudeOps;
+        let first = dispatch(
+            &mut st,
+            &ops,
+            &req("agent.detect", json!({"surface_id": sid})),
+        );
+        assert!(first.ok);
+        let agent = first.result.unwrap()["agent"].clone();
+        assert_eq!(agent["provider"], "claude-code");
+        assert_eq!(agent["state"], "unknown");
+
+        let again = dispatch(
+            &mut st,
+            &ops,
+            &req("agent.detect", json!({"surface_id": sid})),
+        );
+        assert!(again.ok);
+        assert!(again.result.unwrap()["agent"].is_null());
+        assert_eq!(st.agents.len(), 1);
     }
 }

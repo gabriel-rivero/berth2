@@ -102,6 +102,14 @@ enum MainMenu {
             item.target = delegate
         }
 
+        // Agents menu: attention surfacing is the M3 keyboard story.
+        let agentItem = NSMenuItem()
+        mainMenu.addItem(agentItem)
+        let agentMenu = NSMenu(title: "Agents")
+        agentItem.submenu = agentMenu
+        add(agentMenu, "Jump to Attention", #selector(AppDelegate.jumpAttention(_:)), .jumpAttention)
+        add(agentMenu, "Attention…", #selector(AppDelegate.showAttention(_:)), .showAttention)
+
         // View menu.
         let viewItem = NSMenuItem()
         mainMenu.addItem(viewItem)

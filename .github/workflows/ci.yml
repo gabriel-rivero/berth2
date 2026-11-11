@@ -137,9 +137,12 @@ jobs:
             Download `Berth-*.zip`, unzip, and right-click → Open the first time
             (the app is ad-hoc signed, not notarized).
 
-            This build is the M2 protocol spine on top of the M1 workspace shell.
-            The shell still has the split tree, per-pane tabs, sidebar and
-            session restore; the socket now speaks authenticated NDJSON with
-            replayable events, and the `berth` CLI can drive and inspect a
-            running instance (`berth ls`, `split`, `send`, `read`, `events`).
-            Agent features land in M3.
+            This build is the M3 agent layer on top of the M1 shell and M2
+            protocol spine. Agents show up in the sidebar with provider, state,
+            detail and progress; attention sorts first, rings the pane, and is
+            jumpable with ⌘⇧U or listable with ⌘I. `berth run -- <agent>` records
+            a resume payload, and relaunch resurrects registered agents (a
+            failed resume is shown as `errored`, not silently replaced).
+            Passive detection badges claude/codex/opencode started in any shell.
+            The split tree, tabs, authenticated NDJSON socket and CLI remain.
+            Hooks recipes are M4.

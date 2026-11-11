@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var socket: SocketServer?
     private var handler: CoreHandler?
     private var sweepTimer: Timer?
+    private var detectTimer: Timer?
     private var saveTimer: Timer?
     /// A second copy must not bootstrap a second in-memory session on top of
     /// the socket owner's state, and must not overwrite session.json on exit.
@@ -78,6 +79,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         restoreOrBootstrap(engine)
         scheduleStaleSweep(engine)
+        scheduleAgentDetection()
         NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -93,6 +95,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         saveTimer?.invalidate()
         saveSession(truncateJournal: true)
         sweepTimer?.invalidate()
+        detectTimer?.invalidate()
         socket?.stop()
         socket = nil
         GhosttyHost.shared.stop()
@@ -157,6 +160,73 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func toggleSidebar(_ sender: Any?) {
         BerthCoreHost.shared.toggleSidebar()
+    }
+
+    /// Jump to the agent most recently asking for a human. Repeating the
+    /// shortcut cycles: the agent you are already on is skipped when possible.
+    @objc func jumpAttention(_ sender: Any?) {
+        guard let engine else { return }
+        let response = engine.dispatch(
+            request: #"{"id":"ui","method":"agent.list","params":{}}"#)
+        guard let data = response.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let result = object["result"] as? [String: Any],
+              let agents = result["agents"] as? [[String: Any]]
+        else { return }
+
+        let ranked = agents
+            .filter { agent in
+                let attention = agent["attention"] as? String ?? "none"
+                return attention == "needs_input" || attention == "error" || attention == "info"
+            }
+            .sorted { lhs, rhs in
+                let left = (lhs["since_ms"] as? NSNumber)?.uint64Value ?? 0
+                let right = (rhs["since_ms"] as? NSNumber)?.uint64Value ?? 0
+                return left > right
+            }
+        guard !ranked.isEmpty else { return }
+        let focused = BerthCoreHost.shared.focusedSurfaceID
+        let target = ranked.first {
+            ($0["surface_id"] as? String) != focused
+        } ?? ranked[0]
+        guard let workspace = target["workspace_id"] as? String,
+              let surface = target["surface_id"] as? String
+        else { return }
+        send("workspace.select", ["workspace_id": workspace])
+        send("surface.activate", ["surface_id": surface])
+    }
+
+    /// List unread attention as commands; picking one opens and acknowledges it.
+    @objc func showAttention(_ sender: Any?) {
+        guard let engine else { return }
+        let response = engine.dispatch(
+            request: #"{"id":"ui","method":"notification.list","params":{"unread_only":true}}"#)
+        guard let data = response.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let result = object["result"] as? [String: Any]
+        else { return }
+        let items = (result["notifications"] as? [[String: Any]] ?? []).reversed()
+        var commands: [PaletteCommand] = []
+        for item in items {
+            let title = item["title"] as? String ?? "Attention"
+            let body = item["body"] as? String ?? ""
+            let label = body.isEmpty ? title : "\(title) — \(body)"
+            commands.append(PaletteCommand(label) { [weak self] in
+                if let id = item["id"] as? String {
+                    self?.send("notification.ack", ["notification_id": id])
+                }
+                if let workspace = item["workspace_id"] as? String {
+                    self?.send("workspace.select", ["workspace_id": workspace])
+                }
+                if let surface = item["surface_id"] as? String {
+                    self?.send("surface.activate", ["surface_id": surface])
+                }
+            })
+        }
+        if commands.isEmpty {
+            commands.append(PaletteCommand("No unread attention") {})
+        }
+        CommandPalette.present(commands: commands)
     }
 
     private func split(direction: String) {
@@ -238,6 +308,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             PaletteCommand("Previous Tab") { [weak self] in self?.previousTab(nil) },
             PaletteCommand("Next Pane") { [weak self] in self?.nextPane(nil) },
             PaletteCommand("Previous Pane") { [weak self] in self?.previousPane(nil) },
+            PaletteCommand("Jump to Attention") { [weak self] in self?.jumpAttention(nil) },
+            PaletteCommand("Attention…") { [weak self] in self?.showAttention(nil) },
             PaletteCommand("Toggle Sidebar") { [weak self] in self?.toggleSidebar(nil) },
             PaletteCommand("Settings") { [weak self] in self?.showSettings(nil) },
         ]
@@ -366,6 +438,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         try handle.seekToEnd()
         try handle.write(contentsOf: data)
         try handle.write(contentsOf: Data("\n".utf8))
+    }
+
+    /// Passive agent detection runs faster than staleness: a claude/codex
+    /// foreground process should get a badge within a couple of seconds.
+    private func scheduleAgentDetection() {
+        let timer = Timer(
+            timeInterval: 2,
+            target: self,
+            selector: #selector(detectAgents),
+            userInfo: nil,
+            repeats: true)
+        RunLoop.main.add(timer, forMode: .common)
+        detectTimer = timer
+    }
+
+    @objc private func detectAgents() {
+        BerthCoreHost.shared.detectAgents()
     }
 
     /// Agent staleness: an agent that stops reporting for three minutes is

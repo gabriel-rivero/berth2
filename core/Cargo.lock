@@ -84,7 +84,7 @@ dependencies = [
 
 [[package]]
 name = "berth-cli"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -92,7 +92,7 @@ dependencies = [
 
 [[package]]
 name = "berth-core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -100,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "berth-ffi"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "berth-core",
  "serde_json",

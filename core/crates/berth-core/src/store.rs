@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::ids;
-use crate::model::{AgentSurface, Group, Orientation, Pane, PaneNode, Surface, Workspace};
+use crate::model::{AgentSurface, Group, Orientation, Pane, PaneNode, Resume, Surface, Workspace};
 use crate::state::AppState;
 use crate::time;
 use crate::{CoreError, ErrorCode, SpawnRequest, SurfaceOps};
@@ -131,13 +131,18 @@ pub fn restore(
     let mut restored = 0;
 
     for wsnap in snapshot.workspaces {
-        let ws = wsnap.workspace;
+        let crate::store::WorkspaceSnapshot {
+            workspace: ws,
+            panes,
+            surfaces,
+            agents,
+        } = wsnap;
         let ws_id = ws.id.clone();
         let saved_active = ws.active_surface.clone();
 
         // Ensure every pane exists even if a surface failed to spawn. The
         // active tab index is part of the saved layout, so keep it.
-        for pane in &wsnap.panes {
+        for pane in panes {
             let mut pane = pane.clone();
             if pane.active >= pane.surfaces.len() {
                 pane.active = 0;
@@ -150,18 +155,54 @@ pub fn restore(
             ..ws.clone()
         });
 
-        for mut surface in wsnap.surfaces {
+        let resume_by_surface: std::collections::HashMap<String, Resume> = agents
+            .iter()
+            .filter_map(|a| a.resume.clone().map(|r| (a.surface_id.clone(), r)))
+            .collect();
+        let agent_by_surface: std::collections::HashMap<String, String> = agents
+            .iter()
+            .map(|a| (a.surface_id.clone(), a.id.clone()))
+            .collect();
+        let mut failed_resumes = std::collections::HashSet::new();
+
+        for mut surface in surfaces {
+            let resume = resume_by_surface.get(&surface.id);
+            let (argv, cwd) = match resume {
+                Some(r) => {
+                    let provider = agent_by_surface
+                        .get(&surface.id)
+                        .and_then(|id| agents.iter().find(|a| &a.id == id))
+                        .and_then(|a| crate::providers::by_id(&a.provider));
+                    let argv = match provider {
+                        Some(p) if r.session_ref.is_some() && !p.resume.is_empty() => {
+                            crate::providers::resume_argv(p, r.session_ref.as_deref(), &[])
+                        }
+                        _ => r.argv.clone(),
+                    };
+                    let cwd = if r.cwd.is_empty() {
+                        surface.cwd.clone()
+                    } else {
+                        r.cwd.clone()
+                    };
+                    (argv, cwd)
+                }
+                None => (Vec::new(), surface.cwd.clone()),
+            };
+            let mut env = vec![
+                ("BERTH_SURFACE_ID".into(), surface.id.clone()),
+                ("BERTH_WORKSPACE_ID".into(), ws_id.clone()),
+                (
+                    "BERTH_PROTOCOL".into(),
+                    crate::protocol::PROTOCOL_VERSION.to_string(),
+                ),
+            ];
+            if let Some(agent_id) = agent_by_surface.get(&surface.id) {
+                env.push(("BERTH_AGENT_ID".into(), agent_id.clone()));
+            }
             let spawn_req = SpawnRequest {
-                cwd: Some(surface.cwd.clone()).filter(|c| !c.is_empty()),
-                argv: Vec::new(),
-                env: vec![
-                    ("BERTH_SURFACE_ID".into(), surface.id.clone()),
-                    ("BERTH_WORKSPACE_ID".into(), ws_id.clone()),
-                    (
-                        "BERTH_PROTOCOL".into(),
-                        crate::protocol::PROTOCOL_VERSION.to_string(),
-                    ),
-                ],
+                cwd: Some(cwd).filter(|c| !c.is_empty()),
+                argv,
+                env,
                 cols: surface.cols.max(80),
                 rows: surface.rows.max(24),
             };
@@ -184,13 +225,27 @@ pub fn restore(
                     // the user can close, rather than silently losing layout.
                     surface.pid = None;
                     surface.tty = None;
+                    if resume.is_some() {
+                        failed_resumes.insert(surface.id.clone());
+                    }
                 }
             }
             state.surfaces.insert(surface.id.clone(), surface);
         }
 
-        for mut agent in wsnap.agents {
-            agent.attention = crate::agent::derive_attention(agent.state);
+        for mut agent in agents {
+            if failed_resumes.contains(&agent.surface_id) {
+                agent.state = crate::agent::AgentState::Errored;
+                agent.detail = "resume failed".to_string();
+                agent.since_ms = time::now_ms();
+            } else {
+                agent.last_seen_ms = time::now_ms();
+            }
+            agent.attention = if failed_resumes.contains(&agent.surface_id) {
+                crate::agent::Attention::Error
+            } else {
+                crate::agent::derive_attention(agent.state)
+            };
             state.agents.insert(agent.id.clone(), agent.clone());
             if let Some(s) = state.surface_mut(&agent.surface_id) {
                 s.agent_id = Some(agent.id);
@@ -274,6 +329,52 @@ mod tests {
     use super::*;
     use crate::NullOps;
     use serde_json::json;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Default)]
+    struct RecordingOps {
+        spawns: Arc<Mutex<Vec<SpawnRequest>>>,
+        fail: bool,
+    }
+
+    impl SurfaceOps for RecordingOps {
+        fn spawn(&self, req: SpawnRequest) -> Result<crate::Spawned, CoreError> {
+            if self.fail {
+                return Err(CoreError::internal("spawn failed"));
+            }
+            self.spawns.lock().unwrap().push(req.clone());
+            NullOps.spawn(req)
+        }
+        fn send_text(&self, a: &str, b: &str) -> Result<(), CoreError> {
+            NullOps.send_text(a, b)
+        }
+        fn send_key(&self, a: &str, b: &str, c: &[String]) -> Result<(), CoreError> {
+            NullOps.send_key(a, b, c)
+        }
+        fn read_text(
+            &self,
+            a: &str,
+            b: crate::ReadScope,
+            c: usize,
+        ) -> Result<crate::Readback, CoreError> {
+            NullOps.read_text(a, b, c)
+        }
+        fn close(&self, a: &str) -> Result<(), CoreError> {
+            NullOps.close(a)
+        }
+        fn focus(&self, a: &str) -> Result<(), CoreError> {
+            NullOps.focus(a)
+        }
+        fn resize(&self, a: &str, b: u16, c: u16) -> Result<(), CoreError> {
+            NullOps.resize(a, b, c)
+        }
+        fn pid_info(&self, a: &str) -> Result<crate::PidInfo, CoreError> {
+            NullOps.pid_info(a)
+        }
+        fn notify_os(&self, n: &crate::Notification) -> Result<(), CoreError> {
+            NullOps.notify_os(n)
+        }
+    }
 
     fn seeded() -> AppState {
         let mut st = AppState::default();
@@ -385,6 +486,72 @@ mod tests {
         );
         assert_eq!(fresh.selected_surface.as_deref(), Some(first.as_str()));
         assert_eq!(fresh.panes[&pane_id].active_surface(), Some(first.as_str()));
+    }
+
+    #[test]
+    fn restore_resumes_agents_with_saved_argv_and_env() {
+        let mut st = AppState::default();
+        st.create_workspace(Some("agents"), Some("/tmp"), None, &NullOps)
+            .unwrap();
+        let sid = st.surfaces.keys().next().unwrap().clone();
+        let agent = st
+            .register_agent(
+                &sid,
+                Some("claude-code"),
+                Some("worker"),
+                Some(Resume {
+                    argv: vec!["claude".into(), "--resume".into(), "abc".into()],
+                    cwd: "/work/project".into(),
+                    session_ref: None,
+                }),
+                json!({}),
+                &NullOps,
+            )
+            .unwrap();
+        let snap = st.snapshot();
+
+        let ops = RecordingOps::default();
+        restore(&mut AppState::default(), snap, &ops).unwrap();
+        let spawns = ops.spawns.lock().unwrap();
+        assert_eq!(spawns.len(), 1);
+        let spawn = &spawns[0];
+        assert_eq!(spawn.argv, vec!["claude", "--resume", "abc"]);
+        assert_eq!(spawn.cwd.as_deref(), Some("/work/project"));
+        let env: std::collections::HashMap<_, _> = spawn.env.iter().cloned().collect();
+        assert_eq!(env.get("BERTH_AGENT_ID"), Some(&agent.id));
+        assert!(env.contains_key("BERTH_SURFACE_ID"));
+    }
+
+    #[test]
+    fn failed_agent_resume_is_reported_instead_of_silently_shelling() {
+        let mut st = AppState::default();
+        st.create_workspace(Some("agents"), Some("/tmp"), None, &NullOps)
+            .unwrap();
+        let sid = st.surfaces.keys().next().unwrap().clone();
+        st.register_agent(
+            &sid,
+            Some("codex"),
+            Some("worker"),
+            Some(Resume {
+                argv: vec!["codex".into(), "resume".into(), "abc".into()],
+                cwd: "/work/project".into(),
+                session_ref: None,
+            }),
+            json!({}),
+            &NullOps,
+        )
+        .unwrap();
+        let snap = st.snapshot();
+
+        let ops = RecordingOps {
+            fail: true,
+            ..Default::default()
+        };
+        let mut restored = AppState::default();
+        restore(&mut restored, snap, &ops).unwrap();
+        let agent = restored.agents.values().next().unwrap();
+        assert_eq!(agent.state, crate::agent::AgentState::Errored);
+        assert_eq!(agent.detail, "resume failed");
     }
 
     #[test]

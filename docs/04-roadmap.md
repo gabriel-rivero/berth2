@@ -43,6 +43,12 @@ Status: model/router/events, UniFFI bridge, authenticated NDJSON transport, repl
 
 Goal: the reason to exist.
 
+**Status:** implemented. Core state machine/attention/staleness, provider table,
+`agent.detect` passive tier, `berth run` wrapper with explicit agent ids and
+resume payloads, sidebar agent rows with attention-first sorting, pane
+attention rings, `⌘⇧U`/`⌘I`, and agent-aware restore are in. Hooks recipes and
+provider mute remain M4/M5 polish.
+
 - `AgentSurface` model + state machine + TTL/staleness in core; provider table (claude-code, codex, opencode).
 - `berth run -- <argv>` wrapper (registers, injects `BERTH_AGENT_ID`, records resume payload, maps exit codes).
 - Passive detection via foreground pid/argv → `unknown` badges.
@@ -73,6 +79,10 @@ not be mistaken for missing architecture.
   into the core, so relaunch resets pane sizes.
 - **Geometric focus.** ⌘] / ⌘[ walk the tree; arrow-key spatial navigation is not
   implemented.
+- **Agent mute and multi-agent rows.** macOS banners are suppressed for the
+  focused workspace, but there is no per-provider mute, and a workspace row
+  shows only its highest-attention agent when several run in the same
+  workspace.
 - **Journal semantics.** `journal.ndjson` stores snapshots (newest wins) instead
   of replayable structural events; a crash can lose the last 500 ms.
 - **Headless app-test mode.** `scripts/m2-acceptance.sh` drives the real GUI app

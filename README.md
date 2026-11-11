@@ -2,7 +2,7 @@
 
 A native macOS terminal workspace for running coding agents side by side — built on Ghostty's renderer, with a typed agent lifecycle and a push-based protocol.
 
-Status: M2. The protocol spine is in place: Rust core model/router/events, NDJSON JSON-RPC over a `0600` unix socket with token auth for mutations, replayable event subscriptions (`since`, gap reporting, monotonic `seq`), per-connection filtering and backpressure, `pane.close`/`session.restore`, transport-level tests, and a `berth` CLI for `ls`, `split`, `send`, `send-key`, `read`, `events`, `snapshot`, `active` and `schema`. The AppKit shell from M1 remains the reference client. Agent features are M3.
+Status: M3. The agent layer is in: `AgentSurface` state machine with attention/notification dedupe, passive foreground-process detection, `berth run` registration with resume payloads, sidebar agent badges and attention-first ordering, pane attention rings, `⌘⇧U` jump, `⌘I` attention list, and agent-aware session restore (resume argv, `BERTH_AGENT_ID`, explicit `resume failed` state). M0–M2 remain the shell and authenticated NDJSON protocol spine. Agent hooks and release polish are M4.
 
 Download: [latest release](https://github.com/gabriel-rivero/berth2/releases) (macOS 14+, Apple Silicon, ad-hoc signed).
 

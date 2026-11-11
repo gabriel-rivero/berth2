@@ -121,14 +121,31 @@ Event:
 ### agent — the differentiator
 | method | params | result |
 | --- | --- | --- |
-| `agent.register` | `{surface_id, provider, name?, resume?, meta?}` | `{agent:Agent}` |
+| `agent.register` | `{surface_id, provider, name?, agent_id?, resume?, meta?}` | `{agent:Agent}` |
+| `agent.detect` | `{surface_id}` | `{agent:Agent\|null}` |
 | `agent.update` | `{agent_id, state?, detail?, progress?, attention?, meta?}` | `{agent:Agent}` |
 | `agent.get` | `{agent_id}` | `{agent:Agent}` |
 | `agent.list` | `{workspace_id?, state?}` | `{agents:[Agent]}` |
 | `agent.clear` | `{agent_id}` | `{}` |
 | `agent.resume` | `{agent_id}` | `{surface_id}` |
 
-`agent.register` is idempotent per surface: re-registering rebinds rather than duplicating.
+`agent.register` is idempotent per surface: re-registering rebinds rather than
+duplicating. `agent_id` lets `berth run` mint the id before spawning so the
+child can receive `BERTH_AGENT_ID`; registration then adopts that id. Omit it
+and the core mints one.
+
+`agent.detect` is the passive tier: it inspects the surface's foreground
+process (`HostOps.pid_info`) and creates an `unknown` agent when the
+command/argv matches a provider. It is idempotent and returns `null` when the
+surface already has an agent or no provider is recognized. Passive agents have
+no resume payload; only `berth run` or an explicit `agent.register` can supply
+one.
+
+Resume payloads are `{argv, cwd, session_ref?}`. On restore, a provider session
+ref uses the provider template (`claude --resume <ref>`, `codex resume <ref>`,
+`opencode --session <ref>`); without a ref the saved argv is executed verbatim.
+A failed resume keeps the surface in the tree and marks the agent `errored`
+with detail `resume failed` rather than silently starting a bare shell.
 
 ### notification
 | method | params | result |
@@ -228,9 +245,10 @@ Events are derived from Ghostty actions where possible: `SET_TITLE`, `PWD`, `PRO
 2. Workspace unread badge in sidebar; sidebar row sorts attention-first, not by creation time.
 3. `notification.created` event; in-app popover (`⌘I`) lists the ladder.
 4. macOS notification, deduped per agent per 60 s, suppressed when the tab is focused.
-5. `⌘⇧U` jumps to the newest unacked attention item; `⌘⌥U` cycles.
+5. `⌘⇧U` jumps to the newest unacked attention item; repeat to cycle through them.
 
-No sound in v1. Per-workspace and per-provider mute.
+No sound in v1. Per-provider mute is not implemented; macOS banners are
+suppressed for the workspace currently being viewed.
 
 ## 7. Integration paths
 
@@ -251,9 +269,9 @@ berth send SURFACE_ID "text"
 berth send-key SURFACE_ID enter
 berth read SURFACE_ID [--scrollback] [--max-bytes N]
 berth notify "text" [--level needs_input] [--body B]
-berth agent-register SURFACE_ID [--provider P] [--name N]
-berth agent-set AGENT_ID [--state S] [--detail D] [--progress 0.4]
-berth run -- <argv…>                  # wrapper: creates surface, registers agent, execs
+berth agent-register SURFACE_ID [--provider P] [--name N] [--id AGENT_ID]
+berth agent-set AGENT_ID [--state S] [--detail D] [--progress 0.4] [--clear-progress]
+berth run [--name N] [--provider P] [--cwd DIR] -- <argv…>  # creates surface, registers agent, execs
 berth events [--types a,b] [--since N] # streams NDJSON
 berth snapshot                        # session.dump to stdout
 ```

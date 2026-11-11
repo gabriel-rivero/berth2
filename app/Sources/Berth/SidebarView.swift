@@ -5,6 +5,52 @@
 
 import AppKit
 
+struct SidebarAgent {
+    let id: String
+    let workspaceID: String
+    let surfaceID: String
+    let provider: String
+    let name: String
+    let state: String
+    let detail: String
+    let progress: Double?
+    let attention: String
+    let sinceMs: UInt64
+
+    var glyph: String {
+        switch provider {
+        case "claude-code": return "✦"
+        case "codex": return "⌬"
+        case "opencode": return "◇"
+        default: return "•"
+        }
+    }
+
+    var stateLabel: String {
+        switch state {
+        case "thinking": return "thinking"
+        case "tool": return "tool"
+        case "waiting_input": return "waiting"
+        case "blocked": return "needs input"
+        case "done": return "done"
+        case "errored": return "error"
+        case "idle": return "idle"
+        default: return "detected"
+        }
+    }
+
+    var needsAttention: Bool { attention == "needs_input" || attention == "error" }
+
+    var attentionRank: Int {
+        switch attention {
+        case "needs_input": return 3
+        case "error": return 2
+        case "info": return 1
+        default: return 0
+        }
+    }
+}
+
 struct SidebarWorkspace {
     let id: String
     let name: String
@@ -16,6 +62,7 @@ struct SidebarWorkspace {
     let pinned: Bool
     let groupID: String?
     let pid: Int?
+    let agent: SidebarAgent? = nil
 }
 
 struct SidebarGroupInfo {
@@ -85,7 +132,7 @@ final class SidebarView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         addSubview(add)
 
         table.headerView = nil
-        table.rowHeight = 50
+        table.rowHeight = 62
         table.intercellSpacing = NSSize(width: 0, height: 2)
         table.backgroundColor = .clear
         table.selectionHighlightStyle = .sourceList
@@ -162,8 +209,21 @@ final class SidebarView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         return rows
     }
 
+    /// Pinned first, then agents that need attention, then recency order from
+    /// the core. The sort key carries the original index so equal ranks keep
+    /// their workspace order.
     private func ordered(_ workspaces: [SidebarWorkspace]) -> [SidebarWorkspace] {
-        workspaces.filter(\.pinned) + workspaces.filter { !$0.pinned }
+        workspaces.enumerated()
+            .sorted { lhs, rhs in
+                if lhs.element.pinned != rhs.element.pinned {
+                    return lhs.element.pinned
+                }
+                let l = lhs.element.agent?.attentionRank ?? 0
+                let r = rhs.element.agent?.attentionRank ?? 0
+                if l != r { return l > r }
+                return lhs.offset < rhs.offset
+            }
+            .map(\.element)
     }
 
     @objc private func newWorkspace(_ sender: Any?) {
@@ -300,40 +360,59 @@ final class GroupRowView: NSView {
     }
 }
 
-/// A workspace row: unread dot, live terminal title, cwd + branch + ports.
+/// A workspace row: attention dot, live title, agent state, cwd/branch/ports.
 final class WorkspaceRowView: NSTableCellView {
     var onClose: (@MainActor () -> Void)?
     private let dot = NSView()
     private let title = NSTextField(labelWithString: "")
+    private let agentLine = NSTextField(labelWithString: "")
     private let detail = NSTextField(labelWithString: "")
+    private let progress = NSProgressIndicator()
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         dot.wantsLayer = true
         dot.layer?.cornerRadius = 3
-        dot.layer?.backgroundColor = NSColor.systemRed.cgColor
         dot.translatesAutoresizingMaskIntoConstraints = false
         title.font = .systemFont(ofSize: 12, weight: .medium)
         title.lineBreakMode = .byTruncatingTail
         title.translatesAutoresizingMaskIntoConstraints = false
+        agentLine.font = .systemFont(ofSize: 10.5)
+        agentLine.lineBreakMode = .byTruncatingTail
+        agentLine.translatesAutoresizingMaskIntoConstraints = false
         detail.font = .systemFont(ofSize: 10)
         detail.textColor = .secondaryLabelColor
         detail.lineBreakMode = .byTruncatingTail
         detail.translatesAutoresizingMaskIntoConstraints = false
+        progress.isIndeterminate = false
+        progress.style = .bar
+        progress.controlSize = .small
+        progress.minValue = 0
+        progress.maxValue = 100
+        progress.translatesAutoresizingMaskIntoConstraints = false
         addSubview(dot)
         addSubview(title)
+        addSubview(agentLine)
         addSubview(detail)
+        addSubview(progress)
         NSLayoutConstraint.activate([
             dot.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 13),
-            dot.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            dot.topAnchor.constraint(equalTo: topAnchor, constant: 9),
             dot.widthAnchor.constraint(equalToConstant: 6),
             dot.heightAnchor.constraint(equalToConstant: 6),
             title.leadingAnchor.constraint(equalTo: dot.trailingAnchor, constant: 7),
             title.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             title.topAnchor.constraint(equalTo: topAnchor, constant: 5),
+            agentLine.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            agentLine.trailingAnchor.constraint(equalTo: title.trailingAnchor),
+            agentLine.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 1),
             detail.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-            detail.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
-            detail.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 2),
+            detail.trailingAnchor.constraint(equalTo: title.trailingAnchor),
+            detail.topAnchor.constraint(equalTo: agentLine.bottomAnchor, constant: 1),
+            progress.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            progress.trailingAnchor.constraint(equalTo: title.trailingAnchor),
+            progress.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
+            progress.heightAnchor.constraint(equalToConstant: 3),
         ])
     }
 
@@ -350,10 +429,46 @@ final class WorkspaceRowView: NSTableCellView {
     }
 
     func configure(_ workspace: SidebarWorkspace) {
-        dot.isHidden = workspace.unread == 0
+        let agent = workspace.agent
+        let needsAttention = agent?.needsAttention ?? false
+        dot.isHidden = workspace.unread == 0 && !needsAttention
+        if let attention = agent?.attention, attention == "error" {
+            dot.layer?.backgroundColor = NSColor.systemRed.cgColor
+        } else if let attention = agent?.attention, attention == "needs_input" {
+            dot.layer?.backgroundColor = NSColor.systemOrange.cgColor
+        } else {
+            dot.layer?.backgroundColor = NSColor.systemRed.cgColor
+        }
+
         let live = workspace.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let label = live.isEmpty ? workspace.name : live
         title.stringValue = workspace.pinned ? "★ \(label)" : label
+
+        if let agent {
+            let text = NSMutableAttributedString(
+                string: "\(agent.glyph) \(agent.name) · ",
+                attributes: [.foregroundColor: NSColor.secondaryLabelColor]
+            )
+            text.append(NSAttributedString(
+                string: agent.stateLabel,
+                attributes: [
+                    .foregroundColor: Self.stateColor(agent),
+                    .font: NSFont.systemFont(ofSize: 10.5, weight: .semibold),
+                ]
+            ))
+            if !agent.detail.isEmpty {
+                text.append(NSAttributedString(
+                    string: " · \(agent.detail)",
+                    attributes: [.foregroundColor: NSColor.tertiaryLabelColor]
+                ))
+            }
+            agentLine.attributedStringValue = text
+            agentLine.isHidden = false
+        } else {
+            agentLine.stringValue = ""
+            agentLine.isHidden = true
+        }
+
         var parts: [String] = []
         if !workspace.name.isEmpty { parts.append(workspace.name) }
         if !workspace.cwd.isEmpty { parts.append(abbreviate(workspace.cwd)) }
@@ -362,6 +477,23 @@ final class WorkspaceRowView: NSTableCellView {
             parts.append(workspace.ports.prefix(3).map { ":\($0)" }.joined(separator: " "))
         }
         detail.stringValue = parts.joined(separator: "  ")
+
+        if let value = agent?.progress {
+            progress.doubleValue = value <= 1 ? value * 100 : value
+            progress.isHidden = false
+        } else {
+            progress.isHidden = true
+        }
+    }
+
+    private static func stateColor(_ agent: SidebarAgent) -> NSColor {
+        switch agent.state {
+        case "blocked", "waiting_input": return .systemOrange
+        case "errored": return .systemRed
+        case "done": return .systemGreen
+        case "unknown": return .tertiaryLabelColor
+        default: return .controlAccentColor
+        }
     }
 
     private func abbreviate(_ path: String) -> String {

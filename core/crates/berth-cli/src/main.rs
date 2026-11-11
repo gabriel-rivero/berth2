@@ -145,6 +145,30 @@ fn positional(args: &[String]) -> Vec<String> {
     out
 }
 
+fn provider_for(argv: &[String]) -> String {
+    let program = argv
+        .first()
+        .map(|a| a.rsplit('/').next().unwrap_or(a).to_ascii_lowercase())
+        .unwrap_or_default();
+    if program.starts_with("claude") {
+        "claude-code".into()
+    } else if program.starts_with("codex") {
+        "codex".into()
+    } else if program.starts_with("opencode") {
+        "opencode".into()
+    } else {
+        "custom".into()
+    }
+}
+
+fn agent_id() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("agt_{nanos:x}{:x}", std::process::id())
+}
+
 const USAGE: &str = "\
 berth — control a running Berth instance
 
@@ -161,6 +185,7 @@ usage:
   berth notify TITLE [--level info|needs_input|error] [--body B]
   berth agent-register SURFACE_ID [--provider P] [--name N]
   berth agent-set AGENT_ID [--state S] [--detail D] [--progress 0.4]
+  berth run [--name N] [--provider P] [--cwd DIR] -- <argv…>
   berth events [--types a,b] [--since SEQ]
   berth snapshot                session JSON on stdout
   berth active                  active surface id of the selected workspace
@@ -318,6 +343,9 @@ fn run() -> Result<(), String> {
             if let Some(n) = arg_after(rest, "--name") {
                 params["name"] = json!(n);
             }
+            if let Some(id) = arg_after(rest, "--id") {
+                params["agent_id"] = json!(id);
+            }
             let v = c.call("agent.register", params)?;
             println!("{}", v["agent"]["id"].as_str().unwrap_or("?"));
         }
@@ -336,7 +364,60 @@ fn run() -> Result<(), String> {
                 let f: f64 = p.parse().map_err(|_| "progress must be 0..1")?;
                 params["progress"] = json!(f);
             }
+            if rest.iter().any(|a| a == "--clear-progress") {
+                params["clear_progress"] = json!(true);
+            }
             c.call("agent.update", params)?;
+        }
+
+        "run" => {
+            let sep = rest
+                .iter()
+                .position(|a| a == "--")
+                .ok_or("run: expected `-- <argv…>`")?;
+            let flags = &rest[..sep];
+            let argv = &rest[sep + 1..];
+            if argv.is_empty() {
+                return Err("run: missing command after --".into());
+            }
+            let cwd = arg_after(flags, "--cwd").or_else(|| {
+                std::env::current_dir()
+                    .ok()
+                    .map(|p| p.display().to_string())
+            });
+            let provider = arg_after(flags, "--provider").unwrap_or_else(|| provider_for(argv));
+            let name = arg_after(flags, "--name")
+                .unwrap_or_else(|| argv[0].rsplit('/').next().unwrap_or("agent").to_string());
+
+            let listed = c.call("workspace.list", json!({}))?;
+            if listed["workspaces"].as_array().is_none_or(|w| w.is_empty()) {
+                c.call("workspace.create", json!({"name": "agents"}))?;
+            }
+
+            let id = agent_id();
+            let created = c.call(
+                "surface.create",
+                json!({
+                    "argv": argv,
+                    "cwd": cwd.clone(),
+                    "env": [["BERTH_AGENT_ID", id.clone()]],
+                    "focus": true,
+                }),
+            )?;
+            let surface_id = created["surface_id"]
+                .as_str()
+                .ok_or("surface.create returned no surface id")?;
+            c.call(
+                "agent.register",
+                json!({
+                    "surface_id": surface_id,
+                    "agent_id": id,
+                    "provider": provider,
+                    "name": name,
+                    "resume": {"argv": argv, "cwd": cwd, "session_ref": null},
+                }),
+            )?;
+            println!("{surface_id}");
         }
 
         "events" => {

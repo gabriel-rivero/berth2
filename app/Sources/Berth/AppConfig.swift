@@ -53,6 +53,8 @@ enum ShortcutAction: String, CaseIterable {
     case previousPane
     case newWorkspace
     case palette
+    case jumpAttention
+    case showAttention
     case toggleSidebar
     case settings
 
@@ -68,6 +70,8 @@ enum ShortcutAction: String, CaseIterable {
         case .previousPane: return "Previous Pane"
         case .newWorkspace: return "New Workspace"
         case .palette: return "Command Palette"
+        case .jumpAttention: return "Jump to Attention"
+        case .showAttention: return "Attention…"
         case .toggleSidebar: return "Toggle Sidebar"
         case .settings: return "Settings…"
         }
@@ -85,6 +89,8 @@ enum ShortcutAction: String, CaseIterable {
         case .previousPane: return "cmd+["
         case .newWorkspace: return "cmd+n"
         case .palette: return "cmd+shift+p"
+        case .jumpAttention: return "cmd+shift+u"
+        case .showAttention: return "cmd+i"
         case .toggleSidebar: return "cmd+opt+s"
         case .settings: return "cmd+,"
         }

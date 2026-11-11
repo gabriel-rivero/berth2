@@ -128,6 +128,48 @@ printf '%s\n' '{"id":1,"method":"workspace.create","params":{"name":"nope"}}' \
 
 Read the token from `~/Library/Application Support/Berth/token` or use `$BERTH_TOKEN` inside a Berth terminal. Socket mode lives in `~/.config/berth/config.json` (`off`, `local`, `trusted`) and in Settings.
 
+## M3 agent checkpoint (run on the Mac)
+
+This one needs real provider CLIs on `PATH` for the resume half; the attention
+half can be driven with plain commands.
+
+```sh
+make cli
+export PATH="$PWD/core/target/release:$PATH"
+
+# workspace A: a real agent (or `-- sleep 600` for a resume-able dummy)
+berth new --name agent-a
+berth run --name claude-a -- claude
+
+# workspace B
+berth new --name agent-b
+berth run --name codex-b -- codex
+
+# workspace C
+berth new --name agent-c
+berth run --name dummy-c -- sleep 600
+```
+
+Check:
+
+- [ ] Each run creates a tab in that workspace and the sidebar shows its
+      provider glyph plus `detected`/`idle` within ~2 seconds.
+- [ ] Force attention on B and C so A stays quiet:
+      `berth agent-set AGENT_ID --state blocked --detail "permission prompt"` and
+      `berth agent-set AGENT_ID --state errored --detail "process exited"`.
+- [ ] B and C move to the top of the sidebar and show orange/red dots.
+- [ ] `⌘⇧U` jumps to the newest attention item, then to the next on repeat.
+- [ ] `⌘I` lists unread attention; picking one selects its workspace/surface.
+- [ ] Quit with `⌘Q`, relaunch. The three workspaces, layouts, tabs, cwd and
+      agent badges return; the real agents resume, and `dummy-c` comes back as
+      `sleep 600`.
+- [ ] Kill a saved agent's provider command (or remove it from `PATH`) and
+      relaunch: that row must show `errored · resume failed`, not a silent shell.
+
+`berth run` registers the exact argv/cwd as the resume payload. Passive agents
+(just typing `claude` into a shell) get badges but no resume payload, so they
+come back as plain shells by design.
+
 ## Known gaps
 
 These mirror the M5 pull-forward list in `docs/04-roadmap.md`; none should be
@@ -150,6 +192,9 @@ mistaken for missing architecture.
 7. **Geometric focus.** ⌘] / ⌘[ move between panes in tree order; rectangle-based
    arrow navigation is not implemented.
 8. **Live font reload.** Font size applies on relaunch.
+9. **Agent mute and multi-agent rows.** Banners are suppressed for the focused
+   workspace, but there is no per-provider mute. A workspace row shows one
+   primary agent (highest attention, then newest) when several share it.
 
 Done since the scaffold: key routing, IME and dead keys, mouse (wheel
 scrollback, drag selection, terminal mouse reporting, right/middle buttons),

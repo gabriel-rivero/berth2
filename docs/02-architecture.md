@@ -115,6 +115,29 @@ A POSIX `AF_UNIX` socket at `berth.sock`, `0600`, NDJSON framing, one serial que
 
 Thin client over the same protocol: `berth ls [--json]`, `berth send`, `berth send-key`, `berth read`, `berth split`, `berth events [--since N]`, `berth snapshot`, `berth notify`, `berth run -- <cmd>`. It authenticates with `BERTH_TOKEN` (inherited by children) or the token file. Also the binary invoked by editor hooks (`berth agent-set --state waiting_input`), so hook latency ≈ one socket round trip.
 
+### 2.6 Agent pipeline
+
+Agents are a core concern, not a shell decoration. `berth-core` owns the
+provider table, the `AgentSurface` state machine, attention derivation, stale
+sweeps, and notification dedupe. The Swift shell contributes three things:
+
+- **Passive detection**: every two seconds the host asks the core to sniff each
+  unclaimed surface's foreground process (`agent.detect` → `HostOps.pid_info`).
+  A recognized `claude`/`codex`/`opencode` process creates an `unknown` agent,
+  which is enough for a badge and a restore target.
+- **Rendering**: the sidebar picks one primary agent per workspace (highest
+  attention, then newest), draws its provider glyph, state, detail and progress,
+  and sorts attention-first. A pane whose agent newly needs input or errors gets
+  a 1.2 s accent ring; the focused surface is skipped.
+- **Attention routing**: `⌘⇧U` jumps to the newest attention item and repeats
+  through the list; `⌘I` opens the unread notification list as a palette. macOS
+  banners are suppressed for the workspace being viewed.
+
+Restore is agent-aware: `store::restore` replays each agent's saved argv/cwd,
+injects `BERTH_AGENT_ID`, and leaves the surface in the tree with an `errored`
+agent (`detail: "resume failed"`) if the provider cannot be resurrected. It
+never silently substitutes a bare shell for a failed resume.
+
 ## 3. Concurrency rules
 
 - **Main thread**: AppKit, Ghostty surfaces, Metal. Never blocked on the socket.

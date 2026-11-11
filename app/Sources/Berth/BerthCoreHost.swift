@@ -32,6 +32,7 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
     private var lastAppliedStructure: String?
     private var lastSelectedWorkspace: String?
     private var lastActiveSurface: String?
+    private var lastAttention: [String: String] = [:]
 
     private struct WorkspaceMeta {
         var branch: String?
@@ -194,6 +195,9 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
     func notify(title: String, body: String, workspaceId: String?) {
         // Best effort: a missed banner must never fail the core call.
         try? onMain { [self] in
+            // No banner for work the user is looking at; the sidebar and pane
+            // ring already carry that signal.
+            if let workspaceId, workspaceId == selectedWorkspaceID { return }
             requestNotificationPermissionIfNeeded()
             let content = UNMutableNotificationContent()
             content.title = title
@@ -232,6 +236,21 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
             sidebarGroups = groups
             selectedWorkspaceID = result["selected_workspace"] as? String
 
+            let agentItems = Self.agentItems(engine)
+            let agentInfos = agentItems.compactMap(Self.sidebarAgent(from:))
+            var primaryAgent: [String: SidebarAgent] = [:]
+            for info in agentInfos {
+                if let existing = primaryAgent[info.workspaceID] {
+                    if info.attentionRank > existing.attentionRank
+                        || (info.attentionRank == existing.attentionRank
+                            && info.sinceMs > existing.sinceMs) {
+                        primaryAgent[info.workspaceID] = info
+                    }
+                } else {
+                    primaryAgent[info.workspaceID] = info
+                }
+            }
+
             if workspaces.isEmpty {
                 window?.close()
                 window = nil
@@ -262,7 +281,8 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
                     unread: layout.unread,
                     pinned: layout.pinned,
                     groupID: layout.groupID,
-                    pid: active?.pid))
+                    pid: active?.pid,
+                    agent: primaryAgent[id]))
             }
             sidebarBase = base
             lastLayoutJSON = lastLayoutJSON.filter { layouts[$0.key] != nil }
@@ -290,6 +310,15 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
                 win.makeKeyAndOrderFront(nil)
                 NSApp.activate(ignoringOtherApps: true)
             }
+            let focused = focusedSurfaceID
+            for info in agentInfos
+            where info.needsAttention
+                && lastAttention[info.id] != info.attention
+                && info.surfaceID != focused {
+                win.ring(surfaceID: info.surfaceID)
+            }
+            lastAttention = Dictionary(
+                uniqueKeysWithValues: agentInfos.map { ($0.id, $0.attention) })
             publishSidebar()
 
             let selected = selectedWorkspaceID.flatMap { layouts[$0] != nil ? $0 : nil }
@@ -339,7 +368,8 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
                 unread: workspace.unread,
                 pinned: workspace.pinned,
                 groupID: workspace.groupID,
-                pid: workspace.pid)
+                pid: workspace.pid,
+                agent: workspace.agent)
         }
         window.updateSidebar(SidebarModel(
             groups: sidebarGroups,
@@ -400,6 +430,62 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
             return view.berthSurfaceID
         }
         return lastActiveSurface
+    }
+
+    // MARK: - Agents
+
+    /// Ask the core to sniff each unclaimed surface's foreground process.
+    /// `agent.detect` is idempotent, so the timer can simply keep asking.
+    func detectAgents() {
+        try? onMain { [self] in
+            guard let engine else { return }
+            let agents = Self.agentItems(engine)
+            let bound = Set(agents.compactMap { $0["surface_id"] as? String })
+            let listed = engine.dispatch(
+                request: #"{"id":"detect","method":"surface.list","params":{}}"#)
+            guard let result = Self.result(listed),
+                  let surfaces = result["surfaces"] as? [[String: Any]]
+            else { return }
+
+            var created = false
+            for surface in surfaces {
+                guard let id = surface["id"] as? String, !bound.contains(id) else { continue }
+                let request =
+                    #"{"id":"detect","method":"agent.detect","params":{"surface_id":"\#(id)"}}"#
+                if let detected = Self.result(engine.dispatch(request: request)),
+                   detected["agent"] is [String: Any] {
+                    created = true
+                }
+            }
+            if created {
+                onEvents?()
+                reconcileAll()
+            }
+        }
+    }
+
+    private static func agentItems(_ engine: Engine) -> [[String: Any]] {
+        let response = engine.dispatch(
+            request: #"{"id":"agents","method":"agent.list","params":{}}"#)
+        return result(response)?["agents"] as? [[String: Any]] ?? []
+    }
+
+    private static func sidebarAgent(from item: [String: Any]) -> SidebarAgent? {
+        guard let id = item["id"] as? String,
+              let workspaceID = item["workspace_id"] as? String,
+              let surfaceID = item["surface_id"] as? String
+        else { return nil }
+        return SidebarAgent(
+            id: id,
+            workspaceID: workspaceID,
+            surfaceID: surfaceID,
+            provider: item["provider"] as? String ?? "custom",
+            name: item["name"] as? String ?? "agent",
+            state: item["state"] as? String ?? "unknown",
+            detail: item["detail"] as? String ?? "",
+            progress: (item["progress"] as? NSNumber)?.doubleValue,
+            attention: item["attention"] as? String ?? "none",
+            sinceMs: (item["since_ms"] as? NSNumber)?.uint64Value ?? 0)
     }
 
     // MARK: - Sidebar metadata

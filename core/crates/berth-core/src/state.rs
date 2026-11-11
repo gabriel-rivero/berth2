@@ -31,6 +31,16 @@ pub struct AppState {
     seq: u64,
 }
 
+/// Registration payload shared by the explicit and inferred-id paths.
+pub struct AgentRegistration<'a> {
+    pub surface_id: &'a str,
+    pub id: Option<&'a str>,
+    pub provider: Option<&'a str>,
+    pub name: Option<&'a str>,
+    pub resume: Option<Resume>,
+    pub meta: Value,
+}
+
 impl AppState {
     pub fn instance(&mut self) -> String {
         if self.instance.is_empty() {
@@ -575,6 +585,35 @@ impl AppState {
         meta: Value,
         ops: &dyn SurfaceOps,
     ) -> Result<AgentSurface, CoreError> {
+        self.register_agent_with_id(
+            AgentRegistration {
+                surface_id,
+                id: None,
+                provider,
+                name,
+                resume,
+                meta,
+            },
+            ops,
+        )
+    }
+
+    /// Register with an optional caller-chosen id. The CLI wrapper mints the
+    /// id before spawning so `BERTH_AGENT_ID` can be present in the child's
+    /// environment.
+    pub fn register_agent_with_id(
+        &mut self,
+        reg: AgentRegistration<'_>,
+        ops: &dyn SurfaceOps,
+    ) -> Result<AgentSurface, CoreError> {
+        let AgentRegistration {
+            surface_id,
+            id: explicit_id,
+            provider,
+            name,
+            resume,
+            meta,
+        } = reg;
         let surface = self.require_surface(surface_id)?.clone();
 
         let mut agent = match self.agent_for_surface(surface_id).cloned() {
@@ -600,7 +639,9 @@ impl AppState {
                     .map(str::to_string)
                     .or_else(|| detected.map(|p| p.id.to_string()))
                     .unwrap_or_else(|| "custom".to_string());
-                let id = ids::mint(ids::AGENT);
+                let id = explicit_id
+                    .map(str::to_string)
+                    .unwrap_or_else(|| ids::mint(ids::AGENT));
                 let now = time::now_ms();
                 AgentSurface {
                     id: id.clone(),
@@ -632,6 +673,54 @@ impl AppState {
         }
         self.emit(names::AGENT_CREATED, serde_json::json!(agent));
         Ok(agent)
+    }
+
+    /// Passive detection: create an `unknown` agent when the foreground
+    /// process matches a provider and nothing is registered for the surface.
+    /// Returns `None` when there is nothing new to report.
+    pub fn detect_agent(
+        &mut self,
+        surface_id: &str,
+        ops: &dyn SurfaceOps,
+    ) -> Result<Option<AgentSurface>, CoreError> {
+        let surface = self.require_surface(surface_id)?.clone();
+        if self.agent_for_surface(surface_id).is_some() {
+            return Ok(None);
+        }
+        let Some(provider) = ops
+            .pid_info(surface_id)
+            .ok()
+            .and_then(|info| crate::providers::detect(info.comm.as_deref(), &info.argv))
+        else {
+            return Ok(None);
+        };
+
+        let id = ids::mint(ids::AGENT);
+        let now = time::now_ms();
+        let agent = AgentSurface {
+            name: format!("{} {}", provider.display, &id[id.len() - 4..]),
+            id: id.clone(),
+            surface_id: surface_id.to_string(),
+            workspace_id: surface.workspace_id,
+            provider: provider.id.to_string(),
+            state: AgentState::Unknown,
+            detail: String::new(),
+            progress: None,
+            attention: Attention::None,
+            since_ms: now,
+            last_seen_ms: now,
+            tokens_in: 0,
+            tokens_out: 0,
+            cost_usd: 0.0,
+            resume: None,
+            meta: Value::Null,
+        };
+        self.agents.insert(id.clone(), agent.clone());
+        if let Some(s) = self.surface_mut(surface_id) {
+            s.agent_id = Some(id);
+        }
+        self.emit(names::AGENT_CREATED, serde_json::json!(agent));
+        Ok(Some(agent))
     }
 
     pub fn update_agent(
