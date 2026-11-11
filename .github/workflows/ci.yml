@@ -115,6 +115,7 @@ jobs:
         run: ditto -c -k --keepParent build/Berth.app "Berth-${GITHUB_SHA::7}.zip"
 
       - uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: Berth-${{ github.sha }}
           path: Berth-*.zip
