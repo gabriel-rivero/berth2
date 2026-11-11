@@ -70,9 +70,38 @@ The core is where the product logic lives and it is fully headless-testable, so 
 - [ ] Close the window: child process is gone (`pgrep -P` empty), no zombie
 - [ ] Idle CPU < 1 %, RSS sane for one pane
 - [ ] `berth ping`, `berth ls`, `berth agents` answer from a terminal in the app
-- [ ] `berth new -- sh` opens a second window; `berth surface read_text` returns that screen
+- [ ] `berth new -- sh` opens a second workspace; `berth surface read_text` returns that screen
 
 Until every line passes, M0 is not done.
+
+## M1 restore checklist (run on the Mac)
+
+The release criterion is: three workspaces, six panes, quit, relaunch, and land
+exactly where you left off including each shell's cwd.
+
+1. Launch the app and confirm the sidebar and one terminal appear.
+2. Click the sidebar `+` twice to create workspaces 2 and 3. Rename them mentally
+   (or move them) so they are distinguishable.
+3. In the selected workspace press `⌘D` once and `⌘⇧D` once to make three panes.
+   Switch to each workspace and do the same, ending with six panes total.
+4. In every pane, `cd` to a unique directory and run `pwd`, for example:
+   `cd /tmp/berth-w1-a && pwd`.
+5. In one pane press `⌘T` and `cd` the new tab somewhere else. Leave a different
+   tab active in another pane.
+6. Select workspace 2, then quit with `⌘Q`.
+7. Relaunch. Check:
+   - [ ] the same three workspaces are in the sidebar, same order
+   - [ ] the same window layout (three panes per workspace) is rebuilt
+   - [ ] workspace 2 is selected, and the active tab in every pane is preserved
+   - [ ] every shell starts in the cwd it had before quitting (`pwd`)
+   - [ ] cwd survives a shell whose process had already exited
+   - [ ] no visible startup hitch before the first prompt
+8. Crash path: make a small change, wait one second, then `kill -9` the app.
+   Relaunch and repeat the checks. A change made less than 500 ms before the
+   kill may be missing; that is the documented debounce window.
+
+Split divider positions are a known gap (docs/04 M5); do not fail the criterion
+on those until weights are wired back.
 
 ## Known gaps (deliberate, ordered)
 

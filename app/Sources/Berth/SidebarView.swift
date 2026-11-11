@@ -30,6 +30,22 @@ struct SidebarModel {
     var selectedWorkspace: String?
 }
 
+/// Table with a hook for double-clicks on empty space (new workspace).
+final class SidebarTable: NSTableView {
+    var onBackgroundDoubleClick: (@MainActor () -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 2 {
+            let point = convert(event.locationInWindow, from: nil)
+            if row(at: point) == -1 {
+                onBackgroundDoubleClick?()
+                return
+            }
+        }
+        super.mouseDown(with: event)
+    }
+}
+
 final class SidebarView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private enum Row {
         case group(SidebarGroupInfo)
@@ -39,8 +55,10 @@ final class SidebarView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     var onSelect: (@MainActor (String) -> Void)?
     var onMove: (@MainActor (String, Int) -> Void)?
     var onToggleGroup: (@MainActor (String, Bool) -> Void)?
+    var onNewWorkspace: (@MainActor () -> Void)?
+    var onClose: (@MainActor (String) -> Void)?
 
-    private let table = NSTableView()
+    private let table = SidebarTable()
     private let scroll = NSScrollView()
     private let empty = NSTextField(labelWithString: "No workspaces")
     private var model = SidebarModel()
@@ -58,6 +76,14 @@ final class SidebarView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         header.translatesAutoresizingMaskIntoConstraints = false
         addSubview(header)
 
+        let add = NSButton(title: "+", target: self, action: #selector(newWorkspace(_:)))
+        add.bezelStyle = .inline
+        add.isBordered = false
+        add.font = .systemFont(ofSize: 13, weight: .medium)
+        add.toolTip = "New workspace (⌘N)"
+        add.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(add)
+
         table.headerView = nil
         table.rowHeight = 50
         table.intercellSpacing = NSSize(width: 0, height: 2)
@@ -68,6 +94,9 @@ final class SidebarView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         table.delegate = self
         table.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("workspace")))
         table.registerForDraggedTypes([.string])
+        table.target = self
+        table.doubleAction = #selector(doubleClick(_:))
+        table.onBackgroundDoubleClick = { [weak self] in self?.onNewWorkspace?() }
 
         scroll.documentView = table
         scroll.hasVerticalScroller = true
@@ -83,6 +112,9 @@ final class SidebarView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         NSLayoutConstraint.activate([
             header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
             header.topAnchor.constraint(equalTo: topAnchor, constant: 12),
+            add.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            add.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            add.widthAnchor.constraint(equalToConstant: 20),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
             scroll.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 6),
@@ -134,6 +166,17 @@ final class SidebarView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         workspaces.filter(\.pinned) + workspaces.filter { !$0.pinned }
     }
 
+    @objc private func newWorkspace(_ sender: Any?) {
+        onNewWorkspace?()
+    }
+
+    /// Double-clicking empty sidebar space creates a workspace; double-clicking
+    /// a row just keeps it selected (single click already opens it).
+    @objc private func doubleClick(_ sender: Any?) {
+        guard table.clickedRow < 0 else { return }
+        onNewWorkspace?()
+    }
+
     // MARK: - Table
 
     func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
@@ -150,6 +193,7 @@ final class SidebarView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         case let .workspace(workspace):
             let view = WorkspaceRowView()
             view.configure(workspace)
+            view.onClose = { [weak self] in self?.onClose?(workspace.id) }
             return view
         }
     }
@@ -258,6 +302,7 @@ final class GroupRowView: NSView {
 
 /// A workspace row: unread dot, live terminal title, cwd + branch + ports.
 final class WorkspaceRowView: NSTableCellView {
+    var onClose: (@MainActor () -> Void)?
     private let dot = NSView()
     private let title = NSTextField(labelWithString: "")
     private let detail = NSTextField(labelWithString: "")
@@ -294,6 +339,15 @@ final class WorkspaceRowView: NSTableCellView {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    /// Middle-click closes the workspace, matching tab-bar behaviour.
+    override func otherMouseDown(with event: NSEvent) {
+        guard event.buttonNumber == 2 else {
+            super.otherMouseDown(with: event)
+            return
+        }
+        onClose?()
+    }
 
     func configure(_ workspace: SidebarWorkspace) {
         dot.isHidden = workspace.unread == 0

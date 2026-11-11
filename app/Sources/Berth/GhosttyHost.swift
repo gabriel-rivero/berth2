@@ -248,7 +248,7 @@ final class GhosttyHost {
 
     private init() {}
 
-    func start() -> Bool {
+    func start(fontSize: Double = 0) -> Bool {
         guard !started else { return true }
         guard ghostty_init(UInt(CommandLine.argc), CommandLine.unsafeArgv) == 0 else {
             NSLog("berth: ghostty_init failed")
@@ -257,6 +257,11 @@ final class GhosttyHost {
 
         let cfg = ghostty_config_new()
         ghostty_config_load_default_files(cfg)
+        // Berth's font size is an app setting, loaded after the user's Ghostty
+        // config so it wins for this app only.
+        if fontSize > 0 {
+            writeFontConfig(fontSize: fontSize, config: cfg)
+        }
         ghostty_config_finalize(cfg)
         config = cfg
 
@@ -287,6 +292,23 @@ final class GhosttyHost {
         tickTimer = timer
         started = true
         return true
+    }
+
+    /// Ghostty's C config loader only reads files, so write the app's one
+    /// override next to the session files and load it after the defaults.
+    private func writeFontConfig(fontSize: Double, config: ghostty_config_t) {
+        let directory = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Berth", isDirectory: true)
+        try? FileManager.default.createDirectory(
+            at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("ghostty.conf")
+        do {
+            try "font-size = \(fontSize)\n".write(to: url, atomically: true, encoding: .utf8)
+            ghostty_config_load_file(config, url.path)
+        } catch {
+            NSLog("berth: could not write font config: \(error.localizedDescription)")
+        }
     }
 
     func tick() {

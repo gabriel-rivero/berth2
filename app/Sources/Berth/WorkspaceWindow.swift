@@ -23,7 +23,7 @@ final class MainWindow: NSWindow {
     init() {
         super.init(
             contentRect: NSRect(x: 0, y: 0, width: 1180, height: 720),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false)
         title = "Berth"
@@ -138,12 +138,13 @@ enum LayoutBuilder {
     }
 }
 
-/// A pane holding one terminal plus a tab strip when the pane has more than
-/// one tab. The strip is the only UI the core's `Pane.surfaces` stack needs.
+/// A pane holding one terminal and an always-visible tab strip. The strip is
+/// the only UI the core's `Pane.surfaces` stack needs; keeping the `+` visible
+/// for single-tab panes is what makes tab creation discoverable.
 final class PaneView: NSView {
     let surfaceID: String
     private let terminalHost = NSView()
-    private let tabBar: NSView?
+    private let tabBar: PaneTabBar
     private static let tabHeight: CGFloat = 28
 
     init(
@@ -156,17 +157,19 @@ final class PaneView: NSView {
         surface: GhosttySurfaceView
     ) {
         self.surfaceID = surfaceID
-        let tabs = pane?.surfaceIDs ?? [surfaceID]
-        tabBar = tabs.count > 1
-            ? PaneView.makeTabBar(paneID: paneID, pane: pane, layout: layout, actions: actions)
-            : nil
+        tabBar = PaneView.makeTabBar(
+            paneID: paneID,
+            pane: pane,
+            layout: layout,
+            fallbackSurface: surfaceID,
+            actions: actions)
         super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = NSColor.black.cgColor
         layer?.borderColor = NSColor.separatorColor.cgColor
         layer?.borderWidth = 1
 
-        if let tabBar { addSubview(tabBar) }
+        addSubview(tabBar)
         terminalHost.wantsLayer = true
         terminalHost.layer?.backgroundColor = NSColor.black.cgColor
         addSubview(terminalHost)
@@ -183,9 +186,10 @@ final class PaneView: NSView {
         paneID: String,
         pane: PaneSpec?,
         layout: WorkspaceLayout,
+        fallbackSurface: String,
         actions: PaneActions
-    ) -> NSView {
-        let ids = pane?.surfaceIDs ?? []
+    ) -> PaneTabBar {
+        let ids = (pane?.surfaceIDs.isEmpty == false) ? pane!.surfaceIDs : [fallbackSurface]
         let labels = ids.enumerated().map { index, id -> String in
             let title = layout.surface(id)?.title ?? ""
             return title.isEmpty ? "term \(index + 1)" : title
@@ -202,9 +206,57 @@ final class PaneView: NSView {
 
     override func layout() {
         super.layout()
-        let barHeight = tabBar == nil ? 0 : Self.tabHeight
-        tabBar?.frame = NSRect(x: 0, y: bounds.height - barHeight, width: bounds.width, height: barHeight)
-        terminalHost.frame = NSRect(x: 0, y: 0, width: bounds.width, height: bounds.height - barHeight)
+        tabBar.frame = NSRect(
+            x: 0, y: bounds.height - Self.tabHeight,
+            width: bounds.width, height: Self.tabHeight)
+        terminalHost.frame = NSRect(
+            x: 0, y: 0,
+            width: bounds.width, height: bounds.height - Self.tabHeight)
+    }
+}
+
+/// A tab button. Single click activates; double click and middle click close,
+/// matching the gestures people expect from browser and terminal tabs.
+final class PaneTabButton: NSButton {
+    var onClose: (@MainActor () -> Void)?
+    var isActiveTab = false {
+        didSet { refreshAppearance() }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        isBordered = false
+        wantsLayer = true
+        layer?.cornerRadius = 4
+        font = .systemFont(ofSize: 11)
+        cell?.lineBreakMode = .byTruncatingTail
+        refreshAppearance()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    private func refreshAppearance() {
+        layer?.backgroundColor = (isActiveTab
+            ? NSColor.controlAccentColor.withAlphaComponent(0.28)
+            : NSColor.clear).cgColor
+        contentTintColor = isActiveTab ? .labelColor : .secondaryLabelColor
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 2 {
+            onClose?()
+            return
+        }
+        super.mouseDown(with: event)
+    }
+
+    override func otherMouseDown(with event: NSEvent) {
+        guard event.buttonNumber == 2 else {
+            super.otherMouseDown(with: event)
+            return
+        }
+        onClose?()
     }
 }
 
@@ -230,36 +282,47 @@ final class PaneTabBar: NSView {
         self.actions = actions
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.96).cgColor
+        layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
 
-        let control = NSSegmentedControl(
-            labels: labels,
-            trackingMode: .selectOne,
-            target: self,
-            action: #selector(select(_:)))
-        control.segmentStyle = .texturedRounded
-        control.selectedSegment = activeIndex
-        control.translatesAutoresizingMaskIntoConstraints = false
+        let tabs = NSStackView()
+        tabs.orientation = .horizontal
+        tabs.spacing = 4
+        tabs.translatesAutoresizingMaskIntoConstraints = false
+        for (index, label) in labels.enumerated() {
+            let button = PaneTabButton(frame: .zero)
+            button.title = label
+            button.target = self
+            button.action = #selector(activate(_:))
+            button.tag = index
+            button.isActiveTab = index == activeIndex
+            button.onClose = { [weak self] in self?.closeTab(at: index) }
+            button.translatesAutoresizingMaskIntoConstraints = false
+            button.heightAnchor.constraint(equalToConstant: 20).isActive = true
+            button.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            tabs.addArrangedSubview(button)
+        }
 
         let add = NSButton(title: "+", target: self, action: #selector(newTab(_:)))
         add.bezelStyle = .inline
         add.isBordered = false
         add.font = .systemFont(ofSize: 14, weight: .medium)
+        add.toolTip = "New tab (⌘T)"
         add.translatesAutoresizingMaskIntoConstraints = false
 
         let close = NSButton(title: "×", target: self, action: #selector(close(_:)))
         close.bezelStyle = .inline
         close.isBordered = false
         close.font = .systemFont(ofSize: 14)
+        close.toolTip = "Close tab (⌘W)"
         close.translatesAutoresizingMaskIntoConstraints = false
 
-        addSubview(control)
+        addSubview(tabs)
         addSubview(add)
         addSubview(close)
         NSLayoutConstraint.activate([
-            control.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
-            control.centerYAnchor.constraint(equalTo: centerYAnchor),
-            control.trailingAnchor.constraint(lessThanOrEqualTo: add.leadingAnchor, constant: -4),
+            tabs.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
+            tabs.centerYAnchor.constraint(equalTo: centerYAnchor),
+            tabs.trailingAnchor.constraint(lessThanOrEqualTo: add.leadingAnchor, constant: -4),
             add.trailingAnchor.constraint(equalTo: close.leadingAnchor, constant: -2),
             add.centerYAnchor.constraint(equalTo: centerYAnchor),
             add.widthAnchor.constraint(equalToConstant: 20),
@@ -272,10 +335,23 @@ final class PaneTabBar: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
-    @objc private func select(_ sender: NSSegmentedControl) {
-        let index = sender.selectedSegment
+    /// Double-clicking the empty part of the strip opens another tab.
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 2 {
+            actions.newTab(paneID)
+            return
+        }
+        super.mouseDown(with: event)
+    }
+
+    @objc private func activate(_ sender: PaneTabButton) {
+        guard ids.indices.contains(sender.tag) else { return }
+        actions.activate(ids[sender.tag])
+    }
+
+    private func closeTab(at index: Int) {
         guard ids.indices.contains(index) else { return }
-        actions.activate(ids[index])
+        actions.close(ids[index])
     }
 
     @objc private func newTab(_ sender: Any?) {

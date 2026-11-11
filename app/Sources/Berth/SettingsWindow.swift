@@ -10,6 +10,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
 
     private let window: NSWindow
     private var fields: [ShortcutAction: NSTextField] = [:]
+    private let fontField = NSTextField(string: "")
 
     static func present() {
         if let active {
@@ -24,7 +25,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
 
     private override init() {
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 460, height: 520),
+            contentRect: NSRect(x: 0, y: 0, width: 460, height: 560),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false)
@@ -41,7 +42,8 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         title.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(title)
 
-        let hint = NSTextField(labelWithString: "Format: cmd+shift+p  ·  leave empty for the default")
+        let hint = NSTextField(
+            labelWithString: "Shortcut format: cmd+shift+p  ·  empty means default  ·  font applies on relaunch")
         hint.font = .systemFont(ofSize: 11)
         hint.textColor = .secondaryLabelColor
         hint.translatesAutoresizingMaskIntoConstraints = false
@@ -50,6 +52,15 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         let grid = NSGridView()
         grid.rowSpacing = 8
         grid.columnSpacing = 12
+
+        let fontLabel = NSTextField(labelWithString: "Terminal Font Size")
+        fontLabel.alignment = .right
+        fontField.stringValue = String(format: "%g", AppConfig.shared.fontSize)
+        fontField.placeholderString = "14"
+        fontField.translatesAutoresizingMaskIntoConstraints = false
+        fontField.widthAnchor.constraint(equalToConstant: 220).isActive = true
+        grid.addRow(with: [fontLabel, fontField])
+
         for action in ShortcutAction.allCases {
             let label = NSTextField(labelWithString: action.title)
             label.alignment = .right
@@ -97,6 +108,14 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     }
 
     @objc private func save() {
+        guard let size = Double(fontField.stringValue.trimmingCharacters(in: .whitespaces)),
+              (8...72).contains(size)
+        else {
+            NSSound.beep()
+            fontField.becomeFirstResponder()
+            return
+        }
+        AppConfig.shared.setFontSize(size)
         for (action, field) in fields {
             let value = field.stringValue.trimmingCharacters(in: .whitespaces)
             if !value.isEmpty, Shortcut.parse(value) == nil {

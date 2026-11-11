@@ -1,6 +1,7 @@
-// User configuration: shortcut overrides in ~/.config/berth/config.json.
+// User configuration: shortcut overrides and terminal font size in
+// ~/.config/berth/config.json.
 //
-//   {"shortcuts": {"splitRight": "cmd+d", "palette": "cmd+shift+p"}}
+//   {"shortcuts": {"splitRight": "cmd+d"}, "fontSize": 14}
 //
 // Shortcuts are parsed into an AppKit key equivalent + modifier mask. Unknown
 // keys are ignored, and a missing file means the built-in defaults.
@@ -95,9 +96,15 @@ final class AppConfig {
     static let shared = AppConfig()
 
     private(set) var shortcuts: [String: String] = [:]
+    /// Terminal font size in points, handed to Ghostty as `font-size`.
+    private(set) var fontSize: Double = 14
 
     private init() {
         load()
+    }
+
+    func setFontSize(_ value: Double) {
+        fontSize = min(max(value, 8), 72)
     }
 
     func shortcut(for action: ShortcutAction) -> Shortcut {
@@ -119,10 +126,14 @@ final class AppConfig {
 
     func load() {
         guard let data = try? Data(contentsOf: Self.url),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let values = object["shortcuts"] as? [String: String]
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return }
-        shortcuts = values
+        if let values = object["shortcuts"] as? [String: String] {
+            shortcuts = values
+        }
+        if let value = object["fontSize"] as? NSNumber {
+            setFontSize(value.doubleValue)
+        }
     }
 
     func save() throws {
@@ -130,7 +141,7 @@ final class AppConfig {
             at: Self.url.deletingLastPathComponent(),
             withIntermediateDirectories: true)
         let data = try JSONSerialization.data(
-            withJSONObject: ["shortcuts": shortcuts],
+            withJSONObject: ["shortcuts": shortcuts, "fontSize": fontSize],
             options: [.prettyPrinted, .sortedKeys])
         try data.write(to: Self.url, options: .atomic)
     }

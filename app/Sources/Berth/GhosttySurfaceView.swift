@@ -350,20 +350,20 @@ final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClient {
             return super.performKeyEquivalent(with: event)
         }
 
-        let keyEvent = event.berthKeyEvent(
-            GHOSTTY_ACTION_PRESS,
-            translationFlags: BerthInput.translationFlags(event, surface: surface))
-        if keyEvent.isBinding(on: surface) {
-            keyDown(with: event)
-            return true
+        // ⌘ chords belong to the app menu first. Ghostty also binds some of
+        // them (⌘D split, ⌘W close); claiming those here made the menu items
+        // unreachable. Unclaimed ⌘ chords fall through to keyDown, where
+        // Ghostty still gets its normal bindings (⌘C copy, ⌘K clear, …).
+        if !event.modifierFlags.contains(.command) {
+            let keyEvent = event.berthKeyEvent(
+                GHOSTTY_ACTION_PRESS,
+                translationFlags: BerthInput.translationFlags(event, surface: surface))
+            if keyEvent.isBinding(on: surface) || event.modifierFlags.contains(.control) {
+                keyDown(with: event)
+                return true
+            }
         }
 
-        if event.modifierFlags.contains(.control) {
-            keyDown(with: event)
-            return true
-        }
-
-        // Let the menu bar (⌘Q, ⌘W…) and the system have it.
         return super.performKeyEquivalent(with: event)
     }
 

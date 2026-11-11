@@ -15,7 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var saveTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        guard GhosttyHost.shared.start() else {
+        guard GhosttyHost.shared.start(fontSize: AppConfig.shared.fontSize) else {
             let alert = NSAlert()
             alert.messageText = "Berth could not start Ghostty"
             alert.informativeText = """

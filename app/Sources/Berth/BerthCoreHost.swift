@@ -265,6 +265,12 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
                     self?.sendFromUI(
                         "group.update", ["group_id": id, "collapsed": collapsed])
                 }
+                win.sidebar.onNewWorkspace = { [weak self] in
+                    self?.sendFromUI("workspace.create", ["name": "workspace"])
+                }
+                win.sidebar.onClose = { [weak self] id in
+                    self?.sendFromUI("workspace.close", ["workspace_id": id])
+                }
                 win.makeKeyAndOrderFront(nil)
                 NSApp.activate(ignoringOtherApps: true)
             }

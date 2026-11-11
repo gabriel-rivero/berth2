@@ -60,6 +60,28 @@ Goal: the reason to exist.
 
 **Done when:** two weeks of personal use with zero fallbacks to another terminal.
 
+## M5 — MVP polish (pull-forward list)
+
+Ship the smallest useful daily driver first; these are the known gaps that should
+not be mistaken for missing architecture.
+
+- **Group management UI.** Groups render and collapse, but there is no
+  create/rename/color picker even though `group.create/update/delete` exist.
+- **Split weights round-trip.** `NSSplitView` divider positions are not fed back
+  into the core, so relaunch resets pane sizes.
+- **Geometric focus.** ⌘] / ⌘[ walk the tree; arrow-key spatial navigation is not
+  implemented.
+- **Journal semantics.** `journal.ndjson` stores snapshots (newest wins) instead
+  of replayable structural events; a crash can lose the last 500 ms.
+- **Socket token auth.** The socket is `0600` but the token handshake is not
+  implemented, so any process running as the user can connect.
+- **Discoverability and input polish.** Workspace/tab creation buttons,
+  double-click/middle-click gestures, and font sizing are in place as of 0.4.1;
+  keep testing them on a real Mac.
+
+MVP gate stays the M1 restore criterion plus the M0 smoke checklist, not this
+list.
+
 ## After v1 (ordered, not scheduled)
 
 1. **Agent inbox / journal** — per-agent timeline of state transitions and notifications (we already generate the events; this is persistence + UI).
