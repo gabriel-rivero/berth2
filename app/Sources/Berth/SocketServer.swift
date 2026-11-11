@@ -190,8 +190,14 @@ private final class Client: ClientSink {
         self.source = source
 
         queue.async { [weak self] in
-            guard let self, let hello = self.handler.hello() else { return }
-            self.send(hello)
+            guard let self else { return }
+            // The core and its host callbacks live on the main thread. Forward
+            // there asynchronously instead of blocking this client queue on a
+            // synchronous hop: a stuck main thread must not wedge every socket.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let hello = self.handler.hello() else { return }
+                self.queue.async { [weak self] in self?.send(hello) }
+            }
         }
     }
 
@@ -274,9 +280,7 @@ private final class Client: ClientSink {
     private func handle(_ line: Data) {
         guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else {
             // Let the core produce the canonical bad_request response.
-            if let response = handler.handle(line, from: self) {
-                send(response)
-            }
+            forward(line)
             return
         }
 
@@ -295,8 +299,16 @@ private final class Client: ClientSink {
             return
         }
 
-        if let response = handler.handle(line, from: self) {
-            send(response)
+        forward(line)
+    }
+
+    /// Hand the request to the main-thread core and send the reply back here.
+    private func forward(_ line: Data) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            if let response = self.handler.handle(line, from: self) {
+                self.queue.async { [weak self] in self?.send(response) }
+            }
         }
     }
 

@@ -50,14 +50,13 @@ final class CoreHandler: RequestHandler {
         return encoded
     }
 
-    /// Run the core on the main thread. Core dispatch holds its state lock while
-    /// it calls back into the host, and host callbacks synchronously hop to the
-    /// main thread; dispatching from a socket thread would deadlock against any
-    /// main-thread dispatch (timer, reconcile, UI command) waiting on that lock.
+    /// Run the core on the main thread. The socket forwards requests here
+    /// asynchronously, so this should always already be main.
     private func dispatch(_ request: String) -> String {
         if Thread.isMainThread {
             return engine.dispatch(request: request)
         }
+        assertionFailure("core dispatch must run on the main thread")
         let engine = self.engine
         return DispatchQueue.main.sync {
             engine.dispatch(request: request)
