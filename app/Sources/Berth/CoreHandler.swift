@@ -15,12 +15,15 @@ final class CoreHandler: RequestHandler {
     func handle(_ line: Data, from sink: ClientSink) -> Data? {
         guard let text = String(data: line, encoding: .utf8) else { return nil }
 
-        // Subscription is a transport concern, not a core one.
-        if let method = Payload.method(in: line) {
-            switch method {
-            case "events.subscribe": sink.setSubscribed(true)
-            case "events.unsubscribe": sink.setSubscribed(false)
-            default: break
+        // Subscription, filtering and replay are transport concerns.
+        if let payload = Payload.parse(line) {
+            switch payload.method {
+            case "events.subscribe":
+                sink.subscribe(types: payload.types, since: payload.since)
+            case "events.unsubscribe":
+                sink.unsubscribe()
+            default:
+                break
             }
         }
 
@@ -34,7 +37,21 @@ final class CoreHandler: RequestHandler {
         return response.data(using: .utf8)
     }
 
-    /// Move queued events from the core to subscribed clients.
+    /// The server's greeting: protocol/app/instance facts, no event sequence.
+    func hello() -> Data? {
+        let response = engine.dispatch(
+            request: #"{"id":"hello","method":"system.hello","params":{}}"#)
+        guard let data = response.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let result = object["result"]
+        else { return nil }
+        let event: [String: Any] = ["event": "hello", "data": result]
+        guard let encoded = try? JSONSerialization.data(withJSONObject: event) else { return nil }
+        return encoded
+    }
+
+    /// Move queued events from the core to the server's replay ring and
+    /// subscribed clients.
     func flushEvents() {
         let pending = engine.drainEvents()
         guard !pending.isEmpty else { return }
@@ -43,11 +60,20 @@ final class CoreHandler: RequestHandler {
 }
 
 private enum Payload {
-    static func method(in line: Data) -> String? {
+    struct Parsed {
+        var method: String
+        var types: [String]?
+        var since: UInt64?
+    }
+
+    static func parse(_ line: Data) -> Parsed? {
         guard
             let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
             let method = obj["method"] as? String
         else { return nil }
-        return method
+        let params = obj["params"] as? [String: Any]
+        let types = (params?["types"] as? [String])?.filter { !$0.isEmpty }
+        let since = (params?["since"] as? NSNumber)?.uint64Value
+        return Parsed(method: method, types: types, since: since)
     }
 }

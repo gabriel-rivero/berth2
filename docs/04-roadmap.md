@@ -37,6 +37,8 @@ Goal: the product's spine.
 
 **Done when:** a shell script can create a workspace, split twice, type into a pane, read the screen back, and a second client sees the same events with monotonic `seq` — with the UI showing exactly the same state.
 
+Status: model/router/events, UniFFI bridge, authenticated NDJSON transport, replay ring, subscriptions, backpressure, CLI and transport unit tests have landed. `scripts/m2-acceptance.sh` is the end-to-end check against a running app. A true headless app-test mode is still future work; core and transport tests run without a window.
+
 ## M3 — Agent layer (≈3 weeks)
 
 Goal: the reason to exist.

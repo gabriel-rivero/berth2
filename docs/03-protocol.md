@@ -16,7 +16,7 @@ On connect the server sends a hello event; the client may then send `system.hell
 {"event":"hello","data":{"protocol":1,"app":"Berth","version":"0.1.0","instance":"inst_8c1d","auth":"local"}}
 ```
 
-Modes (config `socket.mode`):
+Modes (config `socket` in `~/.config/berth/config.json`):
 
 | Mode | Behaviour |
 | --- | --- |
@@ -24,7 +24,9 @@ Modes (config `socket.mode`):
 | `local` (default) | socket `0600`, same-uid only; mutating methods require the token |
 | `trusted` | socket `0600`, same-uid only; no token (hooks convenience) |
 
-Token: `~/Library/Application Support/Berth/token` (`0600`), also exported to children as `BERTH_TOKEN`. Auth is uid + token, not process ancestry — ancestry checks break under tmux, `nohup`, editors, and remote shells, which is exactly where we need to work. Read-only methods (`*.list`, `*.get`, `system.*`) are allowed without a token in `local` mode.
+Token: `~/Library/Application Support/Berth/token` (`0600`), also exported to children as `BERTH_TOKEN`. Clients pass it as a top-level `token` field (or inside `params`). Auth is uid + token, not process ancestry — ancestry checks break under tmux, `nohup`, editors, and remote shells, which is exactly where we need to work. Read-only methods (`*.list`, `*.get`, `system.*`, `events.subscribe`, `session.dump`) are allowed without a token in `local` mode; anything that reads terminal text or mutates state needs one. A failed check returns `permission_denied` with the request `id` and does not close the connection.
+
+Limits: request lines above 8 MiB are rejected (`payload_too_large`) and the connection is closed, because the framing can no longer be trusted. If a client stops reading and its outbound queue exceeds 4 MiB, the server disconnects it rather than growing without bound.
 
 ## 3. Envelope
 
@@ -44,7 +46,7 @@ Event:
 {"event":"agent.state_changed","seq":42,"ts":"2026-11-10T14:02:11.882Z","data":{"agent_id":"agt_44de","from":"thinking","to":"waiting_input","reason":"hook"}}
 ```
 
-- `seq` is per-connection, strictly monotonic, starting after the last event already delivered (no gaps, no duplicates on a single connection). On reconnect the client passes `?since=<seq>` semantics via `events.subscribe {"since":41}` and receives replayed events from a bounded ring buffer (last 1024) or an explicit `{"event":"gap","data":{"dropped":N}}`.
+- `seq` is process-wide and strictly monotonic. Each connection tracks its own cursor starting after the last event delivered (no duplicates on a single connection). On connect or reconnect the client passes `since=<seq>` via `events.subscribe` and receives replayed events from a bounded ring buffer (last 1024) or an explicit `{"event":"gap","data":{"dropped":N}}` before the surviving events.
 - `ts` is RFC3339 UTC with milliseconds. **Model timestamps are epoch milliseconds** (`created_ms`, `since_ms`, `last_seen_ms`) — logs are for humans, state is for machines.
 
 - Unknown methods → `method_not_found`; unknown params fields are ignored (forward-compatible), unknown *types* are errors.
@@ -74,18 +76,26 @@ Event:
 ### workspace
 | method | params | result |
 | --- | --- | --- |
-| `workspace.list` | `{}` | `{workspaces:[Workspace]}` |
-| `workspace.create` | `{name?, cwd?, group_id?, icon?, color?}` | `{workspace:Workspace}` |
+| `workspace.list` | `{}` | `{workspaces:[Workspace], groups:[Group], selected_workspace, selected_surface}` |
+| `workspace.create` | `{name?, cwd?, group_id?, icon?, color?, focus?}` | `{workspace:Workspace}` |
 | `workspace.get` | `{workspace_id}` | `{workspace:Workspace}` |
-| `workspace.update` | `{workspace_id, name?, icon?, color?, group_id?, pinned?}` | `{workspace:Workspace}` |
+| `workspace.update` | `{workspace_id, name?, icon?, color?, group_id?, clear_group_id?, pinned?}` | `{workspace:Workspace}` |
 | `workspace.select` | `{workspace_id}` | `{}` |
 | `workspace.close` | `{workspace_id}` | `{}` |
 | `workspace.move` | `{workspace_id, index}` | `{}` |
 
+### group
+| method | params | result |
+| --- | --- | --- |
+| `group.list` | `{}` | `{groups:[Group]}` |
+| `group.create` | `{name, color?}` | `{group:Group}` |
+| `group.update` | `{group_id, name?, color?, clear_color?, collapsed?}` | `{group:Group}` |
+| `group.delete` | `{group_id}` | `{}` |
+
 ### pane
 | method | params | result |
 | --- | --- | --- |
-| `pane.list` | `{workspace_id}` | `{panes:[Pane]}` |
+| `pane.list` | `{workspace_id?}` | `{panes:[Pane]}` |
 | `pane.focus` | `{pane_id}` | `{}` |
 | `pane.resize` | `{pane_id, weight}` | `{}` |
 | `pane.close` | `{pane_id}` | `{}` |
@@ -95,9 +105,12 @@ Event:
 | --- | --- | --- |
 | `surface.list` | `{workspace_id?, pane_id?}` | `{surfaces:[Surface]}` |
 | `surface.create` | `{pane_id?, cwd?, argv?, env?, focus?}` | `{surface_id}` |
-| `surface.split` | `{surface_id, direction:"left"\|"right"\|"up"\|"down", cwd?, argv?}` | `{surface_id, pane_id}` |
-| `surface.focus` | `{surface_id}` | `{}` |
+| `surface.split` | `{surface_id, direction:"left"\|"right"\|"up"\|"down", cwd?, argv?, focus?}` | `{surface_id, pane_id}` |
+| `surface.focus` | `{surface_id}` | `{surface_id}` |
+| `surface.activate` | `{surface_id}` | `{surface_id}` |
+| `surface.cycle` | `{surface_id, direction:"next"\|"prev"}` | `{surface_id}` |
 | `surface.close` | `{surface_id}` | `{}` |
+| `surface.update` | `{surface_id, title?, cwd?, progress?, clear_progress?, bell?, exited?}` | `{}` |
 | `surface.send_text` | `{surface_id, text}` | `{}` |
 | `surface.send_key` | `{surface_id, key:"enter"\|"ctrl-c"\|"esc"\|…, mods?:[…]}` | `{}` |
 | `surface.read_text` | `{surface_id, scope:"screen"\|"scrollback", max_bytes?}` | `{text, truncated}` |
@@ -136,7 +149,7 @@ Event:
 | --- | --- | --- |
 | `session.dump` | `{}` | `{session:SessionSnapshot}` |
 | `session.save` | `{}` | `{path}` |
-| `session.restore` | `{session:SessionSnapshot}` | `{}` |
+| `session.restore` | `{session:SessionSnapshot}` | `{restored:count}` |
 
 ### Events
 
@@ -232,13 +245,16 @@ The wrapper is the recommended default: it makes Tier 2 (and therefore correct r
 ## 8. CLI surface (thin, protocol-only)
 
 ```
-berth ls [--json]                     # workspaces + agents + attention summary
-berth agent new --provider … [--name …]
-berth agent update --state … [--detail …] [--progress 0.4]
-berth notify "text" [--level needs_input]
+berth ls [--json]                     # workspaces, groups, panes, surfaces, agents
+berth split SURFACE_ID right|left|up|down
+berth send SURFACE_ID "text"
+berth send-key SURFACE_ID enter
+berth read SURFACE_ID [--scrollback] [--max-bytes N]
+berth notify "text" [--level needs_input] [--body B]
+berth agent-register SURFACE_ID [--provider P] [--name N]
+berth agent-set AGENT_ID [--state S] [--detail D] [--progress 0.4]
 berth run -- <argv…>                  # wrapper: creates surface, registers agent, execs
-berth events [--types a,b] [--json]   # streams NDJSON
-berth send --surface srf_x "text"
+berth events [--types a,b] [--since N] # streams NDJSON
 berth snapshot                        # session.dump to stdout
 ```
 

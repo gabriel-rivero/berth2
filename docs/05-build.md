@@ -103,7 +103,32 @@ exactly where you left off including each shell's cwd.
 Split divider positions are a known gap (docs/04 M5); do not fail the criterion
 on those until weights are wired back.
 
-## Known gaps (deliberate, ordered)
+## M2 protocol checkpoint (run on the Mac)
+
+Start a release build, then from the repo root:
+
+```sh
+export PATH="$PWD/core/target/release:$PATH"   # or: make cli
+berth ping
+berth schema | head
+berth new --name m2-check
+berth active                                    # active surface id
+scripts/m2-acceptance.sh
+```
+
+The script creates a workspace, splits twice, types into the deepest pane, reads the screen back, and runs two independent `events --since 0` clients. It fails unless both clients see identical NDJSON with strictly increasing `seq`. It cleans up the workspace on exit.
+
+Auth check: in `local` mode (default), a mutating call without a token must fail:
+
+```sh
+printf '%s\n' '{"id":1,"method":"workspace.create","params":{"name":"nope"}}' \
+  | nc -U "$HOME/Library/Application Support/Berth/berth.sock"
+# → {"id":1,"ok":false,"error":{"code":"permission_denied",...}}
+```
+
+Read the token from `~/Library/Application Support/Berth/token` or use `$BERTH_TOKEN` inside a Berth terminal. Socket mode lives in `~/.config/berth/config.json` (`off`, `local`, `trusted`) and in Settings.
+
+
 
 1. **Socket token auth.** The socket is `0600` in the user's Application Support
    directory, but the token handshake described in docs/03-protocol.md §2 is not

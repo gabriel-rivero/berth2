@@ -334,6 +334,7 @@ impl AppState {
         &mut self,
         surface_id: &str,
         orientation: Orientation,
+        before: bool,
         req: SpawnRequest,
         focus: bool,
         ops: &dyn SurfaceOps,
@@ -351,7 +352,7 @@ impl AppState {
 
         let new_pane_id = ids::mint(ids::PANE);
         let mut root = ws.root.clone();
-        if !root.split(&pane.id, &new_pane_id, orientation) {
+        if !root.split_side(&pane.id, &new_pane_id, orientation, before) {
             return Err(CoreError::new(
                 ErrorCode::InvalidState,
                 format!("pane {} not in workspace tree", pane.id),

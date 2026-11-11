@@ -234,6 +234,18 @@ fn handle(
             state.emit(names::WORKSPACE_CHANGED, json!(snapshot));
             Ok(json!({}))
         }
+        "pane.close" => {
+            let p: PaneIdParam = params(raw)?;
+            let pane = state
+                .panes
+                .get(&p.pane_id)
+                .cloned()
+                .ok_or_else(|| CoreError::not_found(format!("no pane {}", p.pane_id)))?;
+            for surface_id in pane.surfaces {
+                state.close_surface(&surface_id, ops)?;
+            }
+            Ok(json!({}))
+        }
 
         // ---- surface ---------------------------------------------------
         "surface.list" => {
@@ -278,9 +290,11 @@ fn handle(
                 .surface(&p.surface_id)
                 .cloned()
                 .ok_or_else(|| CoreError::not_found(format!("no surface {}", p.surface_id)))?;
-            let orientation = match p.direction.as_str() {
-                "right" | "left" | "horizontal" => Orientation::Horizontal,
-                "down" | "up" | "vertical" => Orientation::Vertical,
+            let (orientation, before) = match p.direction.as_str() {
+                "right" | "horizontal" => (Orientation::Horizontal, false),
+                "left" => (Orientation::Horizontal, true),
+                "down" | "vertical" => (Orientation::Vertical, false),
+                "up" => (Orientation::Vertical, true),
                 other => {
                     return Err(CoreError::new(
                         ErrorCode::BadRequest,
@@ -292,6 +306,7 @@ fn handle(
             let (s, pane) = state.split_surface(
                 &p.surface_id,
                 orientation,
+                before,
                 SpawnRequest {
                     cwd,
                     argv: p.argv.unwrap_or_default(),
@@ -612,6 +627,11 @@ fn handle(
         // ---- session ---------------------------------------------------
         "session.dump" => Ok(json!({"session": state.snapshot()})),
         "session.save" => Ok(json!({"path": crate::store::snapshot_path()})),
+        "session.restore" => {
+            let p: SessionRestore = params(raw)?;
+            let restored = crate::store::restore(state, p.session, ops)?;
+            Ok(json!({"restored": restored}))
+        }
 
         other => Err(CoreError::new(
             ErrorCode::MethodNotFound,
@@ -897,6 +917,10 @@ struct Subscribe {
     #[serde(default)]
     types: Option<Vec<String>>,
 }
+#[derive(Debug, Deserialize)]
+struct SessionRestore {
+    session: crate::store::Snapshot,
+}
 
 /// Methods advertised by `system.capabilities`.
 pub const METHODS: &[&str] = &[
@@ -918,6 +942,7 @@ pub const METHODS: &[&str] = &[
     "pane.list",
     "pane.focus",
     "pane.resize",
+    "pane.close",
     "surface.list",
     "surface.create",
     "surface.split",
@@ -944,6 +969,7 @@ pub const METHODS: &[&str] = &[
     "events.unsubscribe",
     "session.dump",
     "session.save",
+    "session.restore",
 ];
 
 #[cfg(test)]
@@ -1324,5 +1350,72 @@ mod tests {
         let id = v["surfaces"][0]["id"].as_str().unwrap();
         assert!(id.starts_with("srf_"));
         assert!(crate::ids::looks_valid(id));
+    }
+
+    #[test]
+    fn directional_splits_insert_on_the_requested_side() {
+        let mut st = AppState::default();
+        let ws = call(&mut st, "workspace.create", json!({"name":"main"}));
+        let wsid = ws["workspace"]["id"].as_str().unwrap().to_string();
+        let sid = call(&mut st, "surface.list", json!({}))["surfaces"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        call(
+            &mut st,
+            "surface.split",
+            json!({"surface_id": sid, "direction": "left", "focus": false}),
+        );
+        let layout = call(&mut st, "workspace.layout", json!({"workspace_id": wsid}));
+        let children = layout["workspace"]["root"]["children"].as_array().unwrap();
+        let first_pane = children[0]["pane_id"].as_str().unwrap();
+        let surface_pane = call(&mut st, "surface.list", json!({}))["surfaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["id"].as_str() == Some(sid.as_str()))
+            .and_then(|s| s["pane_id"].as_str())
+            .unwrap()
+            .to_string();
+        assert_ne!(first_pane, surface_pane, "left split must lead the tree");
+    }
+
+    #[test]
+    fn pane_close_removes_every_tab_in_that_pane() {
+        let mut st = AppState::default();
+        call(&mut st, "workspace.create", json!({}));
+        let sid = call(&mut st, "surface.list", json!({}))["surfaces"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        call(
+            &mut st,
+            "surface.split",
+            json!({"surface_id": sid, "direction": "right", "focus": false}),
+        );
+        let panes = call(&mut st, "pane.list", json!({}));
+        let pane_id = panes["panes"][0]["id"].as_str().unwrap().to_string();
+        call(&mut st, "pane.close", json!({"pane_id": pane_id}));
+        let after = call(&mut st, "pane.list", json!({}));
+        assert_eq!(after["panes"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn session_restore_accepts_a_dumped_snapshot() {
+        let mut source = AppState::default();
+        call(&mut source, "workspace.create", json!({"name":"saved"}));
+        let snapshot = call(&mut source, "session.dump", json!({}))["session"].clone();
+
+        let mut target = AppState::default();
+        let restored = call(&mut target, "session.restore", json!({"session": snapshot}));
+        assert_eq!(restored["restored"], 1);
+        assert_eq!(
+            call(&mut target, "workspace.list", json!({}))["workspaces"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }

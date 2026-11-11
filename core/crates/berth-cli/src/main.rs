@@ -18,10 +18,28 @@ fn socket_path() -> PathBuf {
     PathBuf::from(home).join("Library/Application Support/Berth/berth.sock")
 }
 
+fn token_path() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    PathBuf::from(home).join("Library/Application Support/Berth/token")
+}
+
+fn token() -> Option<String> {
+    if let Ok(value) = std::env::var("BERTH_TOKEN") {
+        if !value.is_empty() {
+            return Some(value);
+        }
+    }
+    std::fs::read_to_string(token_path())
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 struct Client {
     stream: BufReader<UnixStream>,
     writer: UnixStream,
     next_id: u64,
+    token: Option<String>,
 }
 
 impl Client {
@@ -38,13 +56,18 @@ impl Client {
             stream: BufReader::new(stream),
             writer,
             next_id: 1,
+            token: token(),
         })
     }
 
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
         let id = self.next_id;
         self.next_id += 1;
-        let line = json!({"id": id, "method": method, "params": params}).to_string();
+        let mut request = json!({"id": id, "method": method, "params": params});
+        if let Some(token) = &self.token {
+            request["token"] = json!(token);
+        }
+        let line = request.to_string();
         self.writer
             .write_all(format!("{line}\n").as_bytes())
             .map_err(|e| e.to_string())?;
@@ -74,10 +97,17 @@ impl Client {
         }
     }
 
-    fn stream_events(&mut self, types: Option<Vec<String>>) -> Result<(), String> {
+    fn stream_events(
+        &mut self,
+        types: Option<Vec<String>>,
+        since: Option<u64>,
+    ) -> Result<(), String> {
         let mut params = json!({});
         if let Some(t) = types {
             params["types"] = json!(t);
+        }
+        if let Some(s) = since {
+            params["since"] = json!(s);
         }
         let _ = self.call("events.subscribe", params)?;
         loop {
@@ -120,19 +150,25 @@ berth — control a running Berth instance
 
 usage:
   berth ping
-  berth ls                      workspaces, surfaces and agents
+  berth ls [--json]             workspaces, surfaces and agents
   berth agents [--state S]
   berth new [--name N] [--cwd DIR]
-  berth split SURFACE_ID [--direction right|down]
+  berth close-workspace [WORKSPACE_ID]
+  berth split SURFACE_ID [--direction right|left|up|down]
   berth send SURFACE_ID TEXT    type into a surface
+  berth send-key SURFACE_ID KEY send a named key (enter, esc, ctrl-c, …)
+  berth read SURFACE_ID [--scrollback] [--max-bytes N]
   berth notify TITLE [--level info|needs_input|error] [--body B]
   berth agent-register SURFACE_ID [--provider P] [--name N]
   berth agent-set AGENT_ID [--state S] [--detail D] [--progress 0.4]
-  berth events [--types a,b]
+  berth events [--types a,b] [--since SEQ]
   berth snapshot                session JSON on stdout
+  berth active                  active surface id of the selected workspace
+  berth schema                  protocol methods and events as JSON
 
 env:
   BERTH_SOCKET_PATH   socket location
+  BERTH_TOKEN         socket token (defaults to the token file)
   BERTH_VERBOSE       print unclaimed events to stderr
 ";
 
@@ -150,7 +186,18 @@ fn run() -> Result<(), String> {
             let workspaces = c.call("workspace.list", json!({}))?;
             let surfaces = c.call("surface.list", json!({}))?;
             let agents = c.call("agent.list", json!({}))?;
-            print_ls(&workspaces, &surfaces, &agents);
+            if rest.iter().any(|a| a == "--json") {
+                let combined = json!({
+                    "workspaces": workspaces["workspaces"],
+                    "groups": workspaces["groups"],
+                    "selected_workspace": workspaces["selected_workspace"],
+                    "surfaces": surfaces["surfaces"],
+                    "agents": agents["agents"],
+                });
+                println!("{}", serde_json::to_string_pretty(&combined).unwrap());
+            } else {
+                print_ls(&workspaces, &surfaces, &agents);
+            }
         }
 
         "agents" => {
@@ -182,6 +229,20 @@ fn run() -> Result<(), String> {
             println!("{}", v["workspace"]["id"].as_str().unwrap_or("?"));
         }
 
+        "close-workspace" => {
+            let pos = positional(rest);
+            let wid = if let Some(id) = pos.first() {
+                id.clone()
+            } else {
+                let v = c.call("workspace.list", json!({}))?;
+                v["selected_workspace"]
+                    .as_str()
+                    .ok_or("close-workspace: no selected workspace")?
+                    .to_string()
+            };
+            c.call("workspace.close", json!({"workspace_id": wid}))?;
+        }
+
         "split" => {
             let pos = positional(rest);
             let sid = pos.first().ok_or("split: missing SURFACE_ID")?;
@@ -201,6 +262,28 @@ fn run() -> Result<(), String> {
                 "surface.send_text",
                 json!({"surface_id": sid, "text": text}),
             )?;
+        }
+
+        "send-key" => {
+            let pos = positional(rest);
+            let sid = pos.first().ok_or("send-key: missing SURFACE_ID")?;
+            let key = pos.get(1).ok_or("send-key: missing KEY")?;
+            c.call("surface.send_key", json!({"surface_id": sid, "key": key}))?;
+        }
+
+        "read" => {
+            let pos = positional(rest);
+            let sid = pos.first().ok_or("read: missing SURFACE_ID")?;
+            let mut params = json!({"surface_id": sid, "scope": "screen"});
+            if rest.iter().any(|a| a == "--scrollback") {
+                params["scope"] = json!("scrollback");
+            }
+            if let Some(value) = arg_after(rest, "--max-bytes") {
+                let n: u64 = value.parse().map_err(|_| "max-bytes must be a number")?;
+                params["max_bytes"] = json!(n);
+            }
+            let v = c.call("surface.read_text", params)?;
+            print!("{}", v["text"].as_str().unwrap_or(""));
         }
 
         "notify" => {
@@ -258,12 +341,26 @@ fn run() -> Result<(), String> {
                     .map(String::from)
                     .collect()
             });
-            c.stream_events(types)?;
+            let since = arg_after(rest, "--since")
+                .map(|s| s.parse::<u64>())
+                .transpose()
+                .map_err(|_| "since must be a sequence number")?;
+            c.stream_events(types, since)?;
         }
 
         "snapshot" => {
             let v = c.call("session.dump", json!({}))?;
             println!("{}", serde_json::to_string_pretty(&v["session"]).unwrap());
+        }
+
+        "active" => {
+            let v = c.call("workspace.list", json!({}))?;
+            println!("{}", v["selected_surface"].as_str().unwrap_or(""));
+        }
+
+        "schema" => {
+            let v = c.call("system.capabilities", json!({}))?;
+            println!("{}", serde_json::to_string_pretty(&v).unwrap());
         }
 
         other => {

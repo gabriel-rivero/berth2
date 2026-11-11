@@ -136,7 +136,9 @@ jobs:
             Download `Berth-*.zip`, unzip, and right-click → Open the first time
             (the app is ad-hoc signed, not notarized).
 
-            This build is the M1 workspace shell: split tree, per-pane tabs,
-            sidebar with live title/cwd/git/ports and unread state, command
-            palette, editable shortcuts, and session restore. Agent features
-            land in M2.
+            This build is the M2 protocol spine on top of the M1 workspace shell.
+            The shell still has the split tree, per-pane tabs, sidebar and
+            session restore; the socket now speaks authenticated NDJSON with
+            replayable events, and the `berth` CLI can drive and inspect a
+            running instance (`berth ls`, `split`, `send`, `read`, `events`).
+            Agent features land in M3.

@@ -157,6 +157,10 @@ pub fn restore(
                 env: vec![
                     ("BERTH_SURFACE_ID".into(), surface.id.clone()),
                     ("BERTH_WORKSPACE_ID".into(), ws_id.clone()),
+                    (
+                        "BERTH_PROTOCOL".into(),
+                        crate::protocol::PROTOCOL_VERSION.to_string(),
+                    ),
                 ],
                 cols: surface.cols.max(80),
                 rows: surface.rows.max(24),
@@ -281,6 +285,7 @@ mod tests {
         st.split_surface(
             &sid,
             Orientation::Horizontal,
+            false,
             SpawnRequest {
                 cwd: Some("/tmp".into()),
                 ..Default::default()

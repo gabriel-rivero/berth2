@@ -81,13 +81,31 @@ impl PaneNode {
 
     /// Split `target` in place, inserting `new_pane` on the trailing side.
     pub fn split(&mut self, target: &str, new_pane: &str, orientation: Orientation) -> bool {
+        self.split_side(target, new_pane, orientation, false)
+    }
+
+    /// Split `target`, inserting `new_pane` before or after it. `left`/`up`
+    /// need the leading side so the new terminal lands where the user asked.
+    pub fn split_side(
+        &mut self,
+        target: &str,
+        new_pane: &str,
+        orientation: Orientation,
+        before: bool,
+    ) -> bool {
         match self {
             Self::Leaf { pane_id } if pane_id == target => {
                 let existing = Self::leaf(target);
+                let new = Self::leaf(new_pane);
+                let children = if before {
+                    vec![new, existing]
+                } else {
+                    vec![existing, new]
+                };
                 *self = Self::Split {
                     id: ids::mint(ids::PANE),
                     orientation,
-                    children: vec![existing, Self::leaf(new_pane)],
+                    children,
                     weights: vec![0.5, 0.5],
                 };
                 true
@@ -95,7 +113,7 @@ impl PaneNode {
             Self::Leaf { .. } => false,
             Self::Split { children, .. } => children
                 .iter_mut()
-                .any(|c| c.split(target, new_pane, orientation)),
+                .any(|c| c.split_side(target, new_pane, orientation, before)),
         }
     }
 
@@ -357,5 +375,16 @@ mod tests {
             let sum: f32 = weights.iter().sum();
             assert!((sum - 1.0).abs() < 1e-5);
         }
+    }
+
+    #[test]
+    fn split_side_controls_leaf_order() {
+        let mut leading = PaneNode::leaf("p1");
+        assert!(leading.split_side("p1", "new", Orientation::Horizontal, true));
+        assert_eq!(leading.leaves(), vec!["new", "p1"]);
+
+        let mut trailing = PaneNode::leaf("p1");
+        assert!(trailing.split_side("p1", "new", Orientation::Vertical, false));
+        assert_eq!(trailing.leaves(), vec!["p1", "new"]);
     }
 }

@@ -1,7 +1,7 @@
-// User configuration: shortcut overrides and terminal font size in
-// ~/.config/berth/config.json.
+// User configuration: shortcut overrides, terminal font size and socket mode
+// in ~/.config/berth/config.json.
 //
-//   {"shortcuts": {"splitRight": "cmd+d"}, "fontSize": 14}
+//   {"shortcuts": {"splitRight": "cmd+d"}, "fontSize": 14, "socket": "local"}
 //
 // Shortcuts are parsed into an AppKit key equivalent + modifier mask. Unknown
 // keys are ignored, and a missing file means the built-in defaults.
@@ -98,9 +98,15 @@ final class AppConfig {
     private(set) var shortcuts: [String: String] = [:]
     /// Terminal font size in points, handed to Ghostty as `font-size`.
     private(set) var fontSize: Double = 14
+    /// `off`, `local` (token for mutations) or `trusted` (same-uid only).
+    private(set) var socketMode: SocketMode = .local
 
     private init() {
         load()
+    }
+
+    func setSocketMode(_ mode: SocketMode) {
+        socketMode = mode
     }
 
     func setFontSize(_ value: Double) {
@@ -134,6 +140,9 @@ final class AppConfig {
         if let value = object["fontSize"] as? NSNumber {
             setFontSize(value.doubleValue)
         }
+        if let value = object["socket"] as? String, let mode = SocketMode(rawValue: value) {
+            socketMode = mode
+        }
     }
 
     func save() throws {
@@ -141,7 +150,11 @@ final class AppConfig {
             at: Self.url.deletingLastPathComponent(),
             withIntermediateDirectories: true)
         let data = try JSONSerialization.data(
-            withJSONObject: ["shortcuts": shortcuts, "fontSize": fontSize],
+            withJSONObject: [
+                "shortcuts": shortcuts,
+                "fontSize": fontSize,
+                "socket": socketMode.rawValue,
+            ],
             options: [.prettyPrinted, .sortedKeys])
         try data.write(to: Self.url, options: .atomic)
     }

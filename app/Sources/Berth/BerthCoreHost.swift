@@ -48,7 +48,16 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
     /// Called after a report so queued events reach socket subscribers.
     var onEvents: (() -> Void)?
 
+    /// Injected into every child so CLI/hooks can authenticate to the socket.
+    private var transportToken: String?
+    private var transportSocketPath: String?
+
     private init() {}
+
+    func configureTransport(token: String?, socketPath: String) {
+        transportToken = token
+        transportSocketPath = socketPath
+    }
 
     // MARK: - HostOps
 
@@ -69,10 +78,17 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
 
             let view = GhosttySurfaceView(frame: NSRect(x: 0, y: 0, width: 900, height: 600))
             view.berthSurfaceID = id
+            var childEnv = req.env
+            if let transportToken {
+                childEnv.append("BERTH_TOKEN=\(transportToken)")
+            }
+            if let transportSocketPath {
+                childEnv.append("BERTH_SOCKET_PATH=\(transportSocketPath)")
+            }
             guard view.createSurface(
                 command: req.command,
                 workingDirectory: req.cwd,
-                env: req.env
+                env: childEnv
             ) else {
                 throw FfiError.Internal(message: "ghostty_surface_new failed")
             }

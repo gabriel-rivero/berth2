@@ -109,11 +109,11 @@ This trait is also the **portability seam**: a future Rust shell on Linux implem
 
 ### 2.4 Protocol server (Swift)
 
-A POSIX `AF_UNIX` socket at `berth.sock`, `0600`, NDJSON framing, one serial queue per connection (`SocketServer.swift`). It parses almost nothing itself: bytes → `Engine.dispatch` → bytes. Event subscription is a transport flag (`events.subscribe`), and after each request the handler drains the core's queue and fans the lines out to subscribed clients (`CoreHandler.swift`).
+A POSIX `AF_UNIX` socket at `berth.sock`, `0600`, NDJSON framing, one serial queue per connection (`SocketServer.swift`). Each connection is greeted with a `hello` event, then bytes → auth check (`SocketAuth.swift`) → `Engine.dispatch` → bytes. The transport keeps a bounded replay ring (`EventRing.swift`, last 1024 events) so `events.subscribe {"since": N}` can replay or report a `gap`; per-connection type filters and a monotonic `seq` cursor are enforced there. Request lines over 8 MiB close the connection as `payload_too_large`; a 4 MiB outbound backlog disconnects a stalled subscriber instead of growing without bound. After each request the handler drains the core's queue and fans the lines out to subscribed clients (`CoreHandler.swift`).
 
 ### 2.5 CLI — `berth` (Rust, no UI deps)
 
-Thin client over the same protocol: `berth ls`, `berth agent new`, `berth notify`, `berth run -- <cmd>`, `berth events`. Also the binary invoked by editor hooks (`berth agent update --state waiting_input`), so hook latency ≈ one socket round trip.
+Thin client over the same protocol: `berth ls [--json]`, `berth send`, `berth send-key`, `berth read`, `berth split`, `berth events [--since N]`, `berth snapshot`, `berth notify`, `berth run -- <cmd>`. It authenticates with `BERTH_TOKEN` (inherited by children) or the token file. Also the binary invoked by editor hooks (`berth agent-set --state waiting_input`), so hook latency ≈ one socket round trip.
 
 ## 3. Concurrency rules
 

@@ -1,21 +1,29 @@
-// Unix-socket JSON-RPC server. Transport only: bytes in, bytes out. All domain
-// decisions belong to berth-core (docs/03-protocol.md).
+// Unix-socket NDJSON server. Transport only: framing, auth, subscriptions,
+// replay and backpressure live here; domain decisions belong to berth-core
+// (docs/03-protocol.md).
 
 import Darwin
 import Foundation
 
-/// A place to send unsolicited lines (events) back to one connection.
+/// Per-connection event subscription, controlled by the request handler after
+/// it has seen `events.subscribe`.
 protocol ClientSink: AnyObject {
-    func setSubscribed(_ value: Bool)
+    func subscribe(types: [String]?, since: UInt64?)
+    func unsubscribe()
 }
 
 protocol RequestHandler: AnyObject {
     /// One complete NDJSON line in, one NDJSON line out (no newline needed).
     func handle(_ line: Data, from sink: ClientSink) -> Data?
+    /// Greeting written before the first request is read.
+    func hello() -> Data?
 }
 
 final class SocketServer {
     private let path: String
+    private let mode: SocketMode
+    private let token: String?
+    private let ring = EventRing()
     private var listenFD: Int32 = -1
     private var acceptSource: DispatchSourceRead?
     private let acceptQueue = DispatchQueue(label: "dev.berth.socket.accept")
@@ -23,9 +31,11 @@ final class SocketServer {
     private let clientsLock = NSLock()
     private let handler: RequestHandler
 
-    init(path: String, handler: RequestHandler) {
+    init(path: String, handler: RequestHandler, mode: SocketMode = .local, token: String? = nil) {
         self.path = path
         self.handler = handler
+        self.mode = mode
+        self.token = token
     }
 
     deinit { stop() }
@@ -60,9 +70,9 @@ final class SocketServer {
             close(fd)
             throw err
         }
-        // 0600 is the whole of the v1 auth model (docs/03-protocol.md §2);
-        // the token handshake lands with the client library.
         chmod(path, 0o600)
+        let flags = fcntl(fd, F_GETFL, 0)
+        _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
         guard listen(fd, 16) == 0 else {
             let err = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
             close(fd)
@@ -74,7 +84,7 @@ final class SocketServer {
         source.setEventHandler { [weak self] in self?.acceptPending() }
         source.resume()
         acceptSource = source
-        NSLog("berth: listening on \(path)")
+        NSLog("berth: listening on \(path) (\(mode.rawValue) mode)")
     }
 
     func stop() {
@@ -94,14 +104,16 @@ final class SocketServer {
         unlink(path)
     }
 
-    /// Deliver event lines to every subscribed client. `ndjson` may hold several
-    /// newline-separated events; each is framed independently.
+    /// Record an event batch for replay, then fan it out. Filtering happens in
+    /// each client so a reconnect can replay events it never asked to see live.
     func broadcast(_ ndjson: String) {
+        let events = ring.record(ndjson)
+        guard !events.isEmpty else { return }
         clientsLock.lock()
         let targets = Array(clients.values)
         clientsLock.unlock()
         for client in targets {
-            client.sendIfSubscribed(ndjson)
+            client.deliver(events)
         }
     }
 
@@ -109,7 +121,13 @@ final class SocketServer {
         while true {
             let clientFD = accept(listenFD, nil, nil)
             if clientFD < 0 { return }
-            let client = Client(fd: clientFD, handler: handler) { [weak self] fd in
+            let client = Client(
+                fd: clientFD,
+                handler: handler,
+                ring: ring,
+                mode: mode,
+                token: token
+            ) { [weak self] fd in
                 self?.clientsLock.lock()
                 self?.clients.removeValue(forKey: fd)
                 self?.clientsLock.unlock()
@@ -125,69 +143,234 @@ final class SocketServer {
 private final class Client: ClientSink {
     private let fd: Int32
     private let queue: DispatchQueue
-    private var source: DispatchSourceRead?
-    private var frames = NDJSONBuffer()
-    private var subscribed = false
     private let handler: RequestHandler
+    private let ring: EventRing
+    private let mode: SocketMode
+    private let token: String?
     private let onClose: (Int32) -> Void
 
-    init(fd: Int32, handler: RequestHandler, onClose: @escaping (Int32) -> Void) {
+    private var source: DispatchSourceRead?
+    private var writeSource: DispatchSourceWrite?
+    private var frames = NDJSONBuffer()
+    private var outbound = Data()
+    private var closed = false
+    private let maxPendingBytes = 4 << 20
+
+    private var subscribed = false
+    private var filters: Set<String>?
+    private var lastSeq: UInt64 = 0
+
+    init(
+        fd: Int32,
+        handler: RequestHandler,
+        ring: EventRing,
+        mode: SocketMode,
+        token: String?,
+        onClose: @escaping (Int32) -> Void
+    ) {
         self.fd = fd
         self.handler = handler
+        self.ring = ring
+        self.mode = mode
+        self.token = token
         self.onClose = onClose
-        // One serial queue per connection: ordering per client, no global lock.
         self.queue = DispatchQueue(label: "dev.berth.client.\(fd)")
     }
 
     func start() {
+        var one: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
+        let flags = fcntl(fd, F_GETFL, 0)
+        _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
+
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
         source.setEventHandler { [weak self] in self?.readAvailable() }
         source.setCancelHandler { [fd] in Darwin.close(fd) }
         source.resume()
         self.source = source
+
+        queue.async { [weak self] in
+            guard let self, let hello = self.handler.hello() else { return }
+            self.send(hello)
+        }
     }
 
     func close() {
-        queue.async { self.source?.cancel() }
+        queue.async { self.closeNow() }
     }
 
-    func setSubscribed(_ value: Bool) {
-        queue.async { self.subscribed = value }
-    }
+    // MARK: - Subscriptions
 
-    func sendIfSubscribed(_ ndjson: String) {
+    func subscribe(types: [String]?, since: UInt64?) {
         queue.async {
-            guard self.subscribed else { return }
-            for line in ndjson.split(separator: "\n") where !line.isEmpty {
-                self.write(Data(line.utf8))
+            guard !self.closed else { return }
+            self.subscribed = true
+            self.filters = types.map { Set($0) }
+            if let since {
+                let replay = self.ring.replay(since: since, types: self.filters)
+                if replay.dropped > 0 {
+                    self.sendGap(replay.dropped)
+                }
+                for line in replay.lines {
+                    self.send(Data(line.utf8))
+                }
+                self.lastSeq = max(self.lastSeq, replay.upTo)
+            } else {
+                self.lastSeq = max(self.lastSeq, self.ring.head())
             }
         }
     }
+
+    func unsubscribe() {
+        queue.async {
+            self.subscribed = false
+            self.filters = nil
+        }
+    }
+
+    func deliver(_ events: [WireEvent]) {
+        queue.async {
+            guard !self.closed, self.subscribed else { return }
+            for event in events {
+                guard event.seq > self.lastSeq else { continue }
+                self.lastSeq = event.seq
+                if self.filters?.contains(event.type) ?? true {
+                    self.send(Data(event.line.utf8))
+                }
+            }
+        }
+    }
+
+    // MARK: - I/O
 
     private func readAvailable() {
         var chunk = [UInt8](repeating: 0, count: 16 * 1024)
         let n = read(fd, &chunk, chunk.count)
-        if n <= 0 {
-            source?.cancel()
-            onClose(fd)
+        if n < 0 {
+            if errno == EAGAIN || errno == EINTR { return }
+            closeNow()
             return
         }
-        for line in frames.append(Data(chunk[0..<n])) {
-            guard let response = handler.handle(line, from: self) else { continue }
-            write(response)
+        if n == 0 {
+            closeNow()
+            return
+        }
+
+        let lines = frames.append(Data(chunk[0..<n]))
+        if frames.droppedOversized {
+            send(Data(Self.errorLine(
+                id: NSNull(),
+                code: "payload_too_large",
+                message: "request exceeds 8 MiB").utf8))
+            closeNow()
+            return
+        }
+
+        for line in lines {
+            handle(line)
         }
     }
 
-    private func write(_ data: Data) {
-        var out = data
-        out.append(0x0A)
-        out.withUnsafeBytes { raw in
-            var written = 0
-            while written < raw.count {
-                let w = Darwin.write(fd, raw.baseAddress!.advanced(by: written), raw.count - written)
-                if w <= 0 { return }
-                written += w
+    private func handle(_ line: Data) {
+        guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else {
+            // Let the core produce the canonical bad_request response.
+            if let response = handler.handle(line, from: self) {
+                send(response)
             }
+            return
         }
+
+        let id = object["id"] ?? NSNull()
+        if let method = object["method"] as? String,
+           !SocketAuth.authorized(
+                method: method,
+                presented: SocketAuth.presentedToken(in: object),
+                token: token,
+                mode: mode)
+        {
+            send(Data(Self.errorLine(
+                id: id,
+                code: "permission_denied",
+                message: "token required for \(method)").utf8))
+            return
+        }
+
+        if let response = handler.handle(line, from: self) {
+            send(response)
+        }
+    }
+
+    /// Append one frame and flush non-blockingly. A client that cannot keep up
+    /// is disconnected rather than allowed to grow an unbounded buffer.
+    private func send(_ data: Data) {
+        guard !closed else { return }
+        outbound.append(data)
+        outbound.append(0x0A)
+        if outbound.count > maxPendingBytes {
+            NSLog("berth: socket client \(fd) exceeded the outbound buffer")
+            closeNow()
+            return
+        }
+        flush()
+    }
+
+    private func sendGap(_ dropped: UInt64) {
+        let line = #"{"event":"gap","data":{"dropped":\#(dropped)}}"#
+        send(Data(line.utf8))
+    }
+
+    private func flush() {
+        while !closed && !outbound.isEmpty {
+            let written: Int = outbound.withUnsafeBytes { raw -> Int in
+                guard let base = raw.baseAddress else { return 0 }
+                return Darwin.write(fd, base, raw.count)
+            }
+            if written > 0 {
+                outbound.removeFirst(written)
+                continue
+            }
+            if written < 0 && errno == EINTR { continue }
+            if written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) {
+                ensureWriteSource()
+                return
+            }
+            closeNow()
+            return
+        }
+        if outbound.isEmpty {
+            writeSource?.cancel()
+            writeSource = nil
+        }
+    }
+
+    private func ensureWriteSource() {
+        guard writeSource == nil, !closed else { return }
+        let source = DispatchSource.makeWriteSource(fileDescriptor: fd, queue: queue)
+        source.setEventHandler { [weak self] in self?.flush() }
+        source.resume()
+        writeSource = source
+    }
+
+    private func closeNow() {
+        guard !closed else { return }
+        closed = true
+        source?.cancel()
+        source = nil
+        writeSource?.cancel()
+        writeSource = nil
+        shutdown(fd, SHUT_RDWR)
+        onClose(fd)
+    }
+
+    private static func errorLine(id: Any, code: String, message: String) -> String {
+        let object: [String: Any] = [
+            "id": id,
+            "ok": false,
+            "error": ["code": code, "message": message],
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: object) else {
+            return #"{"id":null,"ok":false,"error":{"code":"internal","message":"encode"}}"#
+        }
+        return String(decoding: data, as: UTF8.self)
     }
 }

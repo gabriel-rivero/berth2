@@ -34,16 +34,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.engine = engine
         BerthCoreHost.shared.engine = engine
 
+        var mode = AppConfig.shared.socketMode
+        var token: String?
+        if mode != .off {
+            token = try? SocketAuth.loadOrCreateToken(at: Self.tokenURL)
+            if mode == .local, token == nil {
+                NSLog("berth: could not create a socket token; disabling the socket")
+                mode = .off
+            }
+        }
+        BerthCoreHost.shared.configureTransport(token: token, socketPath: Self.socketPath)
+
         let handler = CoreHandler(engine: engine)
         self.handler = handler
-        let socket = SocketServer(path: Self.socketPath, handler: handler)
-        handler.server = socket
-        do {
-            try socket.start()
-        } catch {
-            NSLog("berth: socket unavailable at \(Self.socketPath): \(error)")
+        if mode != .off {
+            let socket = SocketServer(
+                path: Self.socketPath,
+                handler: handler,
+                mode: mode,
+                token: token)
+            handler.server = socket
+            do {
+                try socket.start()
+            } catch {
+                NSLog("berth: socket unavailable at \(Self.socketPath): \(error)")
+            }
+            self.socket = socket
         }
-        self.socket = socket
         BerthCoreHost.shared.onEvents = { [weak handler, weak self] in
             handler?.flushEvents()
             Task { @MainActor [weak self] in self?.scheduleSessionSave() }
@@ -378,6 +395,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private static var sessionURL: URL {
         supportDirectory.appendingPathComponent("session.json")
+    }
+
+    private static var tokenURL: URL {
+        SocketAuth.tokenURL(supportDirectory: supportDirectory)
     }
 
     private static var journalURL: URL {
