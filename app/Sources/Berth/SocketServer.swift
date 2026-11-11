@@ -140,7 +140,7 @@ final class SocketServer {
     }
 }
 
-private final class Client: ClientSink {
+private final class Client: ClientSink, @unchecked Sendable {
     private let fd: Int32
     private let queue: DispatchQueue
     private let handler: RequestHandler
