@@ -25,7 +25,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Berth"
 
-cat > "$APP/Contents/Info.plist" <<'PLIST'
+cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -44,6 +44,17 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
+
+# LaunchServices rejects placeholder or non-numeric versions with a useless
+# error (often -47 / fBsyErr), so fail the bundle instead of shipping one.
+if grep -q '\${' "$APP/Contents/Info.plist"; then
+  echo "bundle: Info.plist still contains an unexpanded placeholder" >&2
+  exit 1
+fi
+if [[ ! "$BUILD" =~ ^[0-9]+$ ]]; then
+  echo "bundle: CFBundleVersion must be numeric, got '$BUILD'" >&2
+  exit 1
+fi
 
 # Ghostty needs its runtime resources (terminfo, shell integration, themes).
 if [[ -d vendor/ghostty/zig-out/share/ghostty ]]; then

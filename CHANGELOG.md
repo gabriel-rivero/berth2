@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.1
+
+### Release fix
+
+- `bundle.sh` now expands `CFBundleShortVersionString` and `CFBundleVersion`;
+  0.8.0 shipped literal `${VERSION}`/`${BUILD}` placeholders, which makes the
+  bundle invalid to LaunchServices (typically "The application cannot be
+  opened" with error `-47` / `fBsyErr`).
+- The bundler rejects unexpanded placeholders and non-numeric build numbers,
+  and CI validates both keys with `plutil` before uploading the archive.
+
 ## 0.8.0
 
 ### Agents (M3)

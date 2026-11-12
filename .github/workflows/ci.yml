@@ -98,6 +98,18 @@ jobs:
       - name: bundle app
         run: ./scripts/bundle.sh release
 
+      # Catch placeholders such as ${VERSION} before upload: LaunchServices
+      # refuses to open an app whose version keys are not concrete numbers.
+      - name: bundle metadata
+        run: |
+          plist=build/Berth.app/Contents/Info.plist
+          plutil -lint "$plist"
+          version=$(plutil -extract CFBundleShortVersionString raw "$plist")
+          build=$(plutil -extract CFBundleVersion raw "$plist")
+          echo "version=$version build=$build"
+          [[ "$version" =~ ^[0-9]+(\.[0-9]+)*$ ]]
+          [[ "$build" =~ ^[0-9]+$ ]]
+
       # A build that needs a library from the runner is not shippable: this is
       # exactly how v0.1.0 shipped with /Users/runner/.../libberth_ffi.dylib.
       - name: bundle is self-contained
@@ -136,6 +148,11 @@ jobs:
 
             Download `Berth-*.zip`, unzip, and right-click → Open the first time
             (the app is ad-hoc signed, not notarized).
+
+            **0.8.1 fixes the 0.8.0 bundle:** 0.8.0 shipped literal
+            `${VERSION}`/`${BUILD}` placeholders in Info.plist, which makes
+            LaunchServices refuse to open it with error -47 (`fBsyErr`). Skip
+            0.8.0 and use this build.
 
             This build finishes the M2/M3/M4 gaps. Agents appear in the sidebar
             with provider, state, detail and progress; a dead child becomes
