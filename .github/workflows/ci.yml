@@ -146,4 +146,6 @@ jobs:
             flow into Berth — relaunch then resumes with `claude --resume <id>`.
             Passive detection badges claude/codex/opencode started in any shell.
             The split tree, tabs, authenticated NDJSON socket and CLI remain.
-            Perf, crash hardening and polish are the rest of M4.
+            Crash hardening frees PTYs before shutdown, validates snapshots
+            before restoring, and falls back through journal snapshots when a
+            session file is corrupt. Perf and polish are the rest of M4.

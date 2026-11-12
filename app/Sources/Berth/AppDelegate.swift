@@ -89,6 +89,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         if isDuplicateInstance {
+            BerthCoreHost.shared.shutdown()
             GhosttyHost.shared.stop()
             return
         }
@@ -98,6 +99,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         detectTimer?.invalidate()
         socket?.stop()
         socket = nil
+        BerthCoreHost.shared.shutdown()
         GhosttyHost.shared.stop()
     }
 
@@ -369,6 +371,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if let data = try? Data(contentsOf: Self.journalURL),
            let text = String(data: data, encoding: .utf8) {
+            var journalCandidates: [(Int, String)] = []
             for line in text.split(separator: "\n").reversed() {
                 guard let lineData = line.data(using: .utf8),
                       let object = try? JSONSerialization.jsonObject(with: lineData)
@@ -379,9 +382,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                       let snapshotData = try? JSONSerialization.data(withJSONObject: snapshot),
                       let json = String(data: snapshotData, encoding: .utf8)
                 else { continue }
-                candidates.append((ts, json))
-                break
+                journalCandidates.append((ts, json))
+                // A corrupt or structurally invalid newest line should not
+                // strand recovery; keep a few older snapshots as fallbacks.
+                if journalCandidates.count == 5 { break }
             }
+            candidates.append(contentsOf: journalCandidates)
         }
 
         return candidates.sorted { $0.0 > $1.0 }.map(\.1)

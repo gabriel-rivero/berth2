@@ -146,6 +146,22 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
         }
     }
 
+    /// Tear every PTY down while Ghostty is still alive. Called on terminate,
+    /// before `ghostty_app_free`, so children get a clean close instead of
+    /// being orphaned when the process exits.
+    func shutdown() {
+        try? onMain {
+            for view in surfaces.values {
+                view.teardown()
+            }
+            surfaces.removeAll()
+            surfaceWorkspace.removeAll()
+            lastActiveSurface = nil
+            window?.orderOut(nil)
+            window = nil
+        }
+    }
+
     func focus(surfaceId: String) throws {
         try onMain {
             guard let view = surfaces[surfaceId] else {

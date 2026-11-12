@@ -202,6 +202,31 @@ If hooks do not fire, check `~/.claude/settings.json` and run the generated
 command by hand with a sample payload:
 `echo '{"hook_event_name":"Stop"}' | ./core/target/release/berth hook claude`.
 
+## M4 crash and restore checkpoint (run on the Mac)
+
+```sh
+make cli
+pkill -x Berth          # start from a clean instance
+open build/Berth.app    # or the installed app
+```
+
+1. **Clean quit reaps PTYs.** Note the app pid (`pid=$(pgrep -x Berth)`), open
+   three tabs, then quit with ⌘Q. `pgrep -P "$pid"` must be empty afterwards,
+   and `ps -axo stat,pid,ppid,command | awk '$1 ~ /^Z/'` must not show Berth
+   children.
+2. **Crash restore loses at most 500 ms.** Create a workspace and split once,
+   wait one second, then `kill -9 "$(pgrep -x Berth)"`. Relaunch: the workspace,
+   split, tabs and cwd are back. Scrollback is intentionally not restored.
+3. **Corrupt session falls back to the journal.** After the crash above, run
+   `printf 'not json\n' > "$HOME/Library/Application Support/Berth/session.json"`
+   and relaunch. The journal's newest snapshot must restore the layout instead
+   of bootstrapping an empty session.
+4. **Corrupt journal line is ignored.** Append a garbage line to
+   `journal.ndjson` and relaunch; the app must still open and save over it.
+5. **Restore rejects an inconsistent snapshot.** `cargo test -p berth-core
+   store::tests` covers missing panes, duplicate surfaces and dangling agents;
+   a rejected snapshot must leave the live state untouched and fall back.
+
 ## Known gaps
 
 These mirror the M5 pull-forward list in `docs/04-roadmap.md`; none should be

@@ -106,6 +106,139 @@ pub fn check_version(snapshot: &Snapshot) -> Result<(), CoreError> {
     Ok(())
 }
 
+/// Reject a snapshot that cannot be rebuilt before mutating live state. A
+/// corrupt journal line should fall back to an older snapshot, not leave the
+/// app half-restored or panic on a missing pane.
+pub fn validate(snapshot: &Snapshot) -> Result<(), CoreError> {
+    check_version(snapshot)?;
+    let invalid = |message: String| CoreError::new(ErrorCode::BadRequest, message);
+
+    let mut workspace_ids = std::collections::HashSet::new();
+    let mut pane_ids = std::collections::HashSet::new();
+    let mut surface_ids = std::collections::HashSet::new();
+    let mut agent_ids = std::collections::HashSet::new();
+
+    for wsnap in &snapshot.workspaces {
+        let workspace = &wsnap.workspace;
+        if !workspace_ids.insert(workspace.id.as_str()) {
+            return Err(invalid(format!("duplicate workspace id {}", workspace.id)));
+        }
+
+        let leaves = workspace.root.leaves();
+        if leaves.is_empty() {
+            return Err(invalid(format!(
+                "workspace {} has an empty pane tree",
+                workspace.id
+            )));
+        }
+        let mut tree_panes = std::collections::HashSet::new();
+        for leaf in leaves {
+            if !tree_panes.insert(leaf) {
+                return Err(invalid(format!(
+                    "duplicate pane id {} in workspace {}",
+                    leaf, workspace.id
+                )));
+            }
+            if !wsnap.panes.iter().any(|p| p.id == leaf) {
+                return Err(invalid(format!(
+                    "pane {} is in the tree but has no record",
+                    leaf
+                )));
+            }
+        }
+
+        for pane in &wsnap.panes {
+            if !pane_ids.insert(pane.id.as_str()) {
+                return Err(invalid(format!("duplicate pane id {}", pane.id)));
+            }
+            if pane.workspace_id != workspace.id {
+                return Err(invalid(format!(
+                    "pane {} belongs to workspace {}, not {}",
+                    pane.id, pane.workspace_id, workspace.id
+                )));
+            }
+            if !tree_panes.contains(pane.id.as_str()) {
+                return Err(invalid(format!(
+                    "pane {} is not in the workspace tree",
+                    pane.id
+                )));
+            }
+            let mut tabs = std::collections::HashSet::new();
+            for surface_id in &pane.surfaces {
+                if !tabs.insert(surface_id) {
+                    return Err(invalid(format!(
+                        "duplicate surface {} in pane {}",
+                        surface_id, pane.id
+                    )));
+                }
+                let surface = wsnap
+                    .surfaces
+                    .iter()
+                    .find(|s| &s.id == surface_id)
+                    .ok_or_else(|| {
+                        invalid(format!(
+                            "pane {} references missing surface {}",
+                            pane.id, surface_id
+                        ))
+                    })?;
+                if surface.pane_id != pane.id || surface.workspace_id != workspace.id {
+                    return Err(invalid(format!(
+                        "surface {} does not belong to pane {}",
+                        surface.id, pane.id
+                    )));
+                }
+            }
+        }
+
+        for surface in &wsnap.surfaces {
+            if !surface_ids.insert(surface.id.as_str()) {
+                return Err(invalid(format!("duplicate surface id {}", surface.id)));
+            }
+            if surface.workspace_id != workspace.id {
+                return Err(invalid(format!(
+                    "surface {} belongs to workspace {}, not {}",
+                    surface.id, surface.workspace_id, workspace.id
+                )));
+            }
+            let pane = wsnap
+                .panes
+                .iter()
+                .find(|p| p.id == surface.pane_id)
+                .ok_or_else(|| {
+                    invalid(format!(
+                        "surface {} references missing pane {}",
+                        surface.id, surface.pane_id
+                    ))
+                })?;
+            if !pane.surfaces.contains(&surface.id) {
+                return Err(invalid(format!(
+                    "pane {} does not list surface {}",
+                    pane.id, surface.id
+                )));
+            }
+        }
+
+        for agent in &wsnap.agents {
+            if !agent_ids.insert(agent.id.as_str()) {
+                return Err(invalid(format!("duplicate agent id {}", agent.id)));
+            }
+            if agent.workspace_id != workspace.id {
+                return Err(invalid(format!(
+                    "agent {} belongs to workspace {}, not {}",
+                    agent.id, agent.workspace_id, workspace.id
+                )));
+            }
+            if !surface_ids.contains(agent.surface_id.as_str()) {
+                return Err(invalid(format!(
+                    "agent {} references missing surface {}",
+                    agent.id, agent.surface_id
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 impl Default for Snapshot {
     fn default() -> Self {
         Self {
@@ -127,7 +260,7 @@ pub fn restore(
     snapshot: Snapshot,
     ops: &dyn SurfaceOps,
 ) -> Result<usize, CoreError> {
-    check_version(&snapshot)?;
+    validate(&snapshot)?;
     let mut restored = 0;
 
     for wsnap in snapshot.workspaces {
@@ -575,5 +708,43 @@ mod tests {
         snap.version = 99;
         let err = restore(&mut st, snap, &NullOps).unwrap_err();
         assert_eq!(err.code, ErrorCode::Unsupported);
+    }
+
+    #[test]
+    fn corrupt_snapshots_are_rejected_before_mutating_state() {
+        let base = seeded().snapshot();
+        validate(&base).unwrap();
+
+        let mut missing_pane = base.clone();
+        missing_pane.workspaces[0].panes.pop();
+        let mut state = AppState::default();
+        let err = restore(&mut state, missing_pane, &NullOps).unwrap_err();
+        assert_eq!(err.code, ErrorCode::BadRequest);
+        assert!(state.workspaces.is_empty(), "validation must not mutate");
+
+        let mut duplicate_surface = base.clone();
+        let surface = duplicate_surface.workspaces[0].surfaces[0].clone();
+        duplicate_surface.workspaces[0].surfaces.push(surface);
+        assert_eq!(
+            restore(&mut AppState::default(), duplicate_surface, &NullOps)
+                .unwrap_err()
+                .code,
+            ErrorCode::BadRequest
+        );
+
+        let mut dangling_agent = base.clone();
+        dangling_agent
+            .workspaces
+            .iter_mut()
+            .find(|w| !w.agents.is_empty())
+            .unwrap()
+            .agents[0]
+            .surface_id = "srf_missing".into();
+        assert_eq!(
+            restore(&mut AppState::default(), dangling_agent, &NullOps)
+                .unwrap_err()
+                .code,
+            ErrorCode::BadRequest
+        );
     }
 }

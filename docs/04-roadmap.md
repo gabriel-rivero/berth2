@@ -62,12 +62,14 @@ provider mute remain M4/M5 polish.
 
 **Status:** in progress. Hooks landed: `berth hooks install` merges Claude Code
 settings and writes an opencode plugin; both record state/detail and the
-provider session id, so restore uses `--resume`. Perf, crash hardening, and
-polish remain.
+provider session id, so restore uses `--resume`. Crash hardening is in:
+surfaces free their PTY before `ghostty_app_free`, snapshots are validated
+before mutating live state, and corrupt journal entries fall back to the newest
+good snapshot. Perf and polish remain.
 
 - Hook recipes for Claude Code and opencode (shipped as copy-paste snippets + `berth hooks install`). **Done.**
 - Perf pass against the budgets in `docs/02-architecture.md` §9; Instruments trace of startup and keystroke path.
-- Crash/quit safety, zombie PTY audit, restore fuzzing (kill -9 mid-session).
+- Crash/quit safety, zombie PTY audit, restore fuzzing (kill -9 mid-session). **Eager PTY teardown, snapshot validation, and corruption tests landed; Mac audit remains.**
 - Polish: notification popover, empty states, sidebar density, theme tokens, onboarding (one screen).
 - Docs: README, protocol reference, config reference.
 

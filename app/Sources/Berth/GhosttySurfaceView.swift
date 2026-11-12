@@ -97,12 +97,22 @@ final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClient {
     }
 
     deinit {
+        teardown()
+    }
+
+    /// Free the PTY/renderer eagerly. Closing a surface while the app is still
+    /// alive lets Ghostty terminate the child before `ghostty_app_free`; the
+    /// view can remain in a window during teardown without double-freeing.
+    nonisolated func teardown() {
+        berthSurfaceID = nil
         if let surface {
             ghostty_surface_free(surface)
+            self.surface = nil
         }
         for copy in cStrings {
             free(copy)
         }
+        cStrings.removeAll()
     }
 
     // MARK: - Core-facing accessors
