@@ -445,7 +445,7 @@ fn run() -> Result<(), String> {
                     "agent_id": id,
                     "provider": provider,
                     "name": name,
-                    "resume": {"argv": argv, "cwd": cwd, "session_ref": null},
+                    "resume": {"argv": argv, "cwd": cwd, "env": env, "session_ref": null},
                 }),
             )?;
             println!("{surface_id}");

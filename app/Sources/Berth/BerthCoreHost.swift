@@ -80,6 +80,10 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
             let view = GhosttySurfaceView(frame: NSRect(x: 0, y: 0, width: 900, height: 600))
             view.berthSurfaceID = id
             var childEnv = req.env
+            if !childEnv.contains(where: { $0.hasPrefix("PATH=") }),
+               let path = ProcessInfo.processInfo.environment["PATH"] {
+                childEnv.append("PATH=\(path)")
+            }
             if let transportToken {
                 childEnv.append("BERTH_TOKEN=\(transportToken)")
             }

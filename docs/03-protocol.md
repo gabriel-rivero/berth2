@@ -141,11 +141,14 @@ surface already has an agent or no provider is recognized. Passive agents have
 no resume payload; only `berth run` or an explicit `agent.register` can supply
 one.
 
-Resume payloads are `{argv, cwd, session_ref?}`. On restore, a provider session
-ref uses the provider template (`claude --resume <ref>`, `codex resume <ref>`,
-`opencode --session <ref>`); without a ref the saved argv is executed verbatim.
-A failed resume keeps the surface in the tree and marks the agent `errored`
-with detail `resume failed` rather than silently starting a bare shell.
+Resume payloads are `{argv, cwd, session_ref?, env?}`. `env` carries the
+launch environment (notably `PATH`) because Ghostty runs commands through a
+login shell with a minimal environment; without it a resumed `claude` can miss
+its interpreter. On restore, a provider session ref uses the provider template
+(`claude --resume <ref>`, `codex resume <ref>`, `opencode --session <ref>`);
+without a ref the saved argv is executed verbatim. A failed resume keeps the
+surface in the tree and marks the agent `errored` with detail `resume failed`
+rather than silently starting a bare shell.
 
 ### notification
 | method | params | result |
@@ -204,7 +207,7 @@ Events are derived from Ghostty actions where possible: `SET_TITLE`, `PWD`, `PRO
   "since_ms": 1762783331882,          // when state changed (epoch millis)
   "last_seen_ms": 1762783331882,      // last update or heartbeat
   "tokens": {"in": 41233, "out": 1904, "cost_usd": 0.41},
-  "resume": {"argv": ["claude","--resume","8f1c…"], "cwd": "/Users/me/p/app", "session_ref": "8f1c…"},
+  "resume": {"argv": ["claude","--resume","8f1c…"], "cwd": "/Users/me/p/app", "session_ref": "8f1c…", "env": [["PATH","/opt/homebrew/bin:/usr/bin"]]},
   "meta": {}                           // provider-specific, ≤4 KiB
 }
 ```

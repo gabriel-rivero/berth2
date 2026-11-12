@@ -272,6 +272,11 @@ pub struct Resume {
     pub cwd: String,
     #[serde(default)]
     pub session_ref: Option<String>,
+    /// Environment captured when the agent was launched. Ghostty runs the
+    /// command through a login shell with a minimal environment, so PATH (and
+    /// interpreter locations) must survive a restore.
+    #[serde(default)]
+    pub env: Vec<(String, String)>,
 }
 
 /// A typed agent session bound to exactly one surface.

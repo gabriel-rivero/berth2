@@ -188,14 +188,22 @@ pub fn restore(
                 }
                 None => (Vec::new(), surface.cwd.clone()),
             };
-            let mut env = vec![
-                ("BERTH_SURFACE_ID".into(), surface.id.clone()),
-                ("BERTH_WORKSPACE_ID".into(), ws_id.clone()),
-                (
-                    "BERTH_PROTOCOL".into(),
-                    crate::protocol::PROTOCOL_VERSION.to_string(),
-                ),
-            ];
+            let mut env = Vec::new();
+            if let Some(resume) = resume {
+                for (key, value) in &resume.env {
+                    // Identity variables belong to the new generation, not the
+                    // saved process.
+                    if !key.starts_with("BERTH_") {
+                        env.push((key.clone(), value.clone()));
+                    }
+                }
+            }
+            env.push(("BERTH_SURFACE_ID".into(), surface.id.clone()));
+            env.push(("BERTH_WORKSPACE_ID".into(), ws_id.clone()));
+            env.push((
+                "BERTH_PROTOCOL".into(),
+                crate::protocol::PROTOCOL_VERSION.to_string(),
+            ));
             if let Some(agent_id) = agent_by_surface.get(&surface.id) {
                 env.push(("BERTH_AGENT_ID".into(), agent_id.clone()));
             }
@@ -503,6 +511,7 @@ mod tests {
                     argv: vec!["claude".into(), "--resume".into(), "abc".into()],
                     cwd: "/work/project".into(),
                     session_ref: None,
+                    env: vec![("PATH".into(), "/opt/homebrew/bin:/usr/bin".into())],
                 }),
                 json!({}),
                 &NullOps,
@@ -520,6 +529,10 @@ mod tests {
         let env: std::collections::HashMap<_, _> = spawn.env.iter().cloned().collect();
         assert_eq!(env.get("BERTH_AGENT_ID"), Some(&agent.id));
         assert!(env.contains_key("BERTH_SURFACE_ID"));
+        assert_eq!(
+            env.get("PATH").map(String::as_str),
+            Some("/opt/homebrew/bin:/usr/bin")
+        );
     }
 
     #[test]
@@ -536,6 +549,7 @@ mod tests {
                 argv: vec!["codex".into(), "resume".into(), "abc".into()],
                 cwd: "/work/project".into(),
                 session_ref: None,
+                env: Vec::new(),
             }),
             json!({}),
             &NullOps,
