@@ -39,7 +39,7 @@ final class WorkspaceLayoutTests: XCTestCase {
 
     func testHorizontalSplitIsVerticalDivider() throws {
         let root = try XCTUnwrap(layout(orientation: "horizontal")?.root)
-        guard case let .split(_, isVertical, children) = root else {
+        guard case let .split(_, isVertical, children, _) = root else {
             return XCTFail("expected a split root")
         }
         XCTAssertTrue(isVertical, "horizontal children must sit side by side")
@@ -48,7 +48,7 @@ final class WorkspaceLayoutTests: XCTestCase {
 
     func testVerticalSplitIsHorizontalDivider() throws {
         let root = try XCTUnwrap(layout(orientation: "vertical")?.root)
-        guard case let .split(_, isVertical, _) = root else {
+        guard case let .split(_, isVertical, _, _) = root else {
             return XCTFail("expected a split root")
         }
         XCTAssertFalse(isVertical, "vertical children must stack")
@@ -56,7 +56,7 @@ final class WorkspaceLayoutTests: XCTestCase {
 
     func testLegacyCapitalizedOrientationStillParses() throws {
         let root = try XCTUnwrap(layout(orientation: "Horizontal")?.root)
-        guard case let .split(_, isVertical, _) = root else {
+        guard case let .split(_, isVertical, _, _) = root else {
             return XCTFail("expected a split root")
         }
         XCTAssertTrue(isVertical)

@@ -500,6 +500,7 @@ usage:
   berth agent-register SURFACE_ID [--provider P] [--name N]
   berth agent-set AGENT_ID [--state S] [--detail D] [--progress 0.4] [--session-ref ID]
   berth agent-set --surface SURFACE_ID [--state S] [--detail D]
+  berth agent-ack AGENT_ID       # clear attention + acknowledge notifications
   berth hooks install [claude|opencode|all]
   berth hooks print [claude|opencode|all]
   berth hook claude             read a Claude Code hook payload on stdin
@@ -532,6 +533,15 @@ fn run() -> Result<(), String> {
             "print" => hooks_print(target),
             other => Err(format!("hooks: unknown subcommand {other}")),
         };
+    }
+
+    if cmd == "schema" {
+        // Generated from the core's Rust types; no running app required.
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&berth_core::schema::document()).unwrap()
+        );
+        return Ok(());
     }
 
     let mut c = Client::connect()?;
@@ -716,6 +726,12 @@ fn run() -> Result<(), String> {
             c.call("agent.update", params)?;
         }
 
+        "agent-ack" => {
+            let pos = positional(rest);
+            let aid = pos.first().ok_or("agent-ack: missing AGENT_ID")?;
+            c.call("agent.ack", json!({"agent_id": aid}))?;
+        }
+
         "hook" => {
             let provider = rest.first().map(String::as_str).unwrap_or_default();
             match provider {
@@ -805,11 +821,6 @@ fn run() -> Result<(), String> {
         "active" => {
             let v = c.call("workspace.list", json!({}))?;
             println!("{}", v["selected_surface"].as_str().unwrap_or(""));
-        }
-
-        "schema" => {
-            let v = c.call("system.capabilities", json!({}))?;
-            println!("{}", serde_json::to_string_pretty(&v).unwrap());
         }
 
         other => {

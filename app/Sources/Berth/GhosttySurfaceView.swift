@@ -17,6 +17,8 @@ final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClient {
     // happen in `deinit`, which is nonisolated. Every other access is on the
     // main thread, so this is a narrow, auditable escape hatch.
     nonisolated(unsafe) private var surface: ghostty_surface_t?
+    /// Last point size handed to Ghostty, so display changes are idempotent.
+    private var appliedFontPoints: Double = 0
     // C strings handed to Ghostty must outlive the surface: Ghostty may keep
     // pointers into them (command, env values). Freeing happens in `deinit`.
     nonisolated(unsafe) private var cStrings: [UnsafeMutablePointer<CChar>] = []
@@ -48,6 +50,12 @@ final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClient {
         config.platform_tag = GHOSTTY_PLATFORM_MACOS
         config.platform.macos.nsview = Unmanaged.passUnretained(self).toOpaque()
         config.scale_factor = Double(window?.backingScaleFactor ?? 2.0)
+        // A 1x external display renders the same logical point size at half
+        // the pixels of a Retina panel, which reads as tiny. Keep the
+        // physical glyph size stable by supplying a per-display point size;
+        // the setting can override the automatic 2x/backing factor.
+        appliedFontPoints = effectiveFontPoints()
+        config.font_size = Float(appliedFontPoints)
         // Ghostty hands this pointer back to every runtime callback for this
         // surface (clipboard, actions); it must stay valid for the surface's
         // lifetime, which the window does.
@@ -79,9 +87,11 @@ final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClient {
             return true
         }
         guard created else {
-            NSLog("berth: ghostty_surface_new failed")
+            BerthLog.ui.error("ghostty_surface_new failed")
             return false
         }
+        BerthLog.ui.info(
+            "surface created id=\(self.berthSurfaceID ?? "?", privacy: .public) font=\(self.appliedFontPoints, privacy: .public)")
 
         syncSize()
         ghostty_surface_set_focus(surface!, true)
@@ -104,6 +114,9 @@ final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClient {
     /// alive lets Ghostty terminate the child before `ghostty_app_free`; the
     /// view can remain in a window during teardown without double-freeing.
     nonisolated func teardown() {
+        if let id = berthSurfaceID {
+            BerthLog.ui.info("surface teardown id=\(id, privacy: .public)")
+        }
         berthSurfaceID = nil
         if let surface {
             ghostty_surface_free(surface)
@@ -218,6 +231,7 @@ final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClient {
         } else {
             syncSize()
         }
+        applyDisplayFontIfNeeded()
     }
 
     override func setFrameSize(_ newSize: NSSize) {
@@ -230,6 +244,30 @@ final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClient {
         guard let surface, let scale = window?.backingScaleFactor else { return }
         ghostty_surface_set_content_scale(surface, Double(scale), Double(scale))
         syncSize()
+        applyDisplayFontIfNeeded()
+    }
+
+    /// Base setting × the automatic or configured display factor. On a 2x
+    /// built-in screen this is exactly the configured size; on a 1x external
+    /// screen it doubles so the terminal does not look half-size.
+    private func effectiveFontPoints() -> Double {
+        let base = AppConfig.shared.fontSize
+        let configured = AppConfig.shared.fontScale
+        let backing = window?.screen?.backingScaleFactor
+            ?? NSScreen.main?.backingScaleFactor
+            ?? 2.0
+        let auto = min(max(2.0 / max(backing, 1.0), 0.75), 2.0)
+        return base * (configured > 0 ? configured : auto)
+    }
+
+    /// Apply the current font size to this surface. Called after display
+    /// changes and when Settings changes the font live.
+    func applyDisplayFontIfNeeded(force: Bool = false) {
+        guard let surface else { return }
+        let points = effectiveFontPoints()
+        guard force || abs(points - appliedFontPoints) > 0.01 else { return }
+        appliedFontPoints = points
+        GhosttyHost.shared.applyFont(points: points, to: surface)
     }
 
     private func syncSize() {

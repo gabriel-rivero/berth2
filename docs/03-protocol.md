@@ -77,6 +77,7 @@ Event:
 | method | params | result |
 | --- | --- | --- |
 | `workspace.list` | `{}` | `{workspaces:[Workspace], groups:[Group], selected_workspace, selected_surface}` |
+| `workspace.layout` | `{workspace_id}` | `{workspace, panes:[Pane+active_surface], surfaces:[Surface], agents:[Agent]}` |
 | `workspace.create` | `{name?, cwd?, group_id?, icon?, color?, focus?}` | `{workspace:Workspace}` |
 | `workspace.get` | `{workspace_id}` | `{workspace:Workspace}` |
 | `workspace.update` | `{workspace_id, name?, icon?, color?, group_id?, clear_group_id?, pinned?}` | `{workspace:Workspace}` |
@@ -98,6 +99,7 @@ Event:
 | `pane.list` | `{workspace_id?}` | `{panes:[Pane]}` |
 | `pane.focus` | `{pane_id}` | `{}` |
 | `pane.resize` | `{pane_id, weight}` | `{}` |
+| `split.resize` | `{split_id, index, weight}` | `{}` |
 | `pane.close` | `{pane_id}` | `{}` |
 
 ### surface
@@ -123,10 +125,11 @@ Event:
 | --- | --- | --- |
 | `agent.register` | `{surface_id, provider, name?, agent_id?, resume?, meta?}` | `{agent:Agent}` |
 | `agent.detect` | `{surface_id}` | `{agent:Agent\|null}` |
-| `agent.update` | `{agent_id, state?, detail?, progress?, attention?, session_ref?, meta?}` | `{agent:Agent}` |
+| `agent.update` | `{agent_id, state?, detail?, progress?, clear_progress?, session_ref?, meta?}` | `{agent:Agent}` |
 | `agent.get` | `{agent_id}` | `{agent:Agent}` |
 | `agent.list` | `{workspace_id?, state?}` | `{agents:[Agent]}` |
 | `agent.clear` | `{agent_id}` | `{}` |
+| `agent.ack` | `{agent_id}` | `{agent}` — clears derived attention and acks its notifications |
 | `agent.resume` | `{agent_id}` | `{surface_id}` |
 
 `agent.register` is idempotent per surface: re-registering rebinds rather than
@@ -178,18 +181,22 @@ rather than silently starting a bare shell.
 | event | payload |
 | --- | --- |
 | `agent.created` / `agent.deleted` | `{agent}` / `{agent_id}` |
-| `agent.state_changed` | `{agent_id, from, to, reason}` |
+| `agent.state_changed` | `{agent_id, from, to, reason}` (`reason`: `update`, `stale`, `process_exit`) |
+| `agent.attention_changed` | `{agent_id, attention, reason}` |
 | `agent.progress` | `{agent_id, progress, detail?}` |
 | `workspace.created` / `workspace.closed` / `workspace.changed` | `{workspace}` |
 | `workspace.selected` | `{workspace_id}` |
+| `workspace.moved` | `{workspace_id, index}` |
+| `group.created` / `group.updated` | `{group}` |
+| `group.deleted` | `{group_id}` |
 | `pane.focus_changed` | `{pane_id, surface_id}` |
 | `surface.created` / `surface.closed` | `{surface}` / `{surface_id}` |
 | `surface.title_changed` | `{surface_id, title}` |
 | `surface.pwd_changed` | `{surface_id, cwd}` |
 | `surface.bell` | `{surface_id}` |
 | `surface.progress` | `{surface_id, value}` (OSC 9;4) |
+| `surface.exited` | `{surface_id}` — child exited; a bound live agent becomes `errored` |
 | `notification.created` / `notification.acked` | `{notification}` / `{notification_id}` |
-| `session.dirty` | `{}` (debounced, for external sync tools) |
 
 Events are derived from Ghostty actions where possible: `SET_TITLE`, `PWD`, `PROGRESS_REPORT`, `RING_BELL`, `COMMAND_FINISHED`, `DESKTOP_NOTIFICATION`, `OPEN_URL`, `SHOW_CHILD_EXITED`. That means OSC 9/99/777 notifications, OSC 7 cwd, and shell-integration command-finished work *without any Berth-specific hook*.
 

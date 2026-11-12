@@ -19,6 +19,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isDuplicateInstance = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        Diagnostics.install()
+        BerthLog.app.info("applicationDidFinishLaunching")
         guard GhosttyHost.shared.start(fontSize: AppConfig.shared.fontSize) else {
             let alert = NSAlert()
             alert.messageText = "Berth could not start Ghostty"
@@ -50,6 +52,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         BerthCoreHost.shared.configureTransport(token: token, socketPath: Self.socketPath)
 
         let handler = CoreHandler(engine: engine)
+        handler.authMode = mode.rawValue
+        handler.onSaveSession = { [weak self] in self?.saveSession() }
         self.handler = handler
         if mode != .off {
             let socket = SocketServer(
@@ -80,6 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         restoreOrBootstrap(engine)
         scheduleStaleSweep(engine)
         scheduleAgentDetection()
+        OnboardingWindow.presentIfNeeded()
         NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -89,10 +94,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         if isDuplicateInstance {
+            BerthLog.app.info("duplicate instance terminating")
             BerthCoreHost.shared.shutdown()
             GhosttyHost.shared.stop()
             return
         }
+        BerthLog.app.info("applicationWillTerminate")
         saveTimer?.invalidate()
         saveSession(truncateJournal: true)
         sweepTimer?.invalidate()
@@ -194,6 +201,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let workspace = target["workspace_id"] as? String,
               let surface = target["surface_id"] as? String
         else { return }
+        // Visiting is acknowledgement: otherwise repeated ⌘⇧U keeps cycling
+        // over the same agent and its unread badge never clears.
+        if let agent = target["id"] as? String {
+            send("agent.ack", ["agent_id": agent])
+        }
         send("workspace.select", ["workspace_id": workspace])
         send("surface.activate", ["surface_id": surface])
     }
@@ -207,28 +219,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let result = object["result"] as? [String: Any]
         else { return }
-        let items = (result["notifications"] as? [[String: Any]] ?? []).reversed()
-        var commands: [PaletteCommand] = []
-        for item in items {
-            let title = item["title"] as? String ?? "Attention"
-            let body = item["body"] as? String ?? ""
-            let label = body.isEmpty ? title : "\(title) — \(body)"
-            commands.append(PaletteCommand(label) { [weak self] in
-                if let id = item["id"] as? String {
-                    self?.send("notification.ack", ["notification_id": id])
-                }
-                if let workspace = item["workspace_id"] as? String {
-                    self?.send("workspace.select", ["workspace_id": workspace])
-                }
-                if let surface = item["surface_id"] as? String {
-                    self?.send("surface.activate", ["surface_id": surface])
-                }
-            })
+        let items = (result["notifications"] as? [[String: Any]] ?? [])
+            .reversed()
+            .compactMap { item -> AttentionItem? in
+                guard let id = item["id"] as? String else { return nil }
+                return AttentionItem(
+                    id: id,
+                    title: item["title"] as? String ?? "Attention",
+                    body: item["body"] as? String ?? "",
+                    workspaceID: item["workspace_id"] as? String,
+                    surfaceID: item["surface_id"] as? String)
+            }
+        AttentionPanel.present(items: Array(items)) { [weak self] item in
+            self?.send("notification.ack", ["notification_id": item.id])
+            if let workspace = item.workspaceID {
+                self?.send("workspace.select", ["workspace_id": workspace])
+            }
+            if let surface = item.surfaceID {
+                self?.send("surface.activate", ["surface_id": surface])
+            }
         }
-        if commands.isEmpty {
-            commands.append(PaletteCommand("No unread attention") {})
-        }
-        CommandPalette.present(commands: commands)
     }
 
     private func split(direction: String) {
@@ -332,22 +342,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Session
 
     private func restoreOrBootstrap(_ engine: Engine) {
-        for snapshot in snapshotCandidates() where !snapshot.isEmpty {
+        let candidates = snapshotCandidates()
+        BerthLog.restore.info("restore candidates=\(candidates.count, privacy: .public)")
+        for snapshot in candidates where !snapshot.isEmpty {
             do {
                 let restored = try engine.restore(snapshot: snapshot)
                 if restored > 0 {
-                    NSLog("berth: restored \(restored) surface(s)")
+                    BerthLog.restore.info(
+                        "restored=\(restored, privacy: .public) snapshot_bytes=\(snapshot.utf8.count, privacy: .public)")
                     BerthCoreHost.shared.reconcileAll()
                     return
                 }
             } catch {
-                NSLog("berth: restore failed, trying older snapshot: \(error)")
+                BerthLog.restore.error(
+                    "restore candidate failed: \(String(describing: error), privacy: .public)")
             }
         }
 
         let response = engine.dispatch(
             request: #"{"id":"boot","method":"workspace.create","params":{"name":"main"}}"#)
-        NSLog("berth: bootstrap → \(response)")
+        BerthLog.restore.info("bootstrap response=\(response, privacy: .public)")
         BerthCoreHost.shared.reconcileAll()
     }
 
@@ -421,8 +435,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if truncateJournal {
                 try? FileManager.default.removeItem(at: Self.journalURL)
             }
+            BerthLog.restore.debug(
+                "saved session bytes=\(snapshot.utf8.count, privacy: .public) clean=\(truncateJournal, privacy: .public)")
         } catch {
-            NSLog("berth: could not save session: \(error)")
+            BerthLog.restore.error(
+                "could not save session: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    /// Keep the journal bounded. It is a crash-recovery tail, not history:
+    /// five snapshots is several times the 500 ms loss window.
+    private static let journalMaxBytes = 4 * 1024 * 1024
+    private static let journalKeepLines = 5
+
+    private func trimJournalIfNeeded() {
+        let url = Self.journalURL
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attributes[.size] as? NSNumber,
+              size.intValue > Self.journalMaxBytes,
+              let data = try? Data(contentsOf: url)
+        else { return }
+        let lines = data.split(separator: 0x0A, omittingEmptySubsequences: true)
+        var output = Data()
+        for line in lines.suffix(Self.journalKeepLines) {
+            output.append(contentsOf: line)
+            output.append(0x0A)
+        }
+        do {
+            try output.write(to: url, options: .atomic)
+        } catch {
+            NSLog("berth: could not trim journal: \(error)")
         }
     }
 
@@ -444,13 +486,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         try handle.seekToEnd()
         try handle.write(contentsOf: data)
         try handle.write(contentsOf: Data("\n".utf8))
+        trimJournalIfNeeded()
     }
 
     /// Passive agent detection runs faster than staleness: a claude/codex
-    /// foreground process should get a badge within a couple of seconds.
+    /// foreground process should get a badge within the one-second M3 budget.
     private func scheduleAgentDetection() {
         let timer = Timer(
-            timeInterval: 2,
+            timeInterval: 1,
             target: self,
             selector: #selector(detectAgents),
             userInfo: nil,

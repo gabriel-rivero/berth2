@@ -33,6 +33,9 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
     private var lastSelectedWorkspace: String?
     private var lastActiveSurface: String?
     private var lastAttention: [String: String] = [:]
+    /// One pending reconcile per runloop turn. Socket bursts used to queue one
+    /// full layout rebuild per request; coalescing keeps the key path clear.
+    private var reconcileScheduled = false
 
     private struct WorkspaceMeta {
         var branch: String?
@@ -183,33 +186,35 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
         }
     }
 
-    /// Foreground process facts for passive agent detection. `ps` is cheap at
-    /// this frequency (once per shell spawn, not per keystroke).
+    /// Foreground process facts for passive agent detection. Only the view
+    /// lookup and the Ghostty pid read touch the main thread; `ps` runs on the
+    /// caller's queue (the detection loop dispatches off-main), so a slow or
+    /// hung process table cannot stall keystrokes.
     func pidInfo(surfaceId: String) throws -> FfiPidInfo? {
-        try onMain {
-            guard let view = surfaces[surfaceId], let handle = view.surfaceHandle else { return nil }
-            let pid = UInt32(truncatingIfNeeded: ghostty_surface_foreground_pid(handle))
-            guard pid > 0 else { return nil }
-
-            let proc = Process()
-            proc.executableURL = URL(fileURLWithPath: "/bin/ps")
-            proc.arguments = ["-o", "comm=", "-o", "args=", "-p", "\(pid)"]
-            let pipe = Pipe()
-            proc.standardOutput = pipe
-            proc.standardError = FileHandle.nullDevice
-            try? proc.run()
-            proc.waitUntilExit()
-
-            let out = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            let line = out.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !line.isEmpty else { return nil }
-            let pieces = line.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
-            let comm = pieces.first.map(String.init)
-            let argv = pieces.count > 1
-                ? pieces[1].split(separator: " ").map(String.init)
-                : []
-            return FfiPidInfo(pid: pid, comm: comm, argv: argv)
+        let pid: UInt32 = try onMain {
+            guard let view = surfaces[surfaceId], let handle = view.surfaceHandle else { return 0 }
+            return UInt32(truncatingIfNeeded: ghostty_surface_foreground_pid(handle))
         }
+        guard pid > 0 else { return nil }
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/ps")
+        proc.arguments = ["-o", "comm=", "-o", "args=", "-p", "\(pid)"]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = FileHandle.nullDevice
+        try? proc.run()
+        proc.waitUntilExit()
+
+        let out = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        let line = out.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !line.isEmpty else { return nil }
+        let pieces = line.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+        let comm = pieces.first.map(String.init)
+        let argv = pieces.count > 1
+            ? pieces[1].split(separator: " ").map(String.init)
+            : []
+        return FfiPidInfo(pid: pid, comm: comm, argv: argv)
     }
 
     func notify(title: String, body: String, workspaceId: String?) {
@@ -233,11 +238,26 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
 
     // MARK: - Layout
 
+    /// Coalesce layout reconciliation to one pass per runloop turn. Safe to
+    /// call from any number of request completions.
+    func scheduleReconcile() {
+        try? onMain { [self] in
+            guard !reconcileScheduled else { return }
+            reconcileScheduled = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.reconcileScheduled = false
+                self.reconcileAll()
+            }
+        }
+    }
+
     /// Rebuild the window from the core's state. Cheap when nothing changed:
     /// structural JSON is compared per workspace and only the selected
     /// workspace's tree is actually applied.
     func reconcileAll() {
         try? onMain { [self] in
+            Diagnostics.expectMain("reconcileAll")
             guard let engine else { return }
             let listed = engine.dispatch(
                 request: #"{"id":"sync","method":"workspace.list","params":{}}"#)
@@ -422,6 +442,11 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
             newTab: { [weak self] pane in
                 self?.sendFromUI(
                     "surface.create", ["pane_id": pane, "focus": true])
+            },
+            resizeSplit: { [weak self] split, index, weight in
+                self?.sendFromUI(
+                    "split.resize",
+                    ["split_id": split, "index": index, "weight": weight])
             })
     }
 
@@ -430,6 +455,15 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
     func toggleSidebar() {
         try? onMain { [self] in
             window?.toggleSidebar()
+        }
+    }
+
+    /// Settings changed: recalc every surface against its current display.
+    func applyFontSizeToAllSurfaces() {
+        try? onMain { [self] in
+            for view in surfaces.values {
+                view.applyDisplayFontIfNeeded(force: true)
+            }
         }
     }
 
@@ -456,9 +490,11 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
 
     /// Ask the core to sniff each unclaimed surface's foreground process.
     /// `agent.detect` is idempotent, so the timer can simply keep asking.
+    /// The loop runs off-main: the only main-thread work is reading each
+    /// surface's foreground pid, and `ps` never blocks the render path.
     func detectAgents() {
-        try? onMain { [self] in
-            guard let engine else { return }
+        guard let engine else { return }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
             let agents = Self.agentItems(engine)
             let bound = Set(agents.compactMap { $0["surface_id"] as? String })
             let listed = engine.dispatch(
@@ -477,9 +513,10 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
                     created = true
                 }
             }
-            if created {
-                onEvents?()
-                reconcileAll()
+            guard created else { return }
+            Task { @MainActor [weak self] in
+                self?.onEvents?()
+                self?.reconcileAll()
             }
         }
     }

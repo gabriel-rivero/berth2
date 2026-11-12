@@ -31,7 +31,7 @@ struct WorkspaceLayout {
     /// Node in the pane tree. `isVertical` is NSSplitView's sense: true means
     /// the divider is vertical and children sit side by side.
     enum Node {
-        case split(id: String, isVertical: Bool, children: [Node])
+        case split(id: String, isVertical: Bool, children: [Node], weights: [Double])
         case leaf(paneID: String, activeSurface: String?)
     }
 
@@ -143,10 +143,12 @@ struct WorkspaceLayout {
             // stacks them. Compare case-insensitively so older "Horizontal"
             // dumps keep working.
             let orientation = (object["orientation"] as? String ?? "horizontal").lowercased()
+            let weights = (object["weights"] as? [NSNumber])?.map(\.doubleValue) ?? []
             return .split(
                 id: object["id"] as? String ?? UUID().uuidString,
                 isVertical: orientation == "horizontal",
-                children: parsed)
+                children: parsed,
+                weights: weights)
         default:
             return nil
         }
@@ -160,7 +162,7 @@ extension WorkspaceLayout.Node {
         switch self {
         case let .leaf(paneID, active):
             return "L(\(paneID)|\(active ?? ""))"
-        case let .split(_, isVertical, children):
+        case let .split(_, isVertical, children, _):
             return "S(\(isVertical ? "v" : "h")[\(children.map(\.structureKey).joined(separator: ","))])"
         }
     }

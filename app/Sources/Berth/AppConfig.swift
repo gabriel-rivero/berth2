@@ -104,6 +104,11 @@ final class AppConfig {
     private(set) var shortcuts: [String: String] = [:]
     /// Terminal font size in points, handed to Ghostty as `font-size`.
     private(set) var fontSize: Double = 14
+    /// Per-display multiplier. Zero means automatic (2 / backing scale), so a
+    /// 1x monitor gets the same physical glyph size as a Retina laptop.
+    private(set) var fontScale: Double = 0
+    /// Hide the metadata line and tighten row height.
+    private(set) var compactSidebar = false
     /// `off`, `local` (token for mutations) or `trusted` (same-uid only).
     private(set) var socketMode: SocketMode = .local
 
@@ -117,6 +122,15 @@ final class AppConfig {
 
     func setFontSize(_ value: Double) {
         fontSize = min(max(value, 8), 72)
+    }
+
+    func setFontScale(_ value: Double) {
+        // 0 = automatic. Otherwise keep the override in a sane range.
+        fontScale = value == 0 ? 0 : min(max(value, 0.5), 3)
+    }
+
+    func setCompactSidebar(_ value: Bool) {
+        compactSidebar = value
     }
 
     func shortcut(for action: ShortcutAction) -> Shortcut {
@@ -146,6 +160,12 @@ final class AppConfig {
         if let value = object["fontSize"] as? NSNumber {
             setFontSize(value.doubleValue)
         }
+        if let value = object["fontScale"] as? NSNumber {
+            setFontScale(value.doubleValue)
+        }
+        if let value = object["compactSidebar"] as? Bool {
+            setCompactSidebar(value)
+        }
         if let value = object["socket"] as? String, let mode = SocketMode(rawValue: value) {
             socketMode = mode
         }
@@ -159,6 +179,8 @@ final class AppConfig {
             withJSONObject: [
                 "shortcuts": shortcuts,
                 "fontSize": fontSize,
+                "fontScale": fontScale,
+                "compactSidebar": compactSidebar,
                 "socket": socketMode.rawValue,
             ],
             options: [.prettyPrinted, .sortedKeys])

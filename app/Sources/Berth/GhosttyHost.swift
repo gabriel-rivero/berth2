@@ -296,20 +296,38 @@ final class GhosttyHost {
 
     /// Ghostty's C config loader only reads files, so write the app's one
     /// override next to the session files and load it after the defaults.
-    private func writeFontConfig(fontSize: Double, config: ghostty_config_t?) {
+    private func writeFontConfig(
+        fontSize: Double,
+        config: ghostty_config_t?,
+        fileName: String = "ghostty.conf"
+    ) {
         guard let config else { return }
         let directory = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Berth", isDirectory: true)
         try? FileManager.default.createDirectory(
             at: directory, withIntermediateDirectories: true)
-        let url = directory.appendingPathComponent("ghostty.conf")
+        let url = directory.appendingPathComponent(fileName)
         do {
             try "font-size = \(fontSize)\n".write(to: url, atomically: true, encoding: .utf8)
             ghostty_config_load_file(config, url.path)
         } catch {
             NSLog("berth: could not write font config: \(error.localizedDescription)")
         }
+    }
+
+    /// Apply a font size to one live surface. Ghostty has no set-font API, but
+    /// `update_config` re-derives the font grid; cloning the base config keeps
+    /// every other user setting intact.
+    func applyFont(points: Double, to surface: ghostty_surface_t) {
+        guard let base = config, let clone = ghostty_config_clone(base) else { return }
+        defer { ghostty_config_free(clone) }
+        writeFontConfig(
+            fontSize: points,
+            config: clone,
+            fileName: "ghostty-surface.conf")
+        ghostty_config_finalize(clone)
+        ghostty_surface_update_config(surface, clone)
     }
 
     func tick() {

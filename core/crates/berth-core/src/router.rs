@@ -51,7 +51,10 @@ fn handle(
                 "auth": "local",
             }))
         }
-        "system.ping" => Ok(json!({"pong": true, "uptime_ms": 0})),
+        "system.ping" => {
+            let _ = state.instance();
+            Ok(json!({"pong": true, "uptime_ms": state.uptime_ms()}))
+        }
         "system.capabilities" => Ok(json!({
             "protocol": PROTOCOL_VERSION,
             "methods": METHODS,
@@ -234,6 +237,21 @@ fn handle(
             state.emit(names::WORKSPACE_CHANGED, json!(snapshot));
             Ok(json!({}))
         }
+        "split.resize" => {
+            let p: SplitResize = params(raw)?;
+            let mut changed = None;
+            for ws in &mut state.workspaces {
+                if ws.root.set_child_weight(&p.split_id, p.index, p.weight) {
+                    changed = Some(ws.clone());
+                    break;
+                }
+            }
+            let Some(ws) = changed else {
+                return Err(CoreError::not_found(format!("no split {}", p.split_id)));
+            };
+            state.emit(names::WORKSPACE_CHANGED, json!(ws));
+            Ok(json!({}))
+        }
         "pane.close" => {
             let p: PaneIdParam = params(raw)?;
             let pane = state
@@ -414,7 +432,8 @@ fn handle(
                 state.emit(names::SURFACE_BELL, json!({"surface_id": id, "count": n}));
             }
             if p.exited.unwrap_or(false) {
-                state.emit("surface.exited", json!({"surface_id": id}));
+                state.mark_agent_exited(&id, ops);
+                state.emit(names::SURFACE_EXITED, json!({"surface_id": id}));
             }
             Ok(json!({"surface": state.surface(&id)}))
         }
@@ -490,10 +509,16 @@ fn handle(
             } else {
                 p.progress.map(Some)
             };
-            let mut agent = state.update_agent(&p.agent_id, p.state, p.detail, progress, p.meta)?;
+            let mut agent =
+                state.update_agent(&p.agent_id, p.state, p.detail, progress, p.meta, ops)?;
             if let Some(session_ref) = p.session_ref {
                 agent = state.set_agent_session_ref(&p.agent_id, &session_ref)?;
             }
+            Ok(json!({"agent": agent}))
+        }
+        "agent.ack" => {
+            let p: AgentIdParam = params(raw)?;
+            let agent = state.ack_agent_attention(&p.agent_id)?;
             Ok(json!({"agent": agent}))
         }
         "agent.get" => {
@@ -730,6 +755,12 @@ struct PaneResize {
     weight: f32,
 }
 #[derive(Debug, Deserialize)]
+struct SplitResize {
+    split_id: String,
+    index: usize,
+    weight: f32,
+}
+#[derive(Debug, Deserialize)]
 struct WorkspaceCreate {
     #[serde(default)]
     name: Option<String>,
@@ -957,6 +988,7 @@ pub const METHODS: &[&str] = &[
     "pane.list",
     "pane.focus",
     "pane.resize",
+    "split.resize",
     "pane.close",
     "surface.list",
     "surface.create",
@@ -976,6 +1008,7 @@ pub const METHODS: &[&str] = &[
     "agent.get",
     "agent.list",
     "agent.clear",
+    "agent.ack",
     "agent.resume",
     "notification.create",
     "notification.list",
@@ -1346,6 +1379,68 @@ mod tests {
     }
 
     #[test]
+    fn process_exit_marks_agent_errored_immediately() {
+        let mut st = AppState::default();
+        call(&mut st, "workspace.create", json!({}));
+        let sid = call(&mut st, "surface.list", json!({}))["surfaces"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let aid = call(
+            &mut st,
+            "agent.register",
+            json!({"surface_id": sid, "provider": "claude-code"}),
+        )["agent"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        call(
+            &mut st,
+            "agent.update",
+            json!({"agent_id": aid, "state":"thinking"}),
+        );
+
+        call(
+            &mut st,
+            "surface.update",
+            json!({"surface_id": sid, "exited": true}),
+        );
+
+        let agent = call(&mut st, "agent.get", json!({"agent_id": aid}))["agent"].clone();
+        assert_eq!(agent["state"], "errored");
+        assert_eq!(agent["attention"], "error");
+        assert_eq!(agent["detail"], "process exited");
+        let unread = call(&mut st, "notification.list", json!({"unread_only": true}));
+        assert_eq!(unread["notifications"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn acknowledging_attention_clears_it_and_its_notifications() {
+        let mut st = AppState::default();
+        call(&mut st, "workspace.create", json!({}));
+        let sid = call(&mut st, "surface.list", json!({}))["surfaces"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let aid = call(&mut st, "agent.register", json!({"surface_id": sid}))["agent"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        call(
+            &mut st,
+            "agent.update",
+            json!({"agent_id": aid, "state":"waiting_input"}),
+        );
+        let before = call(&mut st, "agent.get", json!({"agent_id": aid}));
+        assert_eq!(before["agent"]["attention"], "needs_input");
+
+        let after = call(&mut st, "agent.ack", json!({"agent_id": aid}));
+        assert_eq!(after["agent"]["attention"], "none");
+        let unread = call(&mut st, "notification.list", json!({"unread_only": true}));
+        assert!(unread["notifications"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
     fn stale_agent_escalates_to_blocked() {
         let mut st = AppState::default();
         call(&mut st, "workspace.create", json!({}));
@@ -1363,7 +1458,7 @@ mod tests {
             json!({"agent_id": aid, "state":"thinking"}),
         );
         let now = crate::time::now_ms() + 200_000;
-        let changed = st.sweep_stale(now, 180_000);
+        let changed = st.sweep_stale(now, 180_000, &NullOps);
         assert_eq!(changed.len(), 1);
         assert_eq!(st.agent(&aid).unwrap().state, AgentState::Blocked);
     }

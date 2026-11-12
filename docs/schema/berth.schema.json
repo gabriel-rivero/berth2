@@ -1,0 +1,948 @@
+{
+  "$id": "https://berth.dev/schema/v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "agent": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "definitions": {
+      "AgentState": {
+        "enum": [
+          "unknown",
+          "idle",
+          "thinking",
+          "tool",
+          "waiting_input",
+          "blocked",
+          "done",
+          "errored"
+        ],
+        "type": "string"
+      },
+      "Attention": {
+        "enum": [
+          "none",
+          "info",
+          "needs_input",
+          "error"
+        ],
+        "type": "string"
+      },
+      "Resume": {
+        "properties": {
+          "argv": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "env": {
+            "default": [],
+            "description": "Environment captured when the agent was launched. Ghostty runs the command through a login shell with a minimal environment, so PATH (and interpreter locations) must survive a restore.",
+            "items": {
+              "items": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "session_ref": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "argv",
+          "cwd"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "A typed agent session bound to exactly one surface.",
+    "properties": {
+      "attention": {
+        "$ref": "#/definitions/Attention"
+      },
+      "cost_usd": {
+        "default": 0.0,
+        "format": "double",
+        "type": "number"
+      },
+      "detail": {
+        "default": "",
+        "type": "string"
+      },
+      "id": {
+        "type": "string"
+      },
+      "last_seen_ms": {
+        "format": "uint64",
+        "minimum": 0.0,
+        "type": "integer"
+      },
+      "meta": {
+        "default": null
+      },
+      "name": {
+        "type": "string"
+      },
+      "progress": {
+        "default": null,
+        "format": "float",
+        "type": [
+          "number",
+          "null"
+        ]
+      },
+      "provider": {
+        "type": "string"
+      },
+      "resume": {
+        "anyOf": [
+          {
+            "$ref": "#/definitions/Resume"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "since_ms": {
+        "format": "uint64",
+        "minimum": 0.0,
+        "type": "integer"
+      },
+      "state": {
+        "$ref": "#/definitions/AgentState"
+      },
+      "surface_id": {
+        "type": "string"
+      },
+      "tokens_in": {
+        "default": 0,
+        "format": "uint64",
+        "minimum": 0.0,
+        "type": "integer"
+      },
+      "tokens_out": {
+        "default": 0,
+        "format": "uint64",
+        "minimum": 0.0,
+        "type": "integer"
+      },
+      "workspace_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "attention",
+      "id",
+      "last_seen_ms",
+      "name",
+      "provider",
+      "since_ms",
+      "state",
+      "surface_id",
+      "workspace_id"
+    ],
+    "title": "AgentSurface",
+    "type": "object"
+  },
+  "app": "Berth",
+  "event": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "description": "`{\"event\":\"agent.state_changed\",\"seq\":42,\"ts\":\"…\",\"data\":{…}}`",
+    "properties": {
+      "data": {
+        "default": null
+      },
+      "event": {
+        "type": "string"
+      },
+      "seq": {
+        "default": 0,
+        "description": "Monotonic per process. Clients detect gaps, not reordering.",
+        "format": "uint64",
+        "minimum": 0.0,
+        "type": "integer"
+      },
+      "ts": {
+        "default": "",
+        "description": "RFC3339 UTC with milliseconds.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "event"
+    ],
+    "title": "Event",
+    "type": "object"
+  },
+  "events": [
+    "hello",
+    "workspace.created",
+    "workspace.closed",
+    "workspace.changed",
+    "workspace.selected",
+    "workspace.moved",
+    "group.created",
+    "group.updated",
+    "group.deleted",
+    "pane.focus_changed",
+    "surface.created",
+    "surface.closed",
+    "surface.title_changed",
+    "surface.pwd_changed",
+    "surface.bell",
+    "surface.progress",
+    "surface.exited",
+    "agent.created",
+    "agent.deleted",
+    "agent.state_changed",
+    "agent.attention_changed",
+    "agent.progress",
+    "notification.created",
+    "notification.acked"
+  ],
+  "methods": [
+    "system.hello",
+    "system.ping",
+    "system.capabilities",
+    "workspace.list",
+    "workspace.create",
+    "workspace.get",
+    "workspace.layout",
+    "workspace.update",
+    "workspace.select",
+    "workspace.close",
+    "workspace.move",
+    "group.list",
+    "group.create",
+    "group.update",
+    "group.delete",
+    "pane.list",
+    "pane.focus",
+    "pane.resize",
+    "split.resize",
+    "pane.close",
+    "surface.list",
+    "surface.create",
+    "surface.split",
+    "surface.focus",
+    "surface.activate",
+    "surface.cycle",
+    "surface.close",
+    "surface.update",
+    "surface.send_text",
+    "surface.send_key",
+    "surface.read_text",
+    "surface.resize",
+    "agent.register",
+    "agent.detect",
+    "agent.update",
+    "agent.get",
+    "agent.list",
+    "agent.clear",
+    "agent.ack",
+    "agent.resume",
+    "notification.create",
+    "notification.list",
+    "notification.ack",
+    "notification.clear",
+    "events.subscribe",
+    "events.unsubscribe",
+    "session.dump",
+    "session.save",
+    "session.restore"
+  ],
+  "notification": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "definitions": {
+      "NotifLevel": {
+        "enum": [
+          "info",
+          "needs_input",
+          "error"
+        ],
+        "type": "string"
+      }
+    },
+    "properties": {
+      "acked": {
+        "default": false,
+        "type": "boolean"
+      },
+      "agent_id": {
+        "default": null,
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "body": {
+        "default": "",
+        "type": "string"
+      },
+      "created_ms": {
+        "format": "uint64",
+        "minimum": 0.0,
+        "type": "integer"
+      },
+      "id": {
+        "type": "string"
+      },
+      "level": {
+        "$ref": "#/definitions/NotifLevel"
+      },
+      "surface_id": {
+        "default": null,
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "title": {
+        "type": "string"
+      },
+      "workspace_id": {
+        "default": null,
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "created_ms",
+      "id",
+      "level",
+      "title"
+    ],
+    "title": "Notification",
+    "type": "object"
+  },
+  "protocol": 1,
+  "request": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "description": "`{\"id\":1,\"method\":\"surface.split\",\"params\":{…}}`",
+    "properties": {
+      "id": {
+        "default": null
+      },
+      "method": {
+        "type": "string"
+      },
+      "params": {
+        "default": null
+      }
+    },
+    "required": [
+      "method"
+    ],
+    "title": "Request",
+    "type": "object"
+  },
+  "response": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "definitions": {
+      "ErrorBody": {
+        "properties": {
+          "code": {
+            "$ref": "#/definitions/ErrorCode"
+          },
+          "data": true,
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "type": "object"
+      },
+      "ErrorCode": {
+        "enum": [
+          "bad_request",
+          "method_not_found",
+          "not_found",
+          "invalid_state",
+          "permission_denied",
+          "payload_too_large",
+          "unsupported",
+          "internal"
+        ],
+        "type": "string"
+      }
+    },
+    "description": "`{\"id\":1,\"ok\":true,\"result\":{…}}` / `{\"id\":1,\"ok\":false,\"error\":{…}}`",
+    "properties": {
+      "error": {
+        "anyOf": [
+          {
+            "$ref": "#/definitions/ErrorBody"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "id": true,
+      "ok": {
+        "type": "boolean"
+      },
+      "result": true
+    },
+    "required": [
+      "id",
+      "ok"
+    ],
+    "title": "Response",
+    "type": "object"
+  },
+  "snapshot": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "definitions": {
+      "AgentState": {
+        "enum": [
+          "unknown",
+          "idle",
+          "thinking",
+          "tool",
+          "waiting_input",
+          "blocked",
+          "done",
+          "errored"
+        ],
+        "type": "string"
+      },
+      "AgentSurface": {
+        "description": "A typed agent session bound to exactly one surface.",
+        "properties": {
+          "attention": {
+            "$ref": "#/definitions/Attention"
+          },
+          "cost_usd": {
+            "default": 0.0,
+            "format": "double",
+            "type": "number"
+          },
+          "detail": {
+            "default": "",
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "last_seen_ms": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "meta": {
+            "default": null
+          },
+          "name": {
+            "type": "string"
+          },
+          "progress": {
+            "default": null,
+            "format": "float",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "provider": {
+            "type": "string"
+          },
+          "resume": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/Resume"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "since_ms": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/definitions/AgentState"
+          },
+          "surface_id": {
+            "type": "string"
+          },
+          "tokens_in": {
+            "default": 0,
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "tokens_out": {
+            "default": 0,
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "workspace_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "attention",
+          "id",
+          "last_seen_ms",
+          "name",
+          "provider",
+          "since_ms",
+          "state",
+          "surface_id",
+          "workspace_id"
+        ],
+        "type": "object"
+      },
+      "Attention": {
+        "enum": [
+          "none",
+          "info",
+          "needs_input",
+          "error"
+        ],
+        "type": "string"
+      },
+      "Group": {
+        "properties": {
+          "collapsed": {
+            "default": false,
+            "type": "boolean"
+          },
+          "color": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
+      "Orientation": {
+        "oneOf": [
+          {
+            "description": "Children side by side (split vertically down the middle).",
+            "enum": [
+              "horizontal"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Children stacked (split horizontally across the middle).",
+            "enum": [
+              "vertical"
+            ],
+            "type": "string"
+          }
+        ]
+      },
+      "Pane": {
+        "properties": {
+          "active": {
+            "default": 0,
+            "format": "uint",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "surfaces": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "workspace_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "surfaces",
+          "workspace_id"
+        ],
+        "type": "object"
+      },
+      "PaneNode": {
+        "oneOf": [
+          {
+            "properties": {
+              "children": {
+                "items": {
+                  "$ref": "#/definitions/PaneNode"
+                },
+                "type": "array"
+              },
+              "id": {
+                "type": "string"
+              },
+              "orientation": {
+                "$ref": "#/definitions/Orientation"
+              },
+              "type": {
+                "enum": [
+                  "split"
+                ],
+                "type": "string"
+              },
+              "weights": {
+                "items": {
+                  "format": "float",
+                  "type": "number"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "children",
+              "id",
+              "orientation",
+              "type",
+              "weights"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "pane_id": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "leaf"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "pane_id",
+              "type"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "Resume": {
+        "properties": {
+          "argv": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "env": {
+            "default": [],
+            "description": "Environment captured when the agent was launched. Ghostty runs the command through a login shell with a minimal environment, so PATH (and interpreter locations) must survive a restore.",
+            "items": {
+              "items": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "session_ref": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "argv",
+          "cwd"
+        ],
+        "type": "object"
+      },
+      "Surface": {
+        "properties": {
+          "agent_id": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "bell_count": {
+            "default": 0,
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "cols": {
+            "default": 0,
+            "format": "uint16",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "created_ms": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "cwd": {
+            "default": "",
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/SurfaceKind"
+              }
+            ],
+            "default": "terminal"
+          },
+          "pane_id": {
+            "type": "string"
+          },
+          "pid": {
+            "default": null,
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "progress": {
+            "default": null,
+            "description": "OSC 9;4 progress, 0..=1.",
+            "format": "float",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "rows": {
+            "default": 0,
+            "format": "uint16",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "title": {
+            "default": "",
+            "type": "string"
+          },
+          "tty": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workspace_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "created_ms",
+          "id",
+          "pane_id",
+          "workspace_id"
+        ],
+        "type": "object"
+      },
+      "SurfaceKind": {
+        "enum": [
+          "terminal"
+        ],
+        "type": "string"
+      },
+      "Workspace": {
+        "properties": {
+          "active_surface": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "color": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_ms": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "group_id": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "icon": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "pinned": {
+            "default": false,
+            "type": "boolean"
+          },
+          "root": {
+            "$ref": "#/definitions/PaneNode"
+          },
+          "unread": {
+            "default": 0,
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "created_ms",
+          "id",
+          "name",
+          "root"
+        ],
+        "type": "object"
+      },
+      "WorkspaceSnapshot": {
+        "properties": {
+          "agents": {
+            "default": [],
+            "items": {
+              "$ref": "#/definitions/AgentSurface"
+            },
+            "type": "array"
+          },
+          "panes": {
+            "items": {
+              "$ref": "#/definitions/Pane"
+            },
+            "type": "array"
+          },
+          "surfaces": {
+            "items": {
+              "$ref": "#/definitions/Surface"
+            },
+            "type": "array"
+          },
+          "workspace": {
+            "$ref": "#/definitions/Workspace"
+          }
+        },
+        "required": [
+          "panes",
+          "surfaces",
+          "workspace"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "groups": {
+        "default": [],
+        "items": {
+          "$ref": "#/definitions/Group"
+        },
+        "type": "array"
+      },
+      "saved_ms": {
+        "format": "uint64",
+        "minimum": 0.0,
+        "type": "integer"
+      },
+      "selected_surface": {
+        "default": null,
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "selected_workspace": {
+        "default": null,
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "version": {
+        "format": "uint32",
+        "minimum": 0.0,
+        "type": "integer"
+      },
+      "workspaces": {
+        "items": {
+          "$ref": "#/definitions/WorkspaceSnapshot"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "saved_ms",
+      "version",
+      "workspaces"
+    ],
+    "title": "Snapshot",
+    "type": "object"
+  },
+  "title": "Berth protocol v1",
+  "version": "0.8.0"
+}

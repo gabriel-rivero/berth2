@@ -37,20 +37,22 @@ Goal: the product's spine.
 
 **Done when:** a shell script can create a workspace, split twice, type into a pane, read the screen back, and a second client sees the same events with monotonic `seq` — with the UI showing exactly the same state.
 
-Status: model/router/events, UniFFI bridge, authenticated NDJSON transport, replay ring, subscriptions, backpressure, CLI and transport unit tests have landed. `scripts/m2-acceptance.sh` is the end-to-end check against a running app. A true headless app-test mode is still future work; core and transport tests run without a window.
+Status: model/router/events, UniFFI bridge, authenticated NDJSON transport, replay ring, subscriptions, backpressure, CLI and transport unit tests have landed. `session.save` is wired to the shell's real snapshot path, `session.restore` replaces live state after validation, and `berth schema` emits `docs/schema/berth.schema.json` from the Rust types. `scripts/m2-acceptance.sh` is the end-to-end check against a running app. A true headless app-test mode is still future work; core and transport tests run without a window.
 
 ## M3 — Agent layer (≈3 weeks)
 
 Goal: the reason to exist.
 
 **Status:** implemented. Core state machine/attention/staleness, provider table,
-`agent.detect` passive tier, `berth run` wrapper with explicit agent ids and
-resume payloads, sidebar agent rows with attention-first sorting, pane
-attention rings, `⌘⇧U`/`⌘I`, and agent-aware restore are in. Hooks recipes and
-provider mute remain M4/M5 polish.
+one-second off-main `agent.detect` passive tier, process-exit → `errored` in the
+same event, `berth run` wrapper with explicit agent ids and resume payloads,
+sidebar agent rows with attention-first sorting, pane attention rings,
+acknowledging `⌘⇧U`, `⌘I` attention panel, OS notifications for agent
+attention, and agent-aware restore are in. Provider mute and multi-agent rows
+remain M5.
 
 - `AgentSurface` model + state machine + TTL/staleness in core; provider table (claude-code, codex, opencode).
-- `berth run -- <argv>` wrapper (registers, injects `BERTH_AGENT_ID`, records resume payload, maps exit codes).
+- `berth run -- <argv>` wrapper (registers, injects `BERTH_AGENT_ID`, records resume payload; prints the surface id and returns immediately — the PTY belongs to the app).
 - Passive detection via foreground pid/argv → `unknown` badges.
 - Sidebar agent rendering: provider glyph, state chip, one-line detail, progress bar; attention-first sort.
 - Attention ladder: pane ring, unread badge, `⌘⇧U` newest-attention jump, `⌘I` popover, macOS notification with dedupe/mute.
@@ -64,8 +66,12 @@ provider mute remain M4/M5 polish.
 settings and writes an opencode plugin; both record state/detail and the
 provider session id, so restore uses `--resume`. Crash hardening is in:
 surfaces free their PTY before `ghostty_app_free`, snapshots are validated
-before mutating live state, and corrupt journal entries fall back to the newest
-good snapshot. Perf and polish remain.
+before mutating live state, restore replaces rather than appends, the journal is
+capped, and corrupt journal entries fall back to the newest good snapshot.
+Polish landed: attention panel, onboarding, theme tokens, compact sidebar,
+per-display/live font reload, split-weight round-trip, and `docs/config.md`.
+The remaining M4 work is the two-week personal-use observation and running the
+Instruments trace on the Mac.
 
 - Hook recipes for Claude Code and opencode (shipped as copy-paste snippets + `berth hooks install`). **Done.**
 - Perf pass against the budgets in `docs/02-architecture.md` §9; Instruments trace of startup and keystroke path.
@@ -82,8 +88,6 @@ not be mistaken for missing architecture.
 
 - **Group management UI.** Groups render and collapse, but there is no
   create/rename/color picker even though `group.create/update/delete` exist.
-- **Split weights round-trip.** `NSSplitView` divider positions are not fed back
-  into the core, so relaunch resets pane sizes.
 - **Geometric focus.** ⌘] / ⌘[ walk the tree; arrow-key spatial navigation is not
   implemented.
 - **Agent mute and multi-agent rows.** macOS banners are suppressed for the
@@ -95,19 +99,12 @@ not be mistaken for missing architecture.
 - **Headless app-test mode.** `scripts/m2-acceptance.sh` drives the real GUI app
   over the socket. There is no test-mode app loop that runs the windowless
   surface layer on CI, so the end-to-end criterion is still a manual Mac check.
-- **Generated JSON Schema.** `docs/03-protocol.md` promises a schema generated
-  from the Rust types under `docs/schema/`; `berth schema` currently prints the
-  method/event capability list only.
 - **Socket hardening.** Token auth, read-only classification, and replay are in
   place. Remaining: no peer-UID/audit-token verification, `BERTH_TOKEN` is
   visible to child processes, and `trusted` mode bypasses the token entirely.
 - **Discoverability and input polish.** Workspace/tab creation buttons,
   double-click/middle-click gestures, and font sizing are in place as of 0.4.1;
   keep testing them on a real Mac.
-- **Live font reload.** The font size is written into Ghostty's config before
-  startup, so changing it in Settings needs a relaunch. Apply it to live
-  surfaces without restarting the app.
-
 MVP gate stays the M1 restore criterion plus the M0 smoke checklist, not this
 list.
 

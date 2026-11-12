@@ -1,13 +1,14 @@
 //! Wire types. The protocol is the contract; these structs are its source of
 //! truth and JSON Schema is generated from them.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::CoreError;
 
 /// `{"id":1,"method":"surface.split","params":{…}}`
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Request {
     #[serde(default)]
     pub id: Value,
@@ -17,7 +18,7 @@ pub struct Request {
 }
 
 /// `{"id":1,"ok":true,"result":{…}}` / `{"id":1,"ok":false,"error":{…}}`
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Response {
     pub id: Value,
     pub ok: bool,
@@ -27,7 +28,7 @@ pub struct Response {
     pub error: Option<ErrorBody>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ErrorBody {
     pub code: ErrorCode,
     pub message: String,
@@ -35,7 +36,7 @@ pub struct ErrorBody {
     pub data: Value,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
     BadRequest,
@@ -64,7 +65,7 @@ impl ErrorCode {
 }
 
 /// `{"event":"agent.state_changed","seq":42,"ts":"…","data":{…}}`
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Event {
     pub event: String,
     /// Monotonic per process. Clients detect gaps, not reordering.
@@ -124,13 +125,14 @@ pub mod names {
     pub const SURFACE_PWD_CHANGED: &str = "surface.pwd_changed";
     pub const SURFACE_BELL: &str = "surface.bell";
     pub const SURFACE_PROGRESS: &str = "surface.progress";
+    pub const SURFACE_EXITED: &str = "surface.exited";
     pub const AGENT_CREATED: &str = "agent.created";
     pub const AGENT_DELETED: &str = "agent.deleted";
     pub const AGENT_STATE_CHANGED: &str = "agent.state_changed";
+    pub const AGENT_ATTENTION_CHANGED: &str = "agent.attention_changed";
     pub const AGENT_PROGRESS: &str = "agent.progress";
     pub const NOTIFICATION_CREATED: &str = "notification.created";
     pub const NOTIFICATION_ACKED: &str = "notification.acked";
-    pub const SESSION_DIRTY: &str = "session.dirty";
 
     pub const ALL: &[&str] = &[
         HELLO,
@@ -149,13 +151,14 @@ pub mod names {
         SURFACE_PWD_CHANGED,
         SURFACE_BELL,
         SURFACE_PROGRESS,
+        SURFACE_EXITED,
         AGENT_CREATED,
         AGENT_DELETED,
         AGENT_STATE_CHANGED,
+        AGENT_ATTENTION_CHANGED,
         AGENT_PROGRESS,
         NOTIFICATION_CREATED,
         NOTIFICATION_ACKED,
-        SESSION_DIRTY,
     ];
 }
 

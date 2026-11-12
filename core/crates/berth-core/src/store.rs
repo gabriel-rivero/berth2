@@ -3,6 +3,7 @@
 //! Snapshot is authoritative; the journal exists so a crash loses at most the
 //! last structural change, not the whole layout.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -14,7 +15,7 @@ use crate::{CoreError, ErrorCode, SpawnRequest, SurfaceOps};
 
 pub const SESSION_VERSION: u32 = 1;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspaceSnapshot {
     pub workspace: Workspace,
     pub panes: Vec<Pane>,
@@ -23,7 +24,7 @@ pub struct WorkspaceSnapshot {
     pub agents: Vec<AgentSurface>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Snapshot {
     pub version: u32,
     pub saved_ms: u64,
@@ -36,7 +37,7 @@ pub struct Snapshot {
     pub workspaces: Vec<WorkspaceSnapshot>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct JournalLine {
     pub ts_ms: u64,
     pub op: String,
@@ -261,6 +262,11 @@ pub fn restore(
     ops: &dyn SurfaceOps,
 ) -> Result<usize, CoreError> {
     validate(&snapshot)?;
+    // Restoring over a live session must replace it, not append to it. The
+    // old PTYs are closed first so a protocol-driven restore cannot leak
+    // processes or leave stale surface ids for the new snapshot to collide
+    // with.
+    state.reset(ops);
     let mut restored = 0;
 
     for wsnap in snapshot.workspaces {
@@ -582,6 +588,83 @@ mod tests {
                 .as_deref(),
             Some(agent.id.as_str())
         );
+    }
+
+    #[test]
+    fn restoring_replaces_existing_state_instead_of_appending() {
+        let mut live = seeded();
+        let old_surfaces = live.surfaces.len();
+        let empty = Snapshot::default();
+        let restored = restore(&mut live, empty, &NullOps).unwrap();
+        assert_eq!(restored, 0);
+        assert!(live.workspaces.is_empty());
+        assert!(live.agents.is_empty());
+        assert!(live.surfaces.is_empty());
+        assert_eq!(old_surfaces > 0, true);
+    }
+
+    #[test]
+    fn corrupted_snapshots_never_panic_and_never_mutate_state() {
+        // Deterministic fuzz: mutate a known-good snapshot a few hundred ways.
+        // The contract is "reject before mutating", not "recover garbage".
+        let good = serde_json::to_value(seeded().snapshot()).unwrap();
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        for _ in 0..256 {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let mut candidate = good.clone();
+            let choice = (seed >> 33) as usize % 5;
+            match choice {
+                0 => {
+                    // Drop a random top-level field.
+                    if let Some(object) = candidate.as_object_mut() {
+                        if let Some(key) = object.keys().next().cloned() {
+                            object.remove(&key);
+                        }
+                    }
+                }
+                1 => {
+                    // Corrupt the version.
+                    candidate["version"] = json!(999);
+                }
+                2 => {
+                    // Duplicate a workspace id.
+                    if let Some(list) = candidate["workspaces"].as_array_mut()
+                        && list.len() > 1
+                    {
+                        let first = list[0]["workspace"]["id"].clone();
+                        list[1]["workspace"]["id"] = first;
+                    }
+                }
+                3 => {
+                    // Dangling surface reference.
+                    candidate["workspaces"][0]["surfaces"][0]["id"] = json!("srf_garbage");
+                }
+                _ => {
+                    // Truncate a random string value.
+                    if let Some(text) = candidate["workspaces"][0]["workspace"]["name"].as_str() {
+                        candidate["workspaces"][0]["workspace"]["name"] =
+                            json!(text.chars().take(1).collect::<String>());
+                    }
+                }
+            }
+            let snap = match serde_json::from_value::<Snapshot>(candidate) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let mut state = seeded();
+            let before = serde_json::to_value(state.snapshot()).unwrap();
+            // Some mutations remain structurally valid (a shorter name is not
+            // corruption); the invariant we test is that a rejected snapshot
+            // leaves the old session untouched. `saved_ms` is a clock value
+            // and is expected to move on every snapshot call.
+            if restore(&mut state, snap, &NullOps).is_err() {
+                let after = serde_json::to_value(state.snapshot()).unwrap();
+                assert_eq!(after["workspaces"], before["workspaces"]);
+                assert_eq!(after["groups"], before["groups"]);
+                assert_eq!(after["selected_workspace"], before["selected_workspace"]);
+                assert_eq!(after["selected_surface"], before["selected_surface"]);
+            }
+        }
     }
 
     #[test]

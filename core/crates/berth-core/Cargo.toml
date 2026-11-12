@@ -9,6 +9,7 @@ license.workspace = true
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+schemars = "0.8"
 
 [lib]
 name = "berth_core"

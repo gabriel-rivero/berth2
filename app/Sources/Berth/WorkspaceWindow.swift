@@ -8,12 +8,15 @@
 // survive re-parenting because they are owned by BerthCoreHost.
 
 import AppKit
+import ObjectiveC
 import QuartzCore
 
 struct PaneActions {
     let activate: @MainActor (String) -> Void
     let close: @MainActor (String) -> Void
     let newTab: @MainActor (String) -> Void
+    /// `(split_id, child_index, new share)` after a divider drag.
+    let resizeSplit: @MainActor (String, Int, Double) -> Void
 }
 
 final class MainWindow: NSWindow {
@@ -139,7 +142,7 @@ enum LayoutBuilder {
                 surfaceID: surfaceID,
                 surface: view)
 
-        case let .split(_, isVertical, children):
+        case let .split(id, isVertical, children, weights):
             let split = NSSplitView()
             split.isVertical = isVertical
             split.dividerStyle = .thin
@@ -151,7 +154,75 @@ enum LayoutBuilder {
                 split.addArrangedSubview(subview)
             }
             guard !split.arrangedSubviews.isEmpty else { return nil }
+            let coordinator = SplitCoordinator(
+                splitID: id,
+                isVertical: isVertical,
+                weights: weights,
+                actions: actions)
+            split.delegate = coordinator
+            objc_setAssociatedObject(
+                split, &splitCoordinatorKey, coordinator,
+                .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+            // NSSplitView has no weight API. Apply the persisted fractions
+            // once the view has a real size, then let the delegate feed drags
+            // back into the core.
+            DispatchQueue.main.async {
+                coordinator.applyWeights(to: split)
+            }
             return split
+        }
+    }
+}
+
+private nonisolated(unsafe) var splitCoordinatorKey: UInt8 = 0
+
+/// Owns divider positions for one NSSplitView and reports drags to the core.
+/// It is retained by the split view itself (associated object) because
+/// NSSplitView's delegate is weak.
+final class SplitCoordinator: NSObject, NSSplitViewDelegate {
+    private let splitID: String
+    private let isVertical: Bool
+    private var weights: [Double]
+    private let actions: PaneActions
+    private var applying = false
+
+    init(splitID: String, isVertical: Bool, weights: [Double], actions: PaneActions) {
+        self.splitID = splitID
+        self.isVertical = isVertical
+        self.weights = weights
+        self.actions = actions
+    }
+
+    func applyWeights(to split: NSSplitView) {
+        guard !applying, split.arrangedSubviews.count > 1 else { return }
+        applying = true
+        defer { applying = false }
+        var normalized = weights
+        if normalized.count != split.arrangedSubviews.count {
+            normalized = Array(repeating: 1.0 / Double(split.arrangedSubviews.count),
+                               count: split.arrangedSubviews.count)
+        }
+        let total = isVertical ? split.bounds.width : split.bounds.height
+        guard total > 0 else { return }
+        var origin: CGFloat = 0
+        for index in 0..<(split.arrangedSubviews.count - 1) {
+            origin += total * CGFloat(normalized[index])
+            split.setPosition(origin, ofDividerAt: index)
+        }
+    }
+
+    func splitViewDidResizeSubviews(_ notification: Notification) {
+        guard !applying,
+              let split = notification.object as? NSSplitView,
+              split.arrangedSubviews.count > 1
+        else { return }
+        let total = isVertical ? split.bounds.width : split.bounds.height
+        guard total > 0 else { return }
+        for index in 0..<(split.arrangedSubviews.count - 1) {
+            let child = split.arrangedSubviews[index]
+            let size = isVertical ? child.frame.width : child.frame.height
+            let share = Double(size / total)
+            actions.resizeSplit(splitID, index, min(max(share, 0.05), 0.95))
         }
     }
 }
@@ -164,7 +235,7 @@ final class PaneView: NSView {
     let surfaceIDs: [String]
     private let terminalHost = NSView()
     private let tabBar: PaneTabBar
-    private static let tabHeight: CGFloat = 28
+    private static let tabHeight = Theme.Metrics.paneTabHeight
 
     init(
         paneID: String,
@@ -185,13 +256,13 @@ final class PaneView: NSView {
             actions: actions)
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.backgroundColor = NSColor.black.cgColor
-        layer?.borderColor = NSColor.separatorColor.cgColor
+        layer?.backgroundColor = Theme.Colors.terminalBackground.cgColor
+        layer?.borderColor = Theme.Colors.paneBorder.cgColor
         layer?.borderWidth = 1
 
         addSubview(tabBar)
         terminalHost.wantsLayer = true
-        terminalHost.layer?.backgroundColor = NSColor.black.cgColor
+        terminalHost.layer?.backgroundColor = Theme.Colors.terminalBackground.cgColor
         addSubview(terminalHost)
 
         surface.frame = terminalHost.bounds
@@ -228,10 +299,10 @@ final class PaneView: NSView {
         guard let layer else { return }
         layer.borderWidth = 2
         let flash = CABasicAnimation(keyPath: "borderColor")
-        flash.fromValue = NSColor.controlAccentColor.cgColor
-        flash.toValue = NSColor.separatorColor.cgColor
-        flash.duration = 1.2
-        layer.borderColor = NSColor.separatorColor.cgColor
+        flash.fromValue = Theme.Colors.accent.cgColor
+        flash.toValue = Theme.Colors.paneBorder.cgColor
+        flash.duration = Theme.Metrics.ringDuration
+        layer.borderColor = Theme.Colors.paneBorder.cgColor
         layer.add(flash, forKey: "attention")
     }
 
@@ -259,7 +330,7 @@ final class PaneTabButton: NSButton {
         isBordered = false
         wantsLayer = true
         layer?.cornerRadius = 4
-        font = .systemFont(ofSize: 11)
+        font = Theme.Fonts.tab
         cell?.lineBreakMode = .byTruncatingTail
         refreshAppearance()
     }
@@ -269,9 +340,9 @@ final class PaneTabButton: NSButton {
 
     private func refreshAppearance() {
         layer?.backgroundColor = (isActiveTab
-            ? NSColor.controlAccentColor.withAlphaComponent(0.28)
+            ? Theme.Colors.paneActiveTab
             : NSColor.clear).cgColor
-        contentTintColor = isActiveTab ? .labelColor : .secondaryLabelColor
+        contentTintColor = isActiveTab ? Theme.Colors.textPrimary : Theme.Colors.textSecondary
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -413,7 +484,7 @@ extension WorkspaceLayout.Node {
         switch self {
         case let .leaf(_, active):
             return active
-        case let .split(_, _, children):
+        case let .split(_, _, children, _):
             for child in children {
                 if let found = child.firstLeafSurface() { return found }
             }

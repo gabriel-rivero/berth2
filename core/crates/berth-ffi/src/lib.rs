@@ -273,7 +273,8 @@ impl Engine {
     pub fn sweep_stale(&self, ttl_ms: u64) -> Vec<String> {
         let now = berth_core::time::now_ms();
         let mut state = lock(&self.state);
-        state.sweep_stale(now, ttl_ms)
+        let ops = HostAdapter(Arc::clone(&self.host));
+        state.sweep_stale(now, ttl_ms, &ops)
     }
 
     pub fn protocol_version(&self) -> u32 {

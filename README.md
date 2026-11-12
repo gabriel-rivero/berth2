@@ -2,7 +2,7 @@
 
 A native macOS terminal workspace for running coding agents side by side — built on Ghostty's renderer, with a typed agent lifecycle and a push-based protocol.
 
-Status: M4. The daily-driver work is in progress: `berth hooks install` wires Claude Code hooks and an opencode plugin so agent state, tool detail, and the provider session id feed the M3 agent layer (hooks also make `claude --resume <id>` work across relaunch). M3 remains the agent layer: `AgentSurface` state machine with attention/notification dedupe, passive foreground-process detection, `berth run` registration with resume payloads, sidebar agent badges and attention-first ordering, pane attention rings, `⌘⇧U` jump, `⌘I` attention list, and agent-aware session restore. M4 hardening frees PTYs before Ghostty shuts down and validates session snapshots before restoring, with corrupt-journal fallback. M0–M2 remain the shell and authenticated NDJSON protocol spine.
+Status: M4. The daily-driver work is in progress: `berth hooks install` wires Claude Code hooks and an opencode plugin so agent state, tool detail, and the provider session id feed the M3 agent layer (hooks also make `claude --resume <id>` work across relaunch). M3 remains the agent layer: `AgentSurface` state machine with attention/notification dedupe, one-second passive foreground-process detection, process-exit → `errored` within the same tick, `berth run` registration with resume payloads, sidebar agent badges and attention-first ordering, pane attention rings, acknowledging `⌘⇧U` jump, `⌘I` attention panel, and agent-aware session restore. M4 hardening frees PTYs before Ghostty shuts down, validates session snapshots before restoring, rotates the crash journal, and logs races/crashes under `dev.berth.app`; corrupt-journal fallback remains. M0–M2 remain the shell and authenticated NDJSON protocol spine, now with generated JSON Schema.
 
 Download: [latest release](https://github.com/gabriel-rivero/berth2/releases) (macOS 14+, Apple Silicon, ad-hoc signed).
 
@@ -27,6 +27,8 @@ cmux proved the shape (sidebar of workspaces next to a split grid of terminals) 
 | [docs/03-protocol.md](docs/03-protocol.md) | Socket transport, auth, methods, events, agent schema and state machine |
 | [docs/04-roadmap.md](docs/04-roadmap.md) | M0–M4 milestones with acceptance criteria, post-v1, kill criteria |
 | [docs/05-build.md](docs/05-build.md) | Toolchain, bootstrap, smoke checklist, scaffold gaps, Ghostty upgrades |
+| [docs/config.md](docs/config.md) | `config.json`, font/display scale, sidebar density, socket and env vars, logs |
+| [CHANGELOG.md](CHANGELOG.md) | Release notes, including 0.8.0 |
 
 ## Repo layout
 

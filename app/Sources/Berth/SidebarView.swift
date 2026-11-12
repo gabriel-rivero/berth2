@@ -42,9 +42,10 @@ struct SidebarAgent {
     var needsAttention: Bool { attention == "needs_input" || attention == "error" }
 
     var attentionRank: Int {
+        // Must match core `Attention::rank`: Error outranks NeedsInput.
         switch attention {
-        case "needs_input": return 3
-        case "error": return 2
+        case "error": return 3
+        case "needs_input": return 2
         case "info": return 1
         default: return 0
         }
@@ -132,7 +133,7 @@ final class SidebarView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         addSubview(add)
 
         table.headerView = nil
-        table.rowHeight = 62
+        table.rowHeight = AppConfig.shared.compactSidebar ? Theme.Metrics.sidebarRowCompact : Theme.Metrics.sidebarRowNormal
         table.intercellSpacing = NSSize(width: 0, height: 2)
         table.backgroundColor = .clear
         table.selectionHighlightStyle = .sourceList
@@ -176,6 +177,9 @@ final class SidebarView: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     func update(_ model: SidebarModel) {
         self.model = model
+        table.rowHeight = AppConfig.shared.compactSidebar
+            ? Theme.Metrics.sidebarRowCompact
+            : Theme.Metrics.sidebarRowNormal
         rows = buildRows(model)
         isUpdating = true
         table.reloadData()
@@ -374,14 +378,14 @@ final class WorkspaceRowView: NSTableCellView {
         dot.wantsLayer = true
         dot.layer?.cornerRadius = 3
         dot.translatesAutoresizingMaskIntoConstraints = false
-        title.font = .systemFont(ofSize: 12, weight: .medium)
+        title.font = Theme.Fonts.sidebarTitle
         title.lineBreakMode = .byTruncatingTail
         title.translatesAutoresizingMaskIntoConstraints = false
-        agentLine.font = .systemFont(ofSize: 10.5)
+        agentLine.font = Theme.Fonts.sidebarAgent
         agentLine.lineBreakMode = .byTruncatingTail
         agentLine.translatesAutoresizingMaskIntoConstraints = false
-        detail.font = .systemFont(ofSize: 10)
-        detail.textColor = .secondaryLabelColor
+        detail.font = Theme.Fonts.sidebarDetail
+        detail.textColor = Theme.Colors.textSecondary
         detail.lineBreakMode = .byTruncatingTail
         detail.translatesAutoresizingMaskIntoConstraints = false
         progress.isIndeterminate = false
@@ -433,11 +437,11 @@ final class WorkspaceRowView: NSTableCellView {
         let needsAttention = agent?.needsAttention ?? false
         dot.isHidden = workspace.unread == 0 && !needsAttention
         if let attention = agent?.attention, attention == "error" {
-            dot.layer?.backgroundColor = NSColor.systemRed.cgColor
+            dot.layer?.backgroundColor = Theme.Colors.attentionError.cgColor
         } else if let attention = agent?.attention, attention == "needs_input" {
-            dot.layer?.backgroundColor = NSColor.systemOrange.cgColor
+            dot.layer?.backgroundColor = Theme.Colors.attentionInput.cgColor
         } else {
-            dot.layer?.backgroundColor = NSColor.systemRed.cgColor
+            dot.layer?.backgroundColor = Theme.Colors.attentionError.cgColor
         }
 
         let live = workspace.title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -477,6 +481,7 @@ final class WorkspaceRowView: NSTableCellView {
             parts.append(workspace.ports.prefix(3).map { ":\($0)" }.joined(separator: " "))
         }
         detail.stringValue = parts.joined(separator: "  ")
+        detail.isHidden = AppConfig.shared.compactSidebar
 
         if let value = agent?.progress {
             progress.doubleValue = value <= 1 ? value * 100 : value
@@ -488,11 +493,11 @@ final class WorkspaceRowView: NSTableCellView {
 
     private static func stateColor(_ agent: SidebarAgent) -> NSColor {
         switch agent.state {
-        case "blocked", "waiting_input": return .systemOrange
-        case "errored": return .systemRed
-        case "done": return .systemGreen
+        case "blocked", "waiting_input": return Theme.Colors.attentionInput
+        case "errored": return Theme.Colors.attentionError
+        case "done": return Theme.Colors.success
         case "unknown": return .tertiaryLabelColor
-        default: return .controlAccentColor
+        default: return Theme.Colors.accent
         }
     }
 

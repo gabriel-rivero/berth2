@@ -121,8 +121,12 @@ Agents are a core concern, not a shell decoration. `berth-core` owns the
 provider table, the `AgentSurface` state machine, attention derivation, stale
 sweeps, and notification dedupe. The Swift shell contributes four things:
 
-- **Passive detection**: every two seconds the host asks the core to sniff each
+- **Passive detection**: every second the host asks the core to sniff each
   unclaimed surface's foreground process (`agent.detect` → `HostOps.pid_info`).
+  The loop runs off-main; only the Ghostty pid read hops to the main thread, so
+  `/bin/ps` cannot stall the render path. A child-exit action immediately marks
+  the bound live agent `errored` (`reason: process_exit`) instead of waiting for
+  the 180 s staleness sweep.
   A recognized `claude`/`codex`/`opencode` process creates an `unknown` agent,
   which is enough for a badge and a restore target.
 - **Rendering**: the sidebar picks one primary agent per workspace (highest
@@ -134,9 +138,11 @@ sweeps, and notification dedupe. The Swift shell contributes four things:
   `done`; both integrations record the provider session id into the agent's
   resume payload, so the next launch uses `claude --resume <id>` instead of a
   fresh session.
-- **Attention routing**: `⌘⇧U` jumps to the newest attention item and repeats
-  through the list; `⌘I` opens the unread notification list as a palette. macOS
-  banners are suppressed for the workspace being viewed.
+- **Attention routing**: `⌘⇧U` jumps to the newest attention item, acknowledges
+  it, and repeats through the rest; `⌘I` opens the unread notification panel.
+  Agent attention calls the same OS-notification path as explicit
+  `notification.create`; macOS banners are suppressed for the workspace being
+  viewed.
 
 Restore is agent-aware: `store::restore` replays each agent's saved argv/cwd
 (and environment), injects `BERTH_AGENT_ID`, and uses the provider resume
@@ -169,7 +175,7 @@ Window (n per app)
 ## 5. Persistence
 
 - `~/Library/Application Support/Berth/session.json` — versioned snapshot: windows, workspaces, tree, tabs, cwd, agent resume payloads. Written debounced (500 ms) and on quit.
-- `journal.ndjson` — append-only structural changes since last snapshot; replayed on launch after a crash. Snapshot truncates journal.
+- `journal.ndjson` — bounded append-only crash tail of whole snapshots (newest wins, capped at 5 lines / 4 MiB), replayed on launch when `session.json` is missing or corrupt. Clean quit truncates it.
 - No terminal contents are persisted. Restore = new PTY in the saved cwd + agent resume argv; scrollback restore is explicitly not promised.
 
 ## 6. Repo layout

@@ -11,6 +11,9 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     private let window: NSWindow
     private var fields: [ShortcutAction: NSTextField] = [:]
     private let fontField = NSTextField(string: "")
+    private let fontScaleField = NSTextField(string: "")
+    private let compactBox = NSButton(
+        checkboxWithTitle: "Compact sidebar rows", target: nil, action: nil)
     private let socketPopUp = NSPopUpButton(frame: .zero, pullsDown: false)
 
     static func present() {
@@ -44,7 +47,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         content.addSubview(title)
 
         let hint = NSTextField(
-            labelWithString: "Shortcut format: cmd+shift+p · empty means default · font and socket apply on relaunch")
+            labelWithString: "Shortcut format: cmd+shift+p · empty means default · font applies live · socket on relaunch")
         hint.font = .systemFont(ofSize: 11)
         hint.textColor = .secondaryLabelColor
         hint.translatesAutoresizingMaskIntoConstraints = false
@@ -61,6 +64,22 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         fontField.translatesAutoresizingMaskIntoConstraints = false
         fontField.widthAnchor.constraint(equalToConstant: 220).isActive = true
         grid.addRow(with: [fontLabel, fontField])
+
+        let scaleLabel = NSTextField(labelWithString: "Display Font Scale")
+        scaleLabel.alignment = .right
+        fontScaleField.stringValue = AppConfig.shared.fontScale == 0
+            ? "auto"
+            : String(format: "%g", AppConfig.shared.fontScale)
+        fontScaleField.placeholderString = "auto (1x monitors → 2×)"
+        fontScaleField.translatesAutoresizingMaskIntoConstraints = false
+        fontScaleField.widthAnchor.constraint(equalToConstant: 220).isActive = true
+        grid.addRow(with: [scaleLabel, fontScaleField])
+
+        compactBox.state = AppConfig.shared.compactSidebar ? .on : .off
+        compactBox.translatesAutoresizingMaskIntoConstraints = false
+        let appearanceLabel = NSTextField(labelWithString: "Sidebar")
+        appearanceLabel.alignment = .right
+        grid.addRow(with: [appearanceLabel, compactBox])
 
         let socketLabel = NSTextField(labelWithString: "Automation Socket")
         socketLabel.alignment = .right
@@ -126,6 +145,19 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
             return
         }
         AppConfig.shared.setFontSize(size)
+        let scaleText = fontScaleField.stringValue
+            .trimmingCharacters(in: .whitespaces)
+            .lowercased()
+        if scaleText.isEmpty || scaleText == "auto" {
+            AppConfig.shared.setFontScale(0)
+        } else if let scale = Double(scaleText), (0.5...3).contains(scale) {
+            AppConfig.shared.setFontScale(scale)
+        } else {
+            NSSound.beep()
+            fontScaleField.becomeFirstResponder()
+            return
+        }
+        AppConfig.shared.setCompactSidebar(compactBox.state == .on)
         let modeIndex = socketPopUp.indexOfSelectedItem
         if SocketMode.allCases.indices.contains(modeIndex) {
             AppConfig.shared.setSocketMode(SocketMode.allCases[modeIndex])
@@ -149,6 +181,8 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
             return
         }
         MainMenu.install()
+        BerthCoreHost.shared.applyFontSizeToAllSurfaces()
+        BerthCoreHost.shared.reconcileAll()
         window.close()
     }
 

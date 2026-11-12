@@ -11,5 +11,6 @@ name = "berth"
 path = "src/main.rs"
 
 [dependencies]
+berth-core = { path = "../berth-core" }
 serde.workspace = true
 serde_json.workspace = true

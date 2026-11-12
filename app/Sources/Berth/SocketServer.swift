@@ -84,7 +84,8 @@ final class SocketServer {
         source.setEventHandler { [weak self] in self?.acceptPending() }
         source.resume()
         acceptSource = source
-        NSLog("berth: listening on \(path) (\(mode.rawValue) mode)")
+        BerthLog.socket.info(
+            "listening path=\(path, privacy: .public) mode=\(mode.rawValue, privacy: .public)")
     }
 
     func stop() {
@@ -135,6 +136,7 @@ final class SocketServer {
             clientsLock.lock()
             clients[clientFD] = client
             clientsLock.unlock()
+            BerthLog.socket.debug("accepted client fd=\(clientFD, privacy: .public)")
             client.start()
         }
     }
@@ -292,6 +294,8 @@ private final class Client: ClientSink, @unchecked Sendable {
                 token: token,
                 mode: mode)
         {
+            BerthLog.socket.error(
+                "permission denied method=\(method, privacy: .public) fd=\(self.fd, privacy: .public)")
             send(Data(Self.errorLine(
                 id: id,
                 code: "permission_denied",
@@ -319,7 +323,8 @@ private final class Client: ClientSink, @unchecked Sendable {
         outbound.append(data)
         outbound.append(0x0A)
         if outbound.count > maxPendingBytes {
-            NSLog("berth: socket client \(fd) exceeded the outbound buffer")
+            BerthLog.socket.error(
+                "client fd=\(self.fd, privacy: .public) exceeded outbound buffer bytes=\(self.outbound.count, privacy: .public)")
             closeNow()
             return
         }

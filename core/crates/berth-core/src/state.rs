@@ -27,6 +27,8 @@ pub struct AppState {
     pub selected_surface: Option<String>,
     /// Minted lazily; identifies this app run in `system.hello`.
     pub instance: String,
+    /// First activity timestamp, used by `system.ping` uptime.
+    pub started_ms: u64,
     pending: Vec<Event>,
     seq: u64,
 }
@@ -43,10 +45,41 @@ pub struct AgentRegistration<'a> {
 
 impl AppState {
     pub fn instance(&mut self) -> String {
+        if self.started_ms == 0 {
+            self.started_ms = time::now_ms();
+        }
         if self.instance.is_empty() {
             self.instance = ids::mint("inst");
         }
         self.instance.clone()
+    }
+
+    /// Milliseconds since this state was first touched. Zero before boot.
+    pub fn uptime_ms(&self) -> u64 {
+        if self.started_ms == 0 {
+            0
+        } else {
+            time::now_ms().saturating_sub(self.started_ms)
+        }
+    }
+
+    /// Drop all live entities, closing their PTYs first. Used by
+    /// `session.restore` so restoring over a running app cannot leave stale
+    /// surfaces pointing at the old snapshot.
+    pub fn reset(&mut self, ops: &dyn SurfaceOps) {
+        let surfaces: Vec<String> = self.surfaces.keys().cloned().collect();
+        for id in surfaces {
+            let _ = ops.close(&id);
+        }
+        self.workspaces.clear();
+        self.groups.clear();
+        self.panes.clear();
+        self.surfaces.clear();
+        self.agents.clear();
+        self.notifications.clear();
+        self.selected_workspace = None;
+        self.selected_surface = None;
+        self.pending.clear();
     }
 
     // ---- events -------------------------------------------------------
@@ -730,6 +763,7 @@ impl AppState {
         detail: Option<String>,
         progress: Option<Option<f32>>,
         meta: Option<Value>,
+        ops: &dyn SurfaceOps,
     ) -> Result<AgentSurface, CoreError> {
         let now = time::now_ms();
         let mut agent = self
@@ -784,9 +818,85 @@ impl AppState {
                     "reason": "update",
                 }),
             );
-            self.maybe_notify_attention(&agent);
+            self.maybe_notify_attention(&agent, ops);
         }
         Ok(agent)
+    }
+
+    /// The child process behind a surface exited. A live agent becomes
+    /// `errored` immediately instead of waiting for the 180s staleness sweep;
+    /// that is what makes a dead CLI visible within the one-second M3 budget.
+    pub fn mark_agent_exited(
+        &mut self,
+        surface_id: &str,
+        ops: &dyn SurfaceOps,
+    ) -> Option<AgentSurface> {
+        let id = self.agent_for_surface(surface_id)?.id.clone();
+        let from = self.agents.get(&id)?.state;
+        if from.is_terminal() || !agent::transition_allowed(from, AgentState::Errored) {
+            return None;
+        }
+        let now = time::now_ms();
+        {
+            let agent = self.agents.get_mut(&id)?;
+            agent.state = AgentState::Errored;
+            agent.attention = Attention::Error;
+            agent.since_ms = now;
+            agent.last_seen_ms = now;
+            agent.detail = "process exited".to_string();
+            agent.progress = None;
+        }
+        let snapshot = self.agents.get(&id)?.clone();
+        self.emit(
+            names::AGENT_STATE_CHANGED,
+            serde_json::json!({
+                "agent_id": snapshot.id,
+                "from": from,
+                "to": AgentState::Errored,
+                "reason": "process_exit",
+            }),
+        );
+        self.maybe_notify_attention(&snapshot, ops);
+        Some(snapshot)
+    }
+
+    /// Clear one agent's attention after the user visits it. Derived attention
+    /// is set to `None`; the next real state transition derives it again.
+    /// Notifications for the same agent are acknowledged in the same pass.
+    pub fn ack_agent_attention(&mut self, agent_id: &str) -> Result<AgentSurface, CoreError> {
+        if !self.agents.contains_key(agent_id) {
+            return Err(CoreError::not_found(format!("no agent {agent_id}")));
+        }
+        let acked: Vec<String> = self
+            .notifications
+            .iter()
+            .filter(|n| n.agent_id.as_deref() == Some(agent_id) && !n.acked)
+            .map(|n| n.id.clone())
+            .collect();
+        for id in &acked {
+            if let Some(n) = self.notifications.iter_mut().find(|n| &n.id == id) {
+                n.acked = true;
+            }
+            self.emit(
+                names::NOTIFICATION_ACKED,
+                serde_json::json!({"notification_id": id}),
+            );
+        }
+        let agent = self.agents.get_mut(agent_id).expect("checked above");
+        let changed = agent.attention != Attention::None;
+        agent.attention = Attention::None;
+        let snapshot = agent.clone();
+        if changed {
+            self.emit(
+                names::AGENT_ATTENTION_CHANGED,
+                serde_json::json!({
+                    "agent_id": snapshot.id,
+                    "attention": "none",
+                    "reason": "ack",
+                }),
+            );
+        }
+        Ok(snapshot)
     }
 
     /// Record the provider session id discovered by an agent hook. The argv
@@ -816,7 +926,7 @@ impl AppState {
         Ok(agent)
     }
 
-    fn maybe_notify_attention(&mut self, agent: &AgentSurface) {
+    fn maybe_notify_attention(&mut self, agent: &AgentSurface, ops: &dyn SurfaceOps) {
         if !agent.state.needs_attention() {
             return;
         }
@@ -852,10 +962,13 @@ impl AppState {
         };
         self.notifications.push(n.clone());
         self.emit(names::NOTIFICATION_CREATED, serde_json::json!(n));
+        // The in-app ladder is primary, but attention must still reach the OS
+        // when the user is in another workspace (M3 acceptance).
+        let _ = ops.notify_os(&n);
     }
 
     /// Escalate agents that stopped reporting. Returns ids that changed.
-    pub fn sweep_stale(&mut self, now_ms: u64, ttl_ms: u64) -> Vec<String> {
+    pub fn sweep_stale(&mut self, now_ms: u64, ttl_ms: u64, ops: &dyn SurfaceOps) -> Vec<String> {
         let stale: Vec<String> = self
             .agents
             .values()
@@ -884,7 +997,7 @@ impl AppState {
                     "reason": "stale",
                 }),
             );
-            self.maybe_notify_attention(&snapshot);
+            self.maybe_notify_attention(&snapshot, ops);
         }
         stale
     }

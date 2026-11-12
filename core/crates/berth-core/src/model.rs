@@ -3,12 +3,13 @@
 //! The split tree is a first-class value, not a view artifact: it is what gets
 //! persisted, restored, and addressed by the protocol.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::agent::{AgentState, Attention};
 use crate::ids;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Workspace {
     pub id: String,
     pub name: String,
@@ -28,7 +29,7 @@ pub struct Workspace {
     pub active_surface: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Group {
     pub id: String,
     pub name: String,
@@ -38,7 +39,7 @@ pub struct Group {
     pub collapsed: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Orientation {
     /// Children side by side (split vertically down the middle).
@@ -47,7 +48,7 @@ pub enum Orientation {
     Vertical,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PaneNode {
     Split {
@@ -188,6 +189,33 @@ impl PaneNode {
         }
     }
 
+    /// Set one child's share of an existing split. Unlike `set_weight`, this
+    /// addresses a split directly, so a nested split's own weight can be
+    /// persisted (a leaf-only API silently loses those divider positions).
+    pub fn set_child_weight(&mut self, split_id: &str, index: usize, weight: f32) -> bool {
+        match self {
+            Self::Leaf { .. } => false,
+            Self::Split {
+                id,
+                children,
+                weights,
+                ..
+            } => {
+                if id == split_id {
+                    if index < weights.len() && index < children.len() {
+                        weights[index] = weight.clamp(0.05, 0.95);
+                        self.normalize();
+                        return true;
+                    }
+                    return false;
+                }
+                children
+                    .iter_mut()
+                    .any(|c| c.set_child_weight(split_id, index, weight))
+            }
+        }
+    }
+
     pub fn set_weight(&mut self, pane_id: &str, weight: f32) -> bool {
         match self {
             Self::Leaf { .. } => false,
@@ -215,7 +243,7 @@ impl PaneNode {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Pane {
     pub id: String,
     pub workspace_id: String,
@@ -230,14 +258,14 @@ impl Pane {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SurfaceKind {
     #[default]
     Terminal,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Surface {
     pub id: String,
     pub pane_id: String,
@@ -266,7 +294,7 @@ pub struct Surface {
     pub created_ms: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Resume {
     pub argv: Vec<String>,
     pub cwd: String,
@@ -280,7 +308,7 @@ pub struct Resume {
 }
 
 /// A typed agent session bound to exactly one surface.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AgentSurface {
     pub id: String,
     pub surface_id: String,
@@ -307,7 +335,7 @@ pub struct AgentSurface {
     pub meta: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum NotifLevel {
     Info,
@@ -315,7 +343,7 @@ pub enum NotifLevel {
     Error,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Notification {
     pub id: String,
     pub level: NotifLevel,

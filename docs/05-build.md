@@ -110,10 +110,11 @@ Start a release build, then from the repo root:
 ```sh
 export PATH="$PWD/core/target/release:$PATH"   # or: make cli
 berth ping
-berth schema | head
+berth schema | head                             # generated from the Rust types
 berth new --name m2-check
 berth active                                    # active surface id
 make acceptance                                 # builds the CLI, then runs the check
+make m3                                         # three agents: blocked + dying
 ```
 
 The script creates a workspace, splits twice, types into the deepest pane, reads the screen back, and runs two independent `events --since 0` clients. It fails unless both clients see identical NDJSON with strictly increasing `seq`. It cleans up the workspace on exit.
@@ -153,7 +154,7 @@ berth run --name dummy-c -- sleep 600
 Check:
 
 - [ ] Each run creates a tab in that workspace and the sidebar shows its
-      provider glyph plus `detected`/`idle` within ~2 seconds.
+      provider glyph plus `detected`/`idle` within ~1 second.
 - [ ] Force attention on B and C so A stays quiet:
       `berth agent-set AGENT_ID --state blocked --detail "permission prompt"` and
       `berth agent-set AGENT_ID --state errored --detail "process exited"`.
@@ -234,19 +235,14 @@ mistaken for missing architecture.
 
 1. **Headless app-test mode.** The acceptance script needs the GUI app running;
    there is no windowless app loop for CI.
-2. **Generated JSON Schema.** `berth schema` prints the capability list; the
-   generated `docs/schema/` promised by the protocol doc does not exist yet.
-3. **Socket hardening.** Token auth is implemented; peer-UID checks, hiding
+2. **Socket hardening.** Token auth is implemented; peer-UID checks, hiding
    `BERTH_TOKEN` from children, and non-bypassable `trusted` mode are not.
-4. **Group management UI.** Groups render and collapse, and the protocol has
+3. **Group management UI.** Groups render and collapse, and the protocol has
    `group.create/update/delete`, but there is no create/rename/color picker yet.
-5. **Split weights.** The core stores per-split weights; the Swift shell rebuilds
-   `NSSplitView` from the tree and does not feed weights back into the core, so
-   divider positions are not restored across launches.
-6. **Journal semantics.** `journal.ndjson` stores whole snapshots (newest wins)
+4. **Journal semantics.** `journal.ndjson` stores whole snapshots (newest wins)
    rather than replayable structural events, because events cannot recreate
    PTYs. A crash loses at most the last 500 ms debounce window.
-7. **Geometric focus.** ⌘] / ⌘[ move between panes in tree order; rectangle-based
+5. **Geometric focus.** ⌘] / ⌘[ move between panes in tree order; rectangle-based
    arrow navigation is not implemented.
 8. **Live font reload.** Font size applies on relaunch.
 9. **Agent mute and multi-agent rows.** Banners are suppressed for the focused
