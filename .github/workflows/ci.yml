@@ -137,12 +137,13 @@ jobs:
             Download `Berth-*.zip`, unzip, and right-click → Open the first time
             (the app is ad-hoc signed, not notarized).
 
-            This build is the M3 agent layer on top of the M1 shell and M2
-            protocol spine. Agents show up in the sidebar with provider, state,
-            detail and progress; attention sorts first, rings the pane, and is
-            jumpable with ⌘⇧U or listable with ⌘I. `berth run -- <agent>` records
-            a resume payload, and relaunch resurrects registered agents (a
-            failed resume is shown as `errored`, not silently replaced).
+            This build is the M3 agent layer plus the M4 hooks installer. Agents
+            appear in the sidebar with provider, state, detail and progress;
+            attention sorts first, rings the pane, and is jumpable with ⌘⇧U or
+            listable with ⌘I. `berth run -- <agent>` records a resume payload,
+            and `berth hooks install` wires Claude Code hooks and an opencode
+            plugin so tool use, permission prompts and the provider session id
+            flow into Berth — relaunch then resumes with `claude --resume <id>`.
             Passive detection badges claude/codex/opencode started in any shell.
             The split tree, tabs, authenticated NDJSON socket and CLI remain.
-            Hooks recipes are M4.
+            Perf, crash hardening and polish are the rest of M4.

@@ -170,6 +170,38 @@ Check:
 (just typing `claude` into a shell) get badges but no resume payload, so they
 come back as plain shells by design.
 
+## M4 hooks checkpoint (run on the Mac)
+
+```sh
+make cli
+./core/target/release/berth hooks print claude    # inspect before writing
+./core/target/release/berth hooks install         # claude + opencode
+```
+
+`hooks install` embeds the absolute path of the binary you invoked, so run it
+from the build you want hooks to call. It merges into
+`~/.claude/settings.json` (other hooks are preserved) and writes
+`~/.config/opencode/plugins/berth.ts`.
+
+Check:
+
+- [ ] `berth hooks install` is idempotent: running it twice leaves one hook
+      entry per event.
+- [ ] Launch `berth run -- claude`; asking Claude to run a tool shows
+      `tool · <tool name>` in the sidebar, and a permission prompt shows
+      `blocked` with the prompt text.
+- [ ] Finishing a turn shows `idle · turn complete`; quitting Claude shows
+      `done · session ended`.
+- [ ] Quit Berth and relaunch: the agent resumes with
+      `claude --resume <session-id>` (the session id came from the hook, not a
+      fresh `claude`).
+- [ ] Start opencode through `berth run -- opencode`; session idle/error and
+      permission events update the same row.
+
+If hooks do not fire, check `~/.claude/settings.json` and run the generated
+command by hand with a sample payload:
+`echo '{"hook_event_name":"Stop"}' | ./core/target/release/berth hook claude`.
+
 ## Known gaps
 
 These mirror the M5 pull-forward list in `docs/04-roadmap.md`; none should be

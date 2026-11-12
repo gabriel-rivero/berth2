@@ -60,7 +60,12 @@ provider mute remain M4/M5 polish.
 
 ## M4 — Daily driver (≈2 weeks)
 
-- Hook recipes for Claude Code and opencode (shipped as copy-paste snippets + `berth hooks install`).
+**Status:** in progress. Hooks landed: `berth hooks install` merges Claude Code
+settings and writes an opencode plugin; both record state/detail and the
+provider session id, so restore uses `--resume`. Perf, crash hardening, and
+polish remain.
+
+- Hook recipes for Claude Code and opencode (shipped as copy-paste snippets + `berth hooks install`). **Done.**
 - Perf pass against the budgets in `docs/02-architecture.md` §9; Instruments trace of startup and keystroke path.
 - Crash/quit safety, zombie PTY audit, restore fuzzing (kill -9 mid-session).
 - Polish: notification popover, empty states, sidebar density, theme tokens, onboarding (one screen).

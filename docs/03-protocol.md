@@ -123,7 +123,7 @@ Event:
 | --- | --- | --- |
 | `agent.register` | `{surface_id, provider, name?, agent_id?, resume?, meta?}` | `{agent:Agent}` |
 | `agent.detect` | `{surface_id}` | `{agent:Agent\|null}` |
-| `agent.update` | `{agent_id, state?, detail?, progress?, attention?, meta?}` | `{agent:Agent}` |
+| `agent.update` | `{agent_id, state?, detail?, progress?, attention?, session_ref?, meta?}` | `{agent:Agent}` |
 | `agent.get` | `{agent_id}` | `{agent:Agent}` |
 | `agent.list` | `{workspace_id?, state?}` | `{agents:[Agent]}` |
 | `agent.clear` | `{agent_id}` | `{}` |
@@ -147,7 +147,9 @@ login shell with a minimal environment; without it a resumed `claude` can miss
 its interpreter. On restore, a provider session ref uses the provider template
 (`claude --resume <ref>`, `codex resume <ref>`, `opencode --session <ref>`);
 without a ref the saved argv is executed verbatim. A failed resume keeps the
-surface in the tree and marks the agent `errored` with detail `resume failed`
+surface in the tree and marks the agent `errored` with detail `resume failed`.
+`agent.update` accepts `session_ref` to fill that ref once a hook observes the
+provider's session id, without re-registering or losing the saved argv.
 rather than silently starting a bare shell.
 
 ### notification
@@ -259,7 +261,7 @@ Three tiers, all writing the same typed state — tier 1 needs no cooperation at
 
 1. **Passive**: shell reports foreground pid/argv (`ghostty_surface_foreground_pid`, `tty_name`) plus Ghostty actions (title, OSC 9/99/777, progress, bell) → core matches provider table → `state: unknown`, live cwd/ports from `/proc`-equivalent (`lsof`), no registration.
 2. **Wrapper**: `berth run -- claude` creates a surface with `BERTH_AGENT_ID`, registers on start, forwards exit status → `done`/`errored`. Zero per-project setup; the argv is recorded as the resume payload automatically.
-3. **Hooks**: `berth agent update --state waiting_input --detail "…"` called from Claude Code `settings.json` hooks / opencode plugin. Richer `detail`, `tool` state, progress. One socket round trip, so hook latency is negligible.
+3. **Hooks**: `berth hooks install` writes Claude Code `settings.json` hooks and an opencode plugin. Each event calls `berth hook claude` or `berth agent-set --surface …`, updating state/detail and recording the provider session id for `--resume` on the next launch. One socket round trip, so hook latency is negligible.
 
 The wrapper is the recommended default: it makes Tier 2 (and therefore correct restore) universal.
 
@@ -273,7 +275,11 @@ berth send-key SURFACE_ID enter
 berth read SURFACE_ID [--scrollback] [--max-bytes N]
 berth notify "text" [--level needs_input] [--body B]
 berth agent-register SURFACE_ID [--provider P] [--name N] [--id AGENT_ID]
-berth agent-set AGENT_ID [--state S] [--detail D] [--progress 0.4] [--clear-progress]
+berth agent-set AGENT_ID [--state S] [--detail D] [--progress 0.4] [--clear-progress] [--session-ref ID]
+berth agent-set --surface SURFACE_ID [--state S] [--detail D]
+berth hooks install [claude|opencode|all]  # idempotent; embeds this binary's path
+berth hooks print [claude|opencode|all]    # recipes without writing
+berth hook claude                     # stdin hook payload; used by generated config
 berth run [--name N] [--provider P] [--cwd DIR] -- <argv…>  # creates surface, registers agent, execs
 berth events [--types a,b] [--since N] # streams NDJSON
 berth snapshot                        # session.dump to stdout

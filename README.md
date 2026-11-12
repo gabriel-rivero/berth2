@@ -2,7 +2,7 @@
 
 A native macOS terminal workspace for running coding agents side by side — built on Ghostty's renderer, with a typed agent lifecycle and a push-based protocol.
 
-Status: M3. The agent layer is in: `AgentSurface` state machine with attention/notification dedupe, passive foreground-process detection, `berth run` registration with resume payloads, sidebar agent badges and attention-first ordering, pane attention rings, `⌘⇧U` jump, `⌘I` attention list, and agent-aware session restore (resume argv, `BERTH_AGENT_ID`, explicit `resume failed` state). M0–M2 remain the shell and authenticated NDJSON protocol spine. Agent hooks and release polish are M4.
+Status: M4. The daily-driver work is in progress: `berth hooks install` wires Claude Code hooks and an opencode plugin so agent state, tool detail, and the provider session id feed the M3 agent layer (hooks also make `claude --resume <id>` work across relaunch). M3 remains the agent layer: `AgentSurface` state machine with attention/notification dedupe, passive foreground-process detection, `berth run` registration with resume payloads, sidebar agent badges and attention-first ordering, pane attention rings, `⌘⇧U` jump, `⌘I` attention list, and agent-aware session restore. M0–M2 remain the shell and authenticated NDJSON protocol spine.
 
 Download: [latest release](https://github.com/gabriel-rivero/berth2/releases) (macOS 14+, Apple Silicon, ad-hoc signed).
 

@@ -119,7 +119,7 @@ Thin client over the same protocol: `berth ls [--json]`, `berth send`, `berth se
 
 Agents are a core concern, not a shell decoration. `berth-core` owns the
 provider table, the `AgentSurface` state machine, attention derivation, stale
-sweeps, and notification dedupe. The Swift shell contributes three things:
+sweeps, and notification dedupe. The Swift shell contributes four things:
 
 - **Passive detection**: every two seconds the host asks the core to sniff each
   unclaimed surface's foreground process (`agent.detect` → `HostOps.pid_info`).
@@ -129,14 +129,20 @@ sweeps, and notification dedupe. The Swift shell contributes three things:
   attention, then newest), draws its provider glyph, state, detail and progress,
   and sorts attention-first. A pane whose agent newly needs input or errors gets
   a 1.2 s accent ring; the focused surface is skipped.
+- **Hooks**: `berth hooks install` merges Claude Code hook entries and writes
+  an opencode plugin. Claude events map to `thinking`/`tool`/`blocked`/`idle`/
+  `done`; both integrations record the provider session id into the agent's
+  resume payload, so the next launch uses `claude --resume <id>` instead of a
+  fresh session.
 - **Attention routing**: `⌘⇧U` jumps to the newest attention item and repeats
   through the list; `⌘I` opens the unread notification list as a palette. macOS
   banners are suppressed for the workspace being viewed.
 
-Restore is agent-aware: `store::restore` replays each agent's saved argv/cwd,
-injects `BERTH_AGENT_ID`, and leaves the surface in the tree with an `errored`
-agent (`detail: "resume failed"`) if the provider cannot be resurrected. It
-never silently substitutes a bare shell for a failed resume.
+Restore is agent-aware: `store::restore` replays each agent's saved argv/cwd
+(and environment), injects `BERTH_AGENT_ID`, and uses the provider resume
+template when a hook recorded a session id. It leaves the surface in the tree
+with an `errored` agent (`detail: "resume failed"`) if the provider cannot be
+resurrected. It never silently substitutes a bare shell for a failed resume.
 
 ## 3. Concurrency rules
 

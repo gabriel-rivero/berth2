@@ -490,7 +490,10 @@ fn handle(
             } else {
                 p.progress.map(Some)
             };
-            let agent = state.update_agent(&p.agent_id, p.state, p.detail, progress, p.meta)?;
+            let mut agent = state.update_agent(&p.agent_id, p.state, p.detail, progress, p.meta)?;
+            if let Some(session_ref) = p.session_ref {
+                agent = state.set_agent_session_ref(&p.agent_id, &session_ref)?;
+            }
             Ok(json!({"agent": agent}))
         }
         "agent.get" => {
@@ -889,6 +892,8 @@ struct AgentUpdate {
     clear_progress: bool,
     #[serde(default)]
     meta: Option<Value>,
+    #[serde(default)]
+    session_ref: Option<String>,
 }
 #[derive(Debug, Deserialize)]
 struct AgentIdParam {
@@ -1277,6 +1282,36 @@ mod tests {
         );
         assert!(!r.ok);
         assert_eq!(r.error.unwrap().code, ErrorCode::InvalidState);
+    }
+
+    #[test]
+    fn agent_update_records_a_session_ref_for_resume() {
+        let mut st = AppState::default();
+        call(&mut st, "workspace.create", json!({}));
+        let sid = call(&mut st, "surface.list", json!({}))["surfaces"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let aid = call(
+            &mut st,
+            "agent.register",
+            json!({
+                "surface_id": sid,
+                "provider": "claude-code",
+                "resume": {"argv":["/bin/claude"], "cwd":"/tmp", "session_ref": null}
+            }),
+        )["agent"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let updated = call(
+            &mut st,
+            "agent.update",
+            json!({"agent_id": aid, "state":"thinking", "session_ref":"sess-123"}),
+        );
+        assert_eq!(updated["agent"]["resume"]["session_ref"], "sess-123");
+        assert_eq!(updated["agent"]["resume"]["argv"][0], "/bin/claude");
     }
 
     #[test]

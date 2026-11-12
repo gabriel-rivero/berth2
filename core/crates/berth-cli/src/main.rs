@@ -3,7 +3,7 @@
 //! Deliberately dumb: it formats requests and prints responses. Everything it
 //! can do, another client can do; that is the point of the protocol.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -192,6 +192,297 @@ fn agent_id() -> String {
     format!("agt_{nanos:x}{:x}", std::process::id())
 }
 
+fn agent_for_surface(c: &mut Client, surface_id: &str) -> Result<String, String> {
+    let listed = c.call("agent.list", json!({}))?;
+    if let Some(id) = listed["agents"]
+        .as_array()
+        .and_then(|agents| {
+            agents
+                .iter()
+                .find(|a| a["surface_id"].as_str() == Some(surface_id))
+        })
+        .and_then(|a| a["id"].as_str())
+    {
+        return Ok(id.to_string());
+    }
+    let detected = c.call("agent.detect", json!({"surface_id": surface_id}))?;
+    detected["agent"]["id"]
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| format!("no agent detected on surface {surface_id}"))
+}
+
+/// The agent id comes from the wrapper's environment. Passive agents can be
+/// resolved from the surface id instead.
+fn hook_agent(c: &mut Client) -> Result<String, String> {
+    if let Ok(id) = std::env::var("BERTH_AGENT_ID") {
+        if !id.is_empty() {
+            return Ok(id);
+        }
+    }
+    let surface = std::env::var("BERTH_SURFACE_ID")
+        .map_err(|_| "neither BERTH_AGENT_ID nor BERTH_SURFACE_ID is set".to_string())?;
+    agent_for_surface(c, &surface)
+}
+
+fn claude_hook_state<'a>(event: &str, detail: &'a str) -> Option<(&'static str, &'a str)> {
+    match event {
+        "SessionStart" => Some(("idle", "session started")),
+        "UserPromptSubmit" => Some(("thinking", "working")),
+        "PreToolUse" => Some(("tool", detail)),
+        "PostToolUse" => Some(("thinking", "thinking")),
+        "Notification" => {
+            if detail.to_ascii_lowercase().contains("permission") {
+                Some(("blocked", detail))
+            } else {
+                Some(("waiting_input", detail))
+            }
+        }
+        "Stop" => Some(("idle", "turn complete")),
+        "PreCompact" => Some(("thinking", "compacting context")),
+        "SessionEnd" => Some(("done", "session ended")),
+        _ => None,
+    }
+}
+
+fn run_claude_hook(c: &mut Client) -> Result<(), String> {
+    let mut input = String::new();
+    std::io::stdin()
+        .read_to_string(&mut input)
+        .map_err(|e| e.to_string())?;
+    let payload: Value = serde_json::from_str(&input).unwrap_or(Value::Null);
+    let event = payload["hook_event_name"].as_str().unwrap_or_default();
+    let tool = payload["tool_name"].as_str().unwrap_or_default();
+    let message = payload["message"].as_str().unwrap_or_default();
+    let detail = if tool.is_empty() { message } else { tool };
+    let Some((state, fallback)) = claude_hook_state(event, detail) else {
+        return Ok(());
+    };
+    let agent_id = hook_agent(c)?;
+    let detail = if detail.is_empty() { fallback } else { detail };
+    let mut params = json!({"agent_id": agent_id.clone(), "state": state, "detail": detail});
+    if event == "SessionStart" {
+        if let Some(session) = payload["session_id"].as_str() {
+            params["session_ref"] = json!(session);
+        }
+    }
+    // A hook can arrive out of order (for example PreToolUse before the prompt
+    // event). Pass through thinking once instead of losing the update.
+    if c.call("agent.update", params.clone()).is_err() {
+        let _ = c.call(
+            "agent.update",
+            json!({"agent_id": agent_id, "state":"thinking"}),
+        );
+        c.call("agent.update", params)?;
+    }
+    Ok(())
+}
+
+fn home_dir() -> Result<PathBuf, String> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| "HOME is not set".to_string())
+}
+
+fn shell_quote(value: &str) -> String {
+    if value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "-_./".contains(c))
+    {
+        value.to_string()
+    } else {
+        format!("'{}'", value.replace('\'', "'\\''"))
+    }
+}
+
+fn write_atomic(path: &std::path::Path, contents: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    }
+    let tmp = path.with_extension(format!("tmp{}", std::process::id()));
+    std::fs::write(&tmp, contents).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+const CLAUDE_HOOK_EVENTS: &[&str] = &[
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "Notification",
+    "Stop",
+    "PreCompact",
+    "SessionEnd",
+];
+
+fn claude_hook_entry(event: &str, command: &str) -> Value {
+    let hook = json!({"type": "command", "command": command});
+    if matches!(event, "PreToolUse" | "PostToolUse") {
+        json!({"matcher": "*", "hooks": [hook]})
+    } else {
+        json!({"hooks": [hook]})
+    }
+}
+
+fn claude_hook_settings(berth: &str) -> Value {
+    let command = format!("{} hook claude >/dev/null 2>&1 || true", shell_quote(berth));
+    let mut hooks = serde_json::Map::new();
+    for event in CLAUDE_HOOK_EVENTS {
+        hooks.insert(
+            (*event).to_string(),
+            json!([claude_hook_entry(event, &command)]),
+        );
+    }
+    json!({"hooks": hooks})
+}
+
+fn install_claude_hooks(berth: &str) -> Result<PathBuf, String> {
+    let path = home_dir()?.join(".claude/settings.json");
+    let mut root: Value = if path.exists() {
+        let text =
+            std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        serde_json::from_str(&text)
+            .map_err(|e| format!("{} is not valid JSON: {e}", path.display()))?
+    } else {
+        json!({})
+    };
+    if !root.is_object() {
+        return Err(format!("{} must contain a JSON object", path.display()));
+    }
+    if !root["hooks"].is_object() {
+        root["hooks"] = json!({});
+    }
+    let hooks = root["hooks"].as_object_mut().unwrap();
+    let command = format!("{} hook claude >/dev/null 2>&1 || true", shell_quote(berth));
+    for event in CLAUDE_HOOK_EVENTS {
+        let groups = hooks
+            .entry((*event).to_string())
+            .or_insert_with(|| json!([]));
+        if !groups.is_array() {
+            return Err(format!("hooks.{event} must be an array"));
+        }
+        let groups = groups.as_array_mut().unwrap();
+        // Reinstall replaces our previous entry and leaves other hooks alone.
+        groups.retain(|group| !group.to_string().contains(" hook claude"));
+        groups.push(claude_hook_entry(event, &command));
+    }
+    let text = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?
+    );
+    write_atomic(&path, &text)?;
+    Ok(path)
+}
+
+fn opencode_plugin(berth: &str) -> String {
+    format!(
+        r#"// berth — report OpenCode session activity to the running Berth instance.
+// Installed by `berth hooks install opencode`; safe to delete.
+import {{ spawn }} from "node:child_process";
+
+const BERTH = {berth:?};
+
+function update(state: string, detail: string, sessionRef?: string): Promise<void> {{
+  const agent = process.env.BERTH_AGENT_ID;
+  if (!agent) return Promise.resolve();
+  const args = [BERTH, "agent-set", agent, "--state", state, "--detail", detail];
+  if (sessionRef) args.push("--session-ref", sessionRef);
+  return new Promise((resolve) => {{
+    const child = spawn(BERTH, args, {{ stdio: "ignore", env: process.env }});
+    child.on("error", () => resolve());
+    child.on("close", () => resolve());
+  }});
+}}
+
+export const BerthPlugin = async () => ({{
+  event: async ({{ event }}: any) => {{
+    const p = event.properties ?? {{}};
+    const session = p.sessionID ?? p.info?.id;
+    switch (event.type) {{
+      case "session.created":
+        await update("idle", "session started", session);
+        break;
+      case "session.idle":
+        await update("idle", "waiting for input");
+        break;
+      case "session.error":
+        await update("errored", p.error?.message ?? "session error");
+        break;
+      case "permission.updated":
+      case "permission.asked":
+        await update("waiting_input", "needs approval");
+        break;
+      case "permission.replied":
+        await update("thinking", "permission answered");
+        break;
+      case "session.compacted":
+        await update("thinking", "compacting context");
+        break;
+    }}
+  }},
+}});
+
+export default BerthPlugin;
+"#,
+        berth = berth
+    )
+}
+
+fn install_opencode_plugin(berth: &str) -> Result<PathBuf, String> {
+    let path = home_dir()?.join(".config/opencode/plugins/berth.ts");
+    if path.exists() {
+        let existing = std::fs::read_to_string(&path).unwrap_or_default();
+        if !existing.contains("Installed by `berth hooks install opencode`") {
+            let backup = path.with_extension("ts.bak");
+            std::fs::write(&backup, existing).map_err(|e| format!("{}: {e}", backup.display()))?;
+        }
+    }
+    write_atomic(&path, &opencode_plugin(berth))?;
+    Ok(path)
+}
+
+fn hooks_install(target: &str) -> Result<(), String> {
+    let berth = std::env::current_exe()
+        .map_err(|e| e.to_string())?
+        .display()
+        .to_string();
+    let claude = target == "claude" || target == "all";
+    let opencode = target == "opencode" || target == "all";
+    if !claude && !opencode {
+        return Err("hooks install: target must be claude, opencode, or all".into());
+    }
+    if claude {
+        println!("claude: {}", install_claude_hooks(&berth)?.display());
+    }
+    if opencode {
+        println!("opencode: {}", install_opencode_plugin(&berth)?.display());
+    }
+    Ok(())
+}
+
+fn hooks_print(target: &str) -> Result<(), String> {
+    let berth = std::env::current_exe()
+        .map_err(|e| e.to_string())?
+        .display()
+        .to_string();
+    match target {
+        "claude" | "all" => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&claude_hook_settings(&berth)).unwrap()
+            );
+        }
+        _ => {}
+    }
+    if target == "opencode" || target == "all" {
+        if target == "all" {
+            println!();
+        }
+        println!("{}", opencode_plugin(&berth));
+    }
+    Ok(())
+}
+
 const USAGE: &str = "\
 berth — control a running Berth instance
 
@@ -207,7 +498,11 @@ usage:
   berth read SURFACE_ID [--scrollback] [--max-bytes N]
   berth notify TITLE [--level info|needs_input|error] [--body B]
   berth agent-register SURFACE_ID [--provider P] [--name N]
-  berth agent-set AGENT_ID [--state S] [--detail D] [--progress 0.4]
+  berth agent-set AGENT_ID [--state S] [--detail D] [--progress 0.4] [--session-ref ID]
+  berth agent-set --surface SURFACE_ID [--state S] [--detail D]
+  berth hooks install [claude|opencode|all]
+  berth hooks print [claude|opencode|all]
+  berth hook claude             read a Claude Code hook payload on stdin
   berth run [--name N] [--provider P] [--cwd DIR] -- <argv…>
   berth events [--types a,b] [--since SEQ]
   berth snapshot                session JSON on stdout
@@ -224,10 +519,24 @@ fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cmd = args.first().cloned().unwrap_or_else(|| "ls".into());
     let rest = if args.len() > 1 { &args[1..] } else { &[][..] };
+
+    if matches!(cmd.as_str(), "help" | "-h" | "--help") {
+        print!("{USAGE}");
+        return Ok(());
+    }
+    if cmd == "hooks" {
+        let sub = rest.first().map(String::as_str).unwrap_or("print");
+        let target = rest.get(1).map(String::as_str).unwrap_or("all");
+        return match sub {
+            "install" => hooks_install(target),
+            "print" => hooks_print(target),
+            other => Err(format!("hooks: unknown subcommand {other}")),
+        };
+    }
+
     let mut c = Client::connect()?;
 
     match cmd.as_str() {
-        "help" | "-h" | "--help" => print!("{USAGE}"),
         "ping" => println!("{}", c.call("system.ping", json!({}))?),
 
         "ls" => {
@@ -375,7 +684,18 @@ fn run() -> Result<(), String> {
 
         "agent-set" => {
             let pos = positional(rest);
-            let aid = pos.first().ok_or("agent-set: missing AGENT_ID")?;
+            let mut aid = pos.first().cloned();
+            if aid.is_none() {
+                if let Some(surface) = arg_after(rest, "--surface") {
+                    aid = Some(agent_for_surface(&mut c, &surface)?);
+                }
+            }
+            if aid.is_none() {
+                aid = std::env::var("BERTH_AGENT_ID")
+                    .ok()
+                    .filter(|s| !s.is_empty());
+            }
+            let aid = aid.ok_or("agent-set: missing AGENT_ID or --surface")?;
             let mut params = json!({"agent_id": aid});
             if let Some(s) = arg_after(rest, "--state") {
                 params["state"] = json!(s);
@@ -387,10 +707,21 @@ fn run() -> Result<(), String> {
                 let f: f64 = p.parse().map_err(|_| "progress must be 0..1")?;
                 params["progress"] = json!(f);
             }
+            if let Some(r) = arg_after(rest, "--session-ref") {
+                params["session_ref"] = json!(r);
+            }
             if rest.iter().any(|a| a == "--clear-progress") {
                 params["clear_progress"] = json!(true);
             }
             c.call("agent.update", params)?;
+        }
+
+        "hook" => {
+            let provider = rest.first().map(String::as_str).unwrap_or_default();
+            match provider {
+                "claude" => run_claude_hook(&mut c)?,
+                other => return Err(format!("hook: unknown provider {other}")),
+            }
         }
 
         "run" => {
@@ -531,5 +862,60 @@ fn main() -> ExitCode {
             eprintln!("berth: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn claude_hooks_map_to_agent_states() {
+        assert_eq!(
+            claude_hook_state("SessionStart", ""),
+            Some(("idle", "session started"))
+        );
+        assert_eq!(
+            claude_hook_state("UserPromptSubmit", ""),
+            Some(("thinking", "working"))
+        );
+        assert_eq!(
+            claude_hook_state("PreToolUse", "Bash"),
+            Some(("tool", "Bash"))
+        );
+        assert_eq!(
+            claude_hook_state("Notification", "Claude needs your permission to use Bash"),
+            Some(("blocked", "Claude needs your permission to use Bash"))
+        );
+        assert_eq!(
+            claude_hook_state("Notification", "Claude is waiting for your input"),
+            Some(("waiting_input", "Claude is waiting for your input"))
+        );
+        assert_eq!(claude_hook_state("UnknownEvent", ""), None);
+    }
+
+    #[test]
+    fn claude_settings_cover_every_hook_event() {
+        let settings = claude_hook_settings("/opt/berth");
+        for event in CLAUDE_HOOK_EVENTS {
+            assert!(
+                settings["hooks"][event].is_array(),
+                "missing hook for {event}"
+            );
+        }
+        let command = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
+        assert!(command.contains("hook claude"));
+        assert!(!command.contains('\''));
+    }
+
+    #[test]
+    fn opencode_plugin_uses_the_installed_berth_path() {
+        let plugin = opencode_plugin("/opt/berth");
+        assert!(plugin.contains("const BERTH = \"/opt/berth\""));
+        assert!(plugin.contains("BERTH_AGENT_ID"));
+        assert!(plugin.contains("permission.updated"));
+        assert!(plugin.contains("export default BerthPlugin"));
     }
 }

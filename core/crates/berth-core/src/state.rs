@@ -789,6 +789,33 @@ impl AppState {
         Ok(agent)
     }
 
+    /// Record the provider session id discovered by an agent hook. The argv
+    /// and environment stay as the wrapper saved them; restore swaps in the
+    /// provider's resume template when a session ref is present.
+    pub fn set_agent_session_ref(
+        &mut self,
+        agent_id: &str,
+        session_ref: &str,
+    ) -> Result<AgentSurface, CoreError> {
+        let mut agent = self
+            .agents
+            .get(agent_id)
+            .cloned()
+            .ok_or_else(|| CoreError::not_found(format!("no agent {agent_id}")))?;
+        let resume = agent.resume.as_mut().ok_or_else(|| {
+            CoreError::new(
+                ErrorCode::Unsupported,
+                format!("agent {agent_id} has no resume payload"),
+            )
+        })?;
+        if resume.session_ref.as_deref() != Some(session_ref) {
+            resume.session_ref = Some(session_ref.to_string());
+        }
+        agent.last_seen_ms = time::now_ms();
+        self.agents.insert(agent.id.clone(), agent.clone());
+        Ok(agent)
+    }
+
     fn maybe_notify_attention(&mut self, agent: &AgentSurface) {
         if !agent.state.needs_attention() {
             return;
