@@ -26,6 +26,20 @@ enum BerthLog {
     }
 }
 
+// NSSetUncaughtExceptionHandler takes a C function pointer, so this must be a
+// global function with no captured context. It only touches static state.
+private func berthUncaughtExceptionHandler(_ exception: NSException) {
+    let stack = exception.callStackSymbols.joined(separator: "\n")
+    let message = """
+    \(Date()) \(exception.name.rawValue)
+    \(exception.reason ?? "no reason")
+    \(stack)
+    """
+    Diagnostics.appendCrash(message)
+    BerthLog.app.fault(
+        "uncaught exception \(exception.name.rawValue, privacy: .public): \(exception.reason ?? "", privacy: .public)")
+}
+
 enum Diagnostics {
     static var crashLogURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
@@ -36,20 +50,10 @@ enum Diagnostics {
         let info = ProcessInfo.processInfo
         BerthLog.app.info(
             "launch pid=\(info.processIdentifier, privacy: .public) os=\(info.operatingSystemVersionString, privacy: .public)")
-        NSSetUncaughtExceptionHandler { exception in
-            let stack = exception.callStackSymbols.joined(separator: "\n")
-            let message = """
-            \(Date()) \(exception.name.rawValue)
-            \(exception.reason ?? "no reason")
-            \(stack)
-            """
-            appendCrash(message)
-            BerthLog.app.fault(
-                "uncaught exception \(exception.name.rawValue, privacy: .public): \(exception.reason ?? "", privacy: .public)")
-        }
+        NSSetUncaughtExceptionHandler(berthUncaughtExceptionHandler)
     }
 
-    private static func appendCrash(_ message: String) {
+    fileprivate static func appendCrash(_ message: String) {
         do {
             let url = crashLogURL
             try FileManager.default.createDirectory(
