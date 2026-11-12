@@ -5,6 +5,7 @@ import AppKit
 
 @MainActor
 enum Theme {
+    @MainActor
     enum Colors {
         static let terminalBackground = NSColor.black
         static let terminalForeground = NSColor.labelColor
@@ -20,6 +21,7 @@ enum Theme {
         static let accent = NSColor.controlAccentColor
     }
 
+    @MainActor
     enum Metrics {
         static let paneTabHeight: CGFloat = 28
         static let sidebarRowNormal: CGFloat = 62
@@ -29,6 +31,7 @@ enum Theme {
         static let ringDuration: TimeInterval = 1.2
     }
 
+    @MainActor
     enum Fonts {
         static let sidebarTitle = NSFont.systemFont(ofSize: 12, weight: .medium)
         static let sidebarAgent = NSFont.systemFont(ofSize: 10.5)

@@ -600,7 +600,7 @@ mod tests {
         assert!(live.workspaces.is_empty());
         assert!(live.agents.is_empty());
         assert!(live.surfaces.is_empty());
-        assert_eq!(old_surfaces > 0, true);
+        assert!(old_surfaces > 0);
     }
 
     #[test]

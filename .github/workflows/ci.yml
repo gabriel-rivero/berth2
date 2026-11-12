@@ -137,15 +137,26 @@ jobs:
             Download `Berth-*.zip`, unzip, and right-click → Open the first time
             (the app is ad-hoc signed, not notarized).
 
-            This build is the M3 agent layer plus the M4 hooks installer. Agents
-            appear in the sidebar with provider, state, detail and progress;
-            attention sorts first, rings the pane, and is jumpable with ⌘⇧U or
-            listable with ⌘I. `berth run -- <agent>` records a resume payload,
-            and `berth hooks install` wires Claude Code hooks and an opencode
-            plugin so tool use, permission prompts and the provider session id
-            flow into Berth — relaunch then resumes with `claude --resume <id>`.
-            Passive detection badges claude/codex/opencode started in any shell.
-            The split tree, tabs, authenticated NDJSON socket and CLI remain.
-            Crash hardening frees PTYs before shutdown, validates snapshots
-            before restoring, and falls back through journal snapshots when a
-            session file is corrupt. Perf and polish are the rest of M4.
+            This build finishes the M2/M3/M4 gaps. Agents appear in the sidebar
+            with provider, state, detail and progress; a dead child becomes
+            `errored` immediately, attention sorts first, rings the pane, and is
+            jumpable with ⌘⇧U (which also acknowledges it) or listable in the
+            ⌘I attention panel. macOS banners now fire for agent attention.
+            `berth hooks install` wires Claude Code hooks and an OpenCode V2
+            `Plugin.define` plugin; the previous bare export failed to load with
+            "Expected object at [default]" and is fixed here. `berth run -- <agent>`
+            records a resume payload, and relaunch resumes it.
+
+            Protocol and persistence are tightened: `session.save` actually
+            saves, `session.restore` replaces live state instead of appending,
+            `system.ping` reports real uptime, and `docs/schema/berth.schema.json`
+            is generated from the Rust types. The journal is capped at 4 MiB with
+            five retained snapshots, and corrupted snapshots are fuzz-tested.
+            Split weights now round-trip and drags update the core.
+
+            Display scaling is per-screen: fonts auto-compensate below 2× backing
+            scale and can be overridden in Settings without relaunching. New
+            diagnostics log launch/restore/socket/agent/UI events and append
+            uncaught exceptions to `~/Library/Logs/Berth/crash.log`. The
+            attention panel, onboarding screen, compact sidebar and theme tokens
+            round out the M4 polish.

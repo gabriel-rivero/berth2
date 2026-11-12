@@ -14,6 +14,9 @@
   and its unread notifications. Sidebar attention ranking now matches the core
   (error > needs_input).
 - New `agent-ack` CLI and `make m3` acceptance script.
+- The generated opencode plugin is now an OpenCode V2 `Plugin.define` with
+  `id`/`setup` and an event-stream subscription; a CI test locks that shape so
+  the "Expected object at [default]" load failure cannot return.
 
 ### Protocol and persistence (M2/M4)
 

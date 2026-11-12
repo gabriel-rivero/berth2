@@ -257,7 +257,7 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
     /// workspace's tree is actually applied.
     func reconcileAll() {
         try? onMain { [self] in
-            Diagnostics.expectMain("reconcileAll")
+            BerthLog.expectMain("reconcileAll")
             guard let engine else { return }
             let listed = engine.dispatch(
                 request: #"{"id":"sync","method":"workspace.list","params":{}}"#)

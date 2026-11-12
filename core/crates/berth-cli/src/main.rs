@@ -379,6 +379,7 @@ fn opencode_plugin(berth: &str) -> String {
         r#"// berth — report OpenCode session activity to the running Berth instance.
 // Installed by `berth hooks install opencode`; safe to delete.
 import {{ spawn }} from "node:child_process";
+import {{ Plugin }} from "@opencode/plugin";
 
 const BERTH = {berth:?};
 
@@ -394,35 +395,43 @@ function update(state: string, detail: string, sessionRef?: string): Promise<voi
   }});
 }}
 
-export const BerthPlugin = async () => ({{
-  event: async ({{ event }}: any) => {{
-    const p = event.properties ?? {{}};
-    const session = p.sessionID ?? p.info?.id;
-    switch (event.type) {{
-      case "session.created":
-        await update("idle", "session started", session);
-        break;
-      case "session.idle":
-        await update("idle", "waiting for input");
-        break;
-      case "session.error":
-        await update("errored", p.error?.message ?? "session error");
-        break;
-      case "permission.updated":
-      case "permission.asked":
-        await update("waiting_input", "needs approval");
-        break;
-      case "permission.replied":
-        await update("thinking", "permission answered");
-        break;
-      case "session.compacted":
-        await update("thinking", "compacting context");
-        break;
-    }}
+// OpenCode V2 plugins are definitions with an id and a setup/effect function,
+// not a bare event handler. setup subscribes to the public event stream and
+// returns the cleanup that unsubscribes on reload.
+export default Plugin.define({{
+  id: "berth",
+  async setup(ctx) {{
+    const controller = new AbortController();
+    void (async () => {{
+      for await (const event of ctx.event.subscribe({{ signal: controller.signal }})) {{
+        const p = (event as any).properties ?? {{}};
+        const session = p.sessionID ?? p.info?.id;
+        switch (event.type) {{
+          case "session.created":
+            await update("idle", "session started", session);
+            break;
+          case "session.idle":
+            await update("idle", "waiting for input");
+            break;
+          case "session.error":
+            await update("errored", p.error?.message ?? "session error");
+            break;
+          case "permission.updated":
+          case "permission.asked":
+            await update("waiting_input", "needs approval");
+            break;
+          case "permission.replied":
+            await update("thinking", "permission answered");
+            break;
+          case "session.compacted":
+            await update("thinking", "compacting context");
+            break;
+        }}
+      }}
+    }})().catch(() => {{}});
+    return () => controller.abort();
   }},
 }});
-
-export default BerthPlugin;
 "#,
         berth = berth
     )
@@ -927,6 +936,21 @@ mod tests {
         assert!(plugin.contains("const BERTH = \"/opt/berth\""));
         assert!(plugin.contains("BERTH_AGENT_ID"));
         assert!(plugin.contains("permission.updated"));
-        assert!(plugin.contains("export default BerthPlugin"));
+    }
+
+    #[test]
+    fn opencode_plugin_is_a_v2_definition() {
+        // OpenCode V2 rejects a bare handler export with
+        // "Expected object at [\"default\"]". Guard the exact schema it asks
+        // for: a Plugin.define object with an id and a setup/effect function.
+        let plugin = opencode_plugin("/opt/berth");
+        assert!(plugin.contains("import { Plugin } from \"@opencode/plugin\""));
+        assert!(plugin.contains("export default Plugin.define({"));
+        assert!(plugin.contains("id: \"berth\""));
+        assert!(plugin.contains("async setup(ctx)"));
+        assert!(plugin.contains("ctx.event.subscribe"));
+        assert!(plugin.contains("return () => controller.abort()"));
+        assert!(!plugin.contains("export default BerthPlugin"));
+        assert!(!plugin.contains("event: async ({ event })"));
     }
 }

@@ -85,7 +85,7 @@ final class SocketServer {
         source.resume()
         acceptSource = source
         BerthLog.socket.info(
-            "listening path=\(path, privacy: .public) mode=\(mode.rawValue, privacy: .public)")
+            "listening path=\(self.path, privacy: .public) mode=\(self.mode.rawValue, privacy: .public)")
     }
 
     func stop() {

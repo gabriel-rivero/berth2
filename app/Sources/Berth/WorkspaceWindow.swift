@@ -179,6 +179,7 @@ private nonisolated(unsafe) var splitCoordinatorKey: UInt8 = 0
 /// Owns divider positions for one NSSplitView and reports drags to the core.
 /// It is retained by the split view itself (associated object) because
 /// NSSplitView's delegate is weak.
+@MainActor
 final class SplitCoordinator: NSObject, NSSplitViewDelegate {
     private let splitID: String
     private let isVertical: Bool
