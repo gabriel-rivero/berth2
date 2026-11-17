@@ -28,7 +28,7 @@ cmux proved the shape (sidebar of workspaces next to a split grid of terminals) 
 | [docs/04-roadmap.md](docs/04-roadmap.md) | M0–M4 milestones with acceptance criteria, post-v1, kill criteria |
 | [docs/05-build.md](docs/05-build.md) | Toolchain, bootstrap, smoke checklist, scaffold gaps, Ghostty upgrades |
 | [docs/config.md](docs/config.md) | `config.json`, font/display scale, sidebar density, socket and env vars, logs |
-| [CHANGELOG.md](CHANGELOG.md) | Release notes, including 0.8.0 |
+| [CHANGELOG.md](CHANGELOG.md) | Release notes, including 0.8.2 |
 
 ## Repo layout
 
