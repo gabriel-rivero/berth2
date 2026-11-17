@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.8.4
+
+### Display fix
+
+- On a 1× display the terminal drew at half size in the top-left corner of the
+  pane, leaving the rest empty, and clicks selected text at double their visual
+  position. Ghostty sizes its drawable from the layer's `contentsScale` but
+  draws cells with the surface's content scale, and it sets the layer scale only
+  once, at surface creation, from the config's `scale_factor`. Berth creates
+  surfaces before they are in a window, so that value was always 2.0 while a 1×
+  display set the content scale to 1.0. `syncSize` now keeps the layer scale
+  equal to the window's backing scale, as Ghostty's own macOS app does, and the
+  surface is created with the screen's scale instead of a hardcoded 2.0.
+- `~/Library/Logs/Berth/berth.log` records one `surface:` line per geometry
+  change: bounds, backing scale, layer scale, surface pixels, grid, cell size
+  and font. A grid that disagrees with the drawn text is visible there.
+
 ## 0.8.3
 
 ### Lock fix

@@ -81,8 +81,10 @@ Two files under `~/Library/Logs/Berth/` are the fastest way to diagnose a hang
 or a crash:
 
 - `berth.log` — rolling breadcrumbs: reconciles and their duration, layout
-  rebuilds, ignored divider resizes, core dispatches, detection passes. Capped at
-  2 MiB, rotated once to `berth.log.1`.
+  rebuilds, ignored divider resizes, core dispatches, detection passes, and one
+  `surface:` line per geometry change (bounds, backing scale, layer scale,
+  surface pixels, grid, cell size, font). Capped at 2 MiB, rotated once to
+  `berth.log.1`.
 - `crash.log` — uncaught exceptions and main-thread stalls, each with the 40
   breadcrumbs that preceded it. A stall line means the main thread stopped
   servicing the runloop; the breadcrumbs name what was in flight.

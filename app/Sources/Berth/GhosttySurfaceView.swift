@@ -19,6 +19,8 @@ final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClient {
     nonisolated(unsafe) private var surface: ghostty_surface_t?
     /// Last point size handed to Ghostty, so display changes are idempotent.
     private var appliedFontPoints: Double = 0
+    /// Last geometry line written to the log, so the tick does not spam it.
+    private var lastGeometryReport = ""
     // C strings handed to Ghostty must outlive the surface: Ghostty may keep
     // pointers into them (command, env values). Freeing happens in `deinit`.
     nonisolated(unsafe) private var cStrings: [UnsafeMutablePointer<CChar>] = []
@@ -49,7 +51,8 @@ final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClient {
         var config = ghostty_surface_config_new()
         config.platform_tag = GHOSTTY_PLATFORM_MACOS
         config.platform.macos.nsview = Unmanaged.passUnretained(self).toOpaque()
-        config.scale_factor = Double(window?.backingScaleFactor ?? 2.0)
+        config.scale_factor = Double(
+            window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0)
         // A 1x external display renders the same logical point size at half
         // the pixels of a Retina panel, which reads as tiny. Keep the
         // physical glyph size stable by supplying a per-display point size;
@@ -267,15 +270,62 @@ final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClient {
         let points = effectiveFontPoints()
         guard force || abs(points - appliedFontPoints) > 0.01 else { return }
         appliedFontPoints = points
+        Diagnostics.trace(
+            "surface",
+            "apply font \(points)pt id=\(berthSurfaceID ?? "?") "
+                + "screen_backing=\(window?.screen?.backingScaleFactor ?? 0)")
         GhosttyHost.shared.applyFont(points: points, to: surface)
+        logGeometry()
     }
 
     private func syncSize() {
         guard let surface, let scale = window?.backingScaleFactor else { return }
+        // Ghostty sizes its drawable from the layer's contentsScale but draws
+        // cells with the surface's content scale. If the two disagree the grid
+        // is drawn at the wrong size inside the drawable (a 1x surface in a 2x
+        // drawable covers a quarter of the pane). Ghostty only sets the layer
+        // scale when the surface is created, from `scale_factor`, and Berth
+        // creates surfaces before they have a window, so it must be kept in
+        // step here; Ghostty's own app does the same.
+        if layer?.contentsScale != scale {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            layer?.contentsScale = scale
+            CATransaction.commit()
+        }
         ghostty_surface_set_content_scale(surface, Double(scale), Double(scale))
         let width = UInt32(max(bounds.width * scale, 1))
         let height = UInt32(max(bounds.height * scale, 1))
         ghostty_surface_set_size(surface, width, height)
+        logGeometry()
+    }
+
+    /// The numbers that explain a grid which does not match what is drawn:
+    /// view size in points, backing scale, the surface's pixel size, the grid,
+    /// the resulting cell size, and the font. The layer's contentsScale must
+    /// equal the backing scale; the grid is recomputed on the IO thread, so read
+    /// it one turn later.
+    private func logGeometry() {
+        guard let surface else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let surface = self.surface else { return }
+            let size = ghostty_surface_size(surface)
+            let cellW = size.columns > 0 ? Double(size.width_px) / Double(size.columns) : 0
+            let cellH = size.rows > 0 ? Double(size.height_px) / Double(size.rows) : 0
+            let report = String(
+                format: "bounds=%.0fx%.0fpt backing=%.1f contents=%.1f "
+                    + "surface_px=%ux%u grid=%ux%u cell=%.1fx%.1f font=%.1f",
+                self.bounds.width, self.bounds.height,
+                self.window?.backingScaleFactor ?? 0,
+                self.layer?.contentsScale ?? 0,
+                size.width_px, size.height_px,
+                size.columns, size.rows,
+                cellW, cellH,
+                self.appliedFontPoints)
+            guard report != self.lastGeometryReport else { return }
+            self.lastGeometryReport = report
+            Diagnostics.trace("surface", "\(self.berthSurfaceID ?? "?") \(report)")
+        }
     }
 
     // MARK: - Rendering
