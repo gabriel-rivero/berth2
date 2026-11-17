@@ -105,6 +105,10 @@ prompt and type into it, then compare input latency and packaging cost.
 
 ## Known gaps
 
+This page lists the portable shell's current limits. The full audited inventory
+across the GUI, headless shell, core/server/CLI and macOS app is
+[docs/09-known-gaps.md](09-known-gaps.md).
+
 - **No renderer, window, splits, sidebar, or input routing.** The core tree is
   correct; there is no view of it.
 - **No child-exit callback.** `SurfaceOps` has no `surface_exited`; the macOS

@@ -251,7 +251,8 @@ open build/Berth.app    # or the installed app
 ## Known gaps
 
 These mirror the M5 pull-forward list in `docs/04-roadmap.md`; none should be
-mistaken for missing architecture.
+mistaken for missing architecture. The consolidated, audited inventory is
+[docs/09-known-gaps.md](09-known-gaps.md).
 
 1. **Headless app-test mode.** The acceptance script needs the GUI app running;
    there is no windowless app loop for CI.

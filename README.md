@@ -32,7 +32,8 @@ cmux proved the shape (sidebar of workspaces next to a split grid of terminals) 
 | [docs/05-build.md](docs/05-build.md) | Toolchain, bootstrap, smoke checklist, known gaps, Ghostty upgrades |
 | [docs/06-0.9.md](docs/06-0.9.md) | 0.9 scope: focus ownership fix, Instruments trace, filed-bug queue |
 | [docs/07-headless-shell.md](docs/07-headless-shell.md) | Linux/Windows shell spike: portable PTY host, VT readback, protocol acceptance |
-| [docs/08-minimal-window.md](docs/08-minimal-window.md) | First visible Linux/Windows window: winit + softbuffer, key routing, Xvfb smoke |
+| [docs/08-minimal-window.md](docs/08-minimal-window.md) | First visible Linux/Windows window: winit + softbuffer, split tree, tabs, sidebar |
+| [docs/09-known-gaps.md](docs/09-known-gaps.md) | Audited inventory: portable GUI, headless shell, core/server/CLI, macOS gaps, non-goals |
 | [docs/config.md](docs/config.md) | `config.json`, font/display scale, sidebar density, socket and env vars, logs |
 | [CHANGELOG.md](CHANGELOG.md) | Release notes, including 0.8.4 |
 
@@ -43,7 +44,7 @@ app/            Swift 6 + AppKit shell, hosts GhosttyKit (Package.swift + Source
 core/           cargo workspace: berth-core (portable domain) · berth-transport (sockets/pipes) · berth-server (NDJSON server) · berth-headless (PTY/VT shell) · berth-gui (minimal window) · berth-cli (`berth`)
 vendor/ghostty  git submodule, pinned to v1.4.0
 scripts/        bootstrap.sh (engine) · fetch-engine.sh (CI-built engine) · bundle.sh (.app)
-docs/           00 teardown · 01 vision · 02 architecture · 03 protocol · 04 roadmap · 05 build · 07 headless shell · 08 minimal window
+docs/           00 teardown · 01 vision · 02 architecture · 03 protocol · 04 roadmap · 05 build · 07 headless shell · 08 minimal window · 09 known gaps
 ```
 
 

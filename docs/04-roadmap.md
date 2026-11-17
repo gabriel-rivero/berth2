@@ -152,6 +152,9 @@ list.
    [docs/08-minimal-window.md](08-minimal-window.md).
 6. **Browser pane**, **SSH workspaces**, **remote tmux mirror** — only if the above is boring and stable.
 
+The complete audited gap list (GUI, headless shell, core/server/CLI and the
+macOS app) is [docs/09-known-gaps.md](09-known-gaps.md).
+
 ## Explicitly deferred
 
 Webview panes; iOS; cloud VMs; teams; plugin system; TUI; telemetry; auto-update (Sparkle) until v1 is stable; notarized distribution until someone other than me installs it.

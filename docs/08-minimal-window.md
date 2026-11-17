@@ -99,6 +99,9 @@ the second, and Ctrl+Shift+W removed it.
 
 ## Limits
 
+These are the window's limits; [docs/09-known-gaps.md](09-known-gaps.md) has the
+full audited inventory across the portable and macOS shells.
+
 - **One workspace visible at a time.** The sidebar lists workspaces flat: no
   group headers, collapse or scrolling, and rows that do not fit are clipped.
   Creating, renaming and closing workspaces still goes through the CLI/protocol.

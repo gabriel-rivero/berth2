@@ -39,6 +39,9 @@
 - CI runs fmt, clippy and tests on Ubuntu, macOS and Windows; the Swift app job
   remains macOS-only. The Swift app still uses its Swift transport until the
   UniFFI migration is smoke-tested on a Mac.
+- New `docs/09-known-gaps.md`: audited inventory of missing GUI behavior,
+  headless-shell limits, core/server/CLI gaps, macOS gaps and intentional
+  non-goals, plus the test-coverage matrix.
 
 ## 0.9.0
 
