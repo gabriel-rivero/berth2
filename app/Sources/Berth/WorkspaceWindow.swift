@@ -19,6 +19,16 @@ struct PaneActions {
     let resizeSplit: @MainActor (String, Int, Double) -> Void
 }
 
+/// Whether a reconcile pass may hand focus to the core's active surface.
+enum FocusPolicy {
+    /// Focus is placed only in a key window with nothing terminal already
+    /// focused. The core's active surface can lag a click by a pass, and
+    /// overriding the keyboard is worse than a late correction.
+    static func shouldPlaceFocus(isKeyWindow: Bool, firstResponderIsTerminal: Bool) -> Bool {
+        isKeyWindow && !firstResponderIsTerminal
+    }
+}
+
 final class MainWindow: NSWindow {
     let sidebar = SidebarView()
     private let contentHost = NSView()

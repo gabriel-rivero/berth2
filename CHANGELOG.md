@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.9.0
+
+### Focus fix
+
+- Clicking a pane no longer loses focus a moment later. A click made the view
+  first responder but never told the core, so the core's active surface stayed on
+  the other pane and the next reconcile pass (an agent event, the one-second
+  detection pass, a socket call) handed focus back. A click now reports
+  `surface.activate`, and a reconcile pass never places focus while a terminal
+  already holds it.
+- The correction is logged as `ui: reconcile placed focus on <surface>`, so a
+  recurrence shows up in `berth.log` instead of looking like a random jump.
+- `FocusPolicyTests` pins the rule that focus is not taken from a terminal.
+
 ## 0.8.4
 
 ### Display fix

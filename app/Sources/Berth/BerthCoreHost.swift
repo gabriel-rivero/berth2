@@ -433,11 +433,16 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
                     applied = true
                     lastAppliedStructure = layout.structureKey
                     lastSelectedWorkspace = selected
-                } else if win.isKeyWindow,
-                          let active = layout.activeSurface,
-                          let view = surfaces[active],
-                          win.firstResponder !== view {
-                    win.makeFirstResponder(view)
+                } else {
+                    let target = layout.activeSurface.flatMap { surfaces[$0] }
+                    if let target,
+                       target !== win.firstResponder,
+                       FocusPolicy.shouldPlaceFocus(
+                           isKeyWindow: win.isKeyWindow,
+                           firstResponderIsTerminal: win.firstResponder is GhosttySurfaceView) {
+                        Diagnostics.trace("ui", "reconcile placed focus on \(target.berthSurfaceID ?? "?")")
+                        win.makeFirstResponder(target)
+                    }
                 }
                 lastActiveSurface = layout.activeSurface ?? layout.root.firstLeafSurface()
             }
@@ -549,6 +554,19 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
             return view.berthSurfaceID
         }
         return lastActiveSurface
+    }
+
+    /// The user focused a surface by clicking it. The core must know, or the
+    /// next reconcile pass corrects focus back to its stale active surface.
+    @MainActor
+    func reportUserFocus(surfaceID: String?) {
+        guard let surfaceID, let engine, surfaceID != lastActiveSurface else { return }
+        lastActiveSurface = surfaceID
+        Diagnostics.trace("ui", "focus \(surfaceID)")
+        _ = engine.dispatch(
+            request: #"{"id":"focus","method":"surface.activate","params":{"surface_id":"\#(surfaceID)"}}"#)
+        onEvents?()
+        reconcileAll()
     }
 
     // MARK: - Agents

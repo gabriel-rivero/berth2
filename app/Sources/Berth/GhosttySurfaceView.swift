@@ -583,6 +583,7 @@ final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClient {
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
+        BerthCoreHost.shared.reportUserFocus(surfaceID: berthSurfaceID)
         guard let surface else { return super.mouseDown(with: event) }
         let (x, y, mods) = mousePosition(event)
         ghostty_surface_mouse_pos(surface, x, y, mods)
