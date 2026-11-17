@@ -69,19 +69,26 @@ final class MainWindow: NSWindow {
     }
 
     /// Replace the pane tree. Surface views not in `views` are simply dropped.
+    ///
+    /// Runs inside `LayoutRebuild`: sizing the new tree posts `didResize`
+    /// notifications whose handlers report divider positions to the core, and
+    /// that feedback re-entered this method through `reconcileAll`.
     func apply(layout: WorkspaceLayout, views: [String: GhosttySurfaceView], actions: PaneActions) {
-        title = layout.name.isEmpty ? "Berth" : layout.name
-        let node = LayoutBuilder.build(layout.root, layout: layout, views: views, actions: actions)
-        contentHost.subviews.forEach { $0.removeFromSuperview() }
-        guard let node else { return }
-        node.frame = contentHost.bounds
-        node.autoresizingMask = [.width, .height]
-        contentHost.addSubview(node)
+        LayoutRebuild.perform {
+            title = layout.name.isEmpty ? "Berth" : layout.name
+            let node = LayoutBuilder.build(
+                layout.root, layout: layout, views: views, actions: actions)
+            contentHost.subviews.forEach { $0.removeFromSuperview() }
+            guard let node else { return }
+            node.frame = contentHost.bounds
+            node.autoresizingMask = [.width, .height]
+            contentHost.addSubview(node)
 
-        if isKeyWindow || NSApp.keyWindow == nil {
-            let target = layout.activeSurface ?? layout.root.firstLeafSurface()
-            if let target, let view = views[target] {
-                makeFirstResponder(view)
+            if isKeyWindow || NSApp.keyWindow == nil {
+                let target = layout.activeSurface ?? layout.root.firstLeafSurface()
+                if let target, let view = views[target] {
+                    makeFirstResponder(view)
+                }
             }
         }
     }
@@ -112,6 +119,24 @@ final class MainWindow: NSWindow {
             if let found = Self.pane(in: child, containing: surfaceID) { return found }
         }
         return nil
+    }
+}
+
+/// True while the window is replacing its pane tree. Split views post
+/// `NSSplitViewDidResizeSubviews` while they are being sized, and those
+/// positions are meaningless until the pass finishes: reporting them to the
+/// core rewrote divider weights from a half-laid-out tree and re-entered the
+/// rebuild until the stack overflowed.
+@MainActor
+enum LayoutRebuild {
+    private static var depth = 0
+
+    static var isActive: Bool { depth > 0 }
+
+    static func perform(_ body: () -> Void) {
+        depth += 1
+        defer { depth -= 1 }
+        body()
     }
 }
 
@@ -214,6 +239,7 @@ final class SplitCoordinator: NSObject, NSSplitViewDelegate {
 
     func splitViewDidResizeSubviews(_ notification: Notification) {
         guard !applying,
+              !LayoutRebuild.isActive,
               let split = notification.object as? NSSplitView,
               split.arrangedSubviews.count > 1
         else { return }

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.8.2
+
+### Crash fix
+
+- ⌘D (and any other structural layout change: ⌘T, ⌘W, workspace switch) could
+  crash the app with a stack overflow. Rebuilding the pane tree posts
+  `NSSplitViewDidResizeSubviews`; the handler reported those half-laid-out
+  divider positions to the core, which synchronously rebuilt the tree again and
+  re-entered `MainWindow.apply` until the stack ran out
+  (`EXC_BAD_ACCESS` on the stack guard region). Two guards close the loop:
+  resizes observed while a rebuild is running are ignored, and `reconcileAll`
+  defers a re-entrant call to the next runloop turn (coalesced with
+  `scheduleReconcile`) instead of recursing.
+
 ## 0.8.1
 
 ### Release fix

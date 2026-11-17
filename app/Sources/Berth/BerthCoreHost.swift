@@ -36,6 +36,12 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
     /// One pending reconcile per runloop turn. Socket bursts used to queue one
     /// full layout rebuild per request; coalescing keeps the key path clear.
     private var reconcileScheduled = false
+    /// `reconcileAll` never re-enters itself. A synchronous AppKit callback
+    /// during a rebuild (a split view reporting a resize, a focus change) used
+    /// to recurse apply → callback → reconcile → apply until the stack
+    /// overflowed; the extra pass runs on the next runloop turn instead.
+    private var isReconciling = false
+    private var needsAnotherReconcile = false
 
     private struct WorkspaceMeta {
         var branch: String?
@@ -258,6 +264,18 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
     func reconcileAll() {
         try? onMain { [self] in
             BerthLog.expectMain("reconcileAll")
+            guard !isReconciling else {
+                needsAnotherReconcile = true
+                return
+            }
+            isReconciling = true
+            defer {
+                isReconciling = false
+                if needsAnotherReconcile {
+                    needsAnotherReconcile = false
+                    scheduleReconcile()
+                }
+            }
             guard let engine else { return }
             let listed = engine.dispatch(
                 request: #"{"id":"sync","method":"workspace.list","params":{}}"#)

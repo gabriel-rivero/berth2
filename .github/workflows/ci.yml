@@ -134,6 +134,29 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      # Release notes are the tagged CHANGELOG section, so a tag cannot ship a
+      # body that still describes the previous release.
+      - name: release notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          {
+            echo "Berth ${GITHUB_REF_NAME} — macOS 14+, Apple Silicon."
+            echo
+            echo "Download \`Berth-*.zip\`, unzip, and right-click → Open the first"
+            echo "time (the app is ad-hoc signed, not notarized)."
+            echo
+          } > release-notes.md
+          awk -v ver="$version" '
+            $0 ~ "^## " ver "$" { capture = 1; next }
+            capture && /^## / { exit }
+            capture { print }
+          ' CHANGELOG.md >> release-notes.md
+          if ! grep -q "^### " release-notes.md; then
+            echo "::error::CHANGELOG.md has no section for $version"
+            exit 1
+          fi
+
       # A tag is the release trigger. The app is ad-hoc signed and not
       # notarized, so it ships as a pre-release that people opt into.
       - name: publish release
@@ -142,38 +165,5 @@ jobs:
         with:
           files: Berth-*.zip
           prerelease: true
-          generate_release_notes: true
-          body: |
-            Berth ${{ github.ref_name }} — macOS 14+, Apple Silicon.
-
-            Download `Berth-*.zip`, unzip, and right-click → Open the first time
-            (the app is ad-hoc signed, not notarized).
-
-            **0.8.1 fixes the 0.8.0 bundle:** 0.8.0 shipped literal
-            `${VERSION}`/`${BUILD}` placeholders in Info.plist, which makes
-            LaunchServices refuse to open it with error -47 (`fBsyErr`). Skip
-            0.8.0 and use this build.
-
-            This build finishes the M2/M3/M4 gaps. Agents appear in the sidebar
-            with provider, state, detail and progress; a dead child becomes
-            `errored` immediately, attention sorts first, rings the pane, and is
-            jumpable with ⌘⇧U (which also acknowledges it) or listable in the
-            ⌘I attention panel. macOS banners now fire for agent attention.
-            `berth hooks install` wires Claude Code hooks and an OpenCode V2
-            `Plugin.define` plugin; the previous bare export failed to load with
-            "Expected object at [default]" and is fixed here. `berth run -- <agent>`
-            records a resume payload, and relaunch resumes it.
-
-            Protocol and persistence are tightened: `session.save` actually
-            saves, `session.restore` replaces live state instead of appending,
-            `system.ping` reports real uptime, and `docs/schema/berth.schema.json`
-            is generated from the Rust types. The journal is capped at 4 MiB with
-            five retained snapshots, and corrupted snapshots are fuzz-tested.
-            Split weights now round-trip and drags update the core.
-
-            Display scaling is per-screen: fonts auto-compensate below 2× backing
-            scale and can be overridden in Settings without relaunching. New
-            diagnostics log launch/restore/socket/agent/UI events and append
-            uncaught exceptions to `~/Library/Logs/Berth/crash.log`. The
-            attention panel, onboarding screen, compact sidebar and theme tokens
-            round out the M4 polish.
+          name: Berth ${{ github.ref_name }}
+          body_path: release-notes.md
