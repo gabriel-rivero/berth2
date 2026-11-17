@@ -1,7 +1,8 @@
 # Headless shell (Linux/Windows spike)
 
 Status: first slice landed. Real PTYs, a VT screen and the full protocol run
-without a window. The GUI renderer is the next slice, not part of this one.
+without a window. The minimal window is the second slice — see
+[docs/08-minimal-window.md](08-minimal-window.md).
 
 This is the "Linux shell spike" from [docs/04-roadmap.md](04-roadmap.md), split
 so the expensive, unproven part — a portable terminal host behind `SurfaceOps`
@@ -122,8 +123,9 @@ prompt and type into it, then compare input latency and packaging cost.
 
 ## Next slice
 
-1. A minimal window (GTK4 or a Rust window) that renders one `vt100` screen and
-   forwards keys, proving the `PtyHost` seam visually.
+1. ~~A minimal window that renders one `vt100` screen and forwards keys.~~
+   Landed as `berth-gui`; see docs/08-minimal-window.md.
 2. Add the core's split tree to that window: one surface per leaf, focus routing.
-3. Decide `vt100` vs `libghostty-vt` from measured input latency and packaging.
-4. Add the child-exit callback to `SurfaceOps`, then wire agent exit states.
+3. Add scrollback, mouse selection and clipboard.
+4. Decide `vt100` vs `libghostty-vt` from measured input latency and packaging.
+5. Add the child-exit callback to `SurfaceOps`, then wire agent exit states.

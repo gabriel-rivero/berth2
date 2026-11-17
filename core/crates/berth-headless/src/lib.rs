@@ -30,6 +30,27 @@ use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtyPair, PtySize, nat
 /// render a window into it later.
 pub const DEFAULT_SCROLLBACK: usize = 10_000;
 
+/// One rendered character cell, with just enough styling for a minimal GUI.
+#[derive(Debug, Clone, Default)]
+pub struct CellView {
+    pub contents: String,
+    /// `None` means the terminal default.
+    pub fg: Option<[u8; 3]>,
+    pub bg: Option<[u8; 3]>,
+    pub bold: bool,
+    pub inverse: bool,
+}
+
+/// A snapshot of the visible screen. Safe to hand to a renderer thread.
+#[derive(Debug, Clone, Default)]
+pub struct ScreenView {
+    pub cols: u16,
+    pub rows: u16,
+    /// Zero-based `(row, col)`.
+    pub cursor: (u16, u16),
+    pub cells: Vec<CellView>,
+}
+
 /// A live PTY-backed terminal and its parsed screen.
 struct Surface {
     /// Kept for resize and foreground-process queries.
@@ -97,6 +118,43 @@ impl PtyHost {
             .get(surface_id)
             .cloned()
             .ok_or_else(|| CoreError::not_found(format!("no surface {surface_id}")))
+    }
+
+    /// Snapshot the visible screen for a renderer. The headless protocol only
+    /// needs text, but a GUI wants per-cell colors and the cursor.
+    pub fn screen_view(&self, surface_id: &str) -> Result<ScreenView, CoreError> {
+        let surface = self.surface(surface_id)?;
+        let parser = lock(&surface.screen);
+        let screen = parser.screen();
+        let (rows, cols) = screen.size();
+        let rows = rows.get();
+        let cols = cols.get();
+        let cursor = screen.cursor_position();
+        let mut cells = Vec::with_capacity(usize::from(rows) * usize::from(cols));
+        for row in 0..rows {
+            for col in 0..cols {
+                let cell = screen.cell(row, col);
+                cells.push(match cell {
+                    Some(cell) => CellView {
+                        contents: cell.contents().to_string(),
+                        fg: ansi_rgb(cell.fgcolor()),
+                        bg: ansi_rgb(cell.bgcolor()),
+                        bold: cell.bold(),
+                        inverse: cell.inverse(),
+                    },
+                    None => CellView {
+                        contents: " ".into(),
+                        ..CellView::default()
+                    },
+                });
+            }
+        }
+        Ok(ScreenView {
+            cols,
+            rows,
+            cursor,
+            cells,
+        })
     }
 }
 
@@ -502,4 +560,42 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Map a vt100 color to the GUI's 8-bit RGB palette.
+fn ansi_rgb(color: vt100::Color) -> Option<[u8; 3]> {
+    match color {
+        vt100::Color::Default => None,
+        vt100::Color::Rgb(r, g, b) => Some([r, g, b]),
+        vt100::Color::Idx(index) => Some(match index {
+            0 => [0x1c, 0x1c, 0x22],
+            1 => [0xd7, 0x5f, 0x5f],
+            2 => [0x8f, 0xb3, 0x5f],
+            3 => [0xd7, 0xa5, 0x5f],
+            4 => [0x6c, 0x99, 0xc9],
+            5 => [0xb0, 0x7c, 0xc9],
+            6 => [0x5f, 0xb3, 0xb3],
+            7 => [0xc9, 0xc9, 0xd0],
+            8 => [0x5c, 0x5c, 0x66],
+            9 => [0xff, 0x7a, 0x7a],
+            10 => [0xa9, 0xd4, 0x6a],
+            11 => [0xff, 0xd7, 0x66],
+            12 => [0x82, 0xbb, 0xff],
+            13 => [0xd7, 0x9a, 0xff],
+            14 => [0x7a, 0xdb, 0xdb],
+            15 => [0xff, 0xff, 0xff],
+            n if n < 232 => {
+                let n = n - 16;
+                let r = n / 36;
+                let g = (n % 36) / 6;
+                let b = n % 6;
+                let level = |v: u8| if v == 0 { 0 } else { 55 + v * 40 };
+                [level(r), level(g), level(b)]
+            }
+            n => {
+                let level = 8 + (n - 232) * 10;
+                [level, level, level]
+            }
+        }),
+    }
 }

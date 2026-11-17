@@ -139,14 +139,16 @@ list.
 2. **Cost + token meter** per workspace, from adapter-reported usage.
 3. **Session search** — find the workspace where that `pnpm test` failed, from screen text we already can read.
 4. **Editor integration** — `berth` LSP-ish shim so an agent in Neovim/Zed can report state without hooks.
-5. **Linux shell spike** — in progress. The portable half landed first:
-   `berth-core::paths`, `berth-transport`, `berth-server`, a cross-platform
-   `berth` CLI, and `berth-headless` (PTY + VT screen + protocol, no GUI). The
-   acceptance test creates a real workspace, types into it, reads the screen
-   back and resizes on Linux/macOS/Windows CI. Next is the minimal GTK4 +
-   libghostty-vt (or equivalent) window; decide from measured input latency and
-   packaging whether Windows/Linux is a real roadmap item. See
-   [docs/07-headless-shell.md](07-headless-shell.md).
+5. **Linux shell spike** — in progress, two slices landed. The portable half
+   (`berth-core::paths`, `berth-transport`, `berth-server`, cross-platform
+   `berth` CLI) and `berth-headless` (PTY + VT screen + protocol) are tested on
+   Linux/macOS/Windows CI. `berth-gui` adds the first visible window: winit +
+   softbuffer, one active terminal, key routing, resize and session save. Next:
+   split-tree layout and tabs, then scrollback/mouse/clipboard. Decide from
+   measured input latency and packaging whether the production renderer stays
+   winit + a terminal grid or moves to GTK4 + libghostty-vt. See
+   [docs/07-headless-shell.md](07-headless-shell.md) and
+   [docs/08-minimal-window.md](08-minimal-window.md).
 6. **Browser pane**, **SSH workspaces**, **remote tmux mirror** — only if the above is boring and stable.
 
 ## Explicitly deferred

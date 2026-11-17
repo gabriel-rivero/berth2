@@ -1,0 +1,20 @@
+[package]
+name = "berth-gui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Minimal Linux/Windows window for Berth"
+
+[[bin]]
+name = "berth-gui"
+path = "src/main.rs"
+
+[dependencies]
+berth-core = { path = "../berth-core" }
+berth-headless = { path = "../berth-headless" }
+berth-server = { path = "../berth-server" }
+winit.workspace = true
+softbuffer.workspace = true
+font8x8.workspace = true

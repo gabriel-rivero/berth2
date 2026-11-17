@@ -128,6 +128,9 @@ shell can host:
   implementation backed by `portable-pty` and a `vt100` screen. It proves the
   seam end-to-end (spawn, type, read back, resize, restore) on Linux, macOS and
   Windows before a GUI renderer exists. See docs/07-headless-shell.md.
+- `berth-gui` is the first visible Linux/Windows window: the same engine plus
+  `winit` + `softbuffer` + an 8×16 bitmap grid, with key routing and resize. It
+  is a slice, not the split-tree shell yet. See docs/08-minimal-window.md.
 
 On Unix the socket is `0600`; on Windows the named pipe inherits the user's
 `%APPDATA%` ACL, and the token file is user-scoped.
@@ -218,6 +221,7 @@ berth2/
     crates/berth-transport/  local sockets / named pipes + NDJSON framing
     crates/berth-server/     auth, subscriptions, replay, portable socket server
     crates/berth-headless/   PTY + VT screen shell, no GUI (`berth-headless`)
+    crates/berth-gui/        minimal winit + softbuffer window (`berth-gui`)
     crates/berth-ffi/        UniFFI scaffolding, SurfaceOps trait
     crates/berth-cli/        `berth` binary
   scripts/                   bootstrap, ghostty build, ffi gen, dev-sign

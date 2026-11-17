@@ -161,6 +161,14 @@ fn spawn_type_and_read_back_through_the_protocol() {
         "screen never showed the command output:\n{screen}"
     );
 
+    let view = host.screen_view(&surface_id).expect("screen view");
+    assert_eq!((view.cols, view.rows), (80, 24));
+    assert_eq!(
+        view.cells.len(),
+        usize::from(view.cols) * usize::from(view.rows)
+    );
+    assert!(view.cursor.0 < view.rows && view.cursor.1 < view.cols);
+
     // Resize reaches both the kernel and the parser.
     let (resized, _) = request(
         &stream,

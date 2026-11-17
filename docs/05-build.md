@@ -324,6 +324,7 @@ The non-UI half is supported on all three platforms and tested in a CI matrix:
 | `berth-transport` | NDJSON framing; Unix socket vs named pipe | ✓ | ✓ | ✓ |
 | `berth-server` | auth, subscriptions, replay, backpressure; hosts the core | ✓ | ✓ | ✓ |
 | `berth-headless` | PTY + VT screen shell, no window | ✓ | ✓ | ✓ |
+| `berth-gui` | minimal window: winit + softbuffer grid | ✓ | ✓ | ✓ |
 | `berth` CLI | `ls/send/read/events/run/hooks` client | ✓ | ✓ | ✓ |
 | Swift/AppKit shell | Ghostty-rendered workspace UI | — | ✓ | — |
 
@@ -356,10 +357,12 @@ BERTH_DATA_DIR=/tmp/berth-spike BERTH_SOCKET_PATH=/tmp/berth-spike/berth.sock \
 ```
 
 See [docs/07-headless-shell.md](07-headless-shell.md) for the design, the
-renderer decision and the remaining GUI work. The Swift app still runs its Swift
-transport (`app/Sources/Berth/SocketServer.swift`) and will move to
-`berth-server` through UniFFI on a Mac, where the change can be built and
-smoke-tested.
+renderer decision and the remaining GUI work. `berth-gui` is the first visible
+window; run `cargo run -p berth-gui` on a desktop, or see
+[docs/08-minimal-window.md](08-minimal-window.md) for the Xvfb smoke. The Swift
+app still runs its Swift transport (`app/Sources/Berth/SocketServer.swift`) and
+will move to `berth-server` through UniFFI on a Mac, where the change can be
+built and smoke-tested.
 
 Hooks are platform-aware: `berth hooks install claude` writes POSIX redirection
 on Linux/macOS and `>NUL` on Windows, resolving `berth` to an absolute path in
