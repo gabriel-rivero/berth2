@@ -239,7 +239,6 @@ final class SplitCoordinator: NSObject, NSSplitViewDelegate {
 
     func splitViewDidResizeSubviews(_ notification: Notification) {
         guard !applying,
-              !LayoutRebuild.isActive,
               let split = notification.object as? NSSplitView,
               split.arrangedSubviews.count > 1
         else { return }
