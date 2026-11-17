@@ -197,6 +197,7 @@ dependencies = [
  "berth-headless",
  "berth-server",
  "font8x8",
+ "serde_json",
  "softbuffer",
  "winit",
 ]

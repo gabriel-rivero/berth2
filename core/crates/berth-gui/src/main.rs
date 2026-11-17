@@ -1,24 +1,28 @@
 //! Minimal Linux/Windows window for Berth.
 //!
-//! One window, one terminal, no GPU: `softbuffer` presents an 8×16 bitmap-font
-//! grid and `winit` routes keys. It embeds the same `berth-server` and `PtyHost`
-//! as the headless shell, so the CLI and hooks keep working.
+//! One window, the core's split tree, no GPU: `softbuffer` presents 8×16
+//! bitmap-font grids and `winit` routes keys and clicks. It embeds the same
+//! `berth-server` and `PtyHost` as the headless shell, so the CLI and hooks keep
+//! working.
 //!
-//! This is the first visible slice, not the final shell: no splits, tabs,
-//! sidebar, selection, mouse or clipboard yet. `--smoke-ms` renders one frame
-//! under Xvfb and exits, which is how CI checks the window path.
+//! Each leaf of the selected workspace gets its own terminal view, sized to its
+//! rectangle. Clicking a pane focuses its active surface. Still missing: tabs,
+//! sidebar, selection, scroll gestures and clipboard. `--smoke-ms` renders one
+//! frame under Xvfb and exits, which is how CI checks the window path.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use berth_core::{AppState, SurfaceOps, paths};
+use berth_core::model::Orientation;
+use berth_core::{AppState, PaneNode, SurfaceOps, paths};
 use berth_headless::{CellView, PtyHost, ScreenView, restore_session, save_session};
 use berth_server::{Server, ServerConfig, ServerHandle, SocketMode, auth};
 use font8x8::{BASIC_FONTS, UnicodeFonts};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalSize};
-use winit::event::{ElementState, WindowEvent};
+use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
@@ -26,8 +30,10 @@ use winit::window::{Window, WindowId};
 const FRAME_INTERVAL: Duration = Duration::from_millis(33);
 const BG: u32 = 0x0010_1014;
 const FG: u32 = 0x00e6_e6ee;
-const MIN_COLS: u16 = 20;
-const MIN_ROWS: u16 = 5;
+const BORDER: u32 = 0x0024_2430;
+const FOCUS_BORDER: u32 = 0x005f_9fda;
+const PANEL_PAD: usize = 2;
+const DIVIDER: usize = 2;
 
 #[derive(Debug)]
 struct Args {
@@ -206,9 +212,8 @@ fn main() {
         window: None,
         context: None,
         surface: None,
-        cols: 80,
-        rows: 24,
-        sized_surface: None,
+        sized: HashMap::new(),
+        pointer: (0.0, 0.0),
         modifiers: ModifiersState::empty(),
         title: String::new(),
         ready: false,
@@ -233,9 +238,8 @@ struct Gui {
     window: Option<Arc<Window>>,
     context: Option<softbuffer::Context<Arc<Window>>>,
     surface: Option<softbuffer::Surface<Arc<Window>, Arc<Window>>>,
-    cols: u16,
-    rows: u16,
-    sized_surface: Option<String>,
+    sized: HashMap<String, (u16, u16)>,
+    pointer: (f64, f64),
     modifiers: ModifiersState,
     title: String,
     ready: bool,
@@ -302,7 +306,6 @@ impl ApplicationHandler for Gui {
             }
             WindowEvent::RedrawRequested => self.redraw(),
             WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
-                self.sync_size();
                 self.request_redraw();
             }
             WindowEvent::Focused(true) => {
@@ -313,6 +316,14 @@ impl ApplicationHandler for Gui {
             WindowEvent::ModifiersChanged(modifiers) => {
                 self.modifiers = modifiers.state();
             }
+            WindowEvent::CursorMoved { position, .. } => {
+                self.pointer = (position.x, position.y);
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } => self.click(),
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 self.key(event);
             }
@@ -359,6 +370,59 @@ impl Gui {
             .or_else(|| state.selected_surface.clone())
     }
 
+    /// Lay out the selected workspace's split tree and resolve each leaf to its
+    /// visible surface. The tree is read under the state lock and copied out.
+    fn views(&self, width: usize, height: usize) -> Vec<PaneView> {
+        let state = lock(&self.state);
+        let Some(workspace_id) = state.selected_workspace.clone().or_else(|| {
+            state
+                .workspaces
+                .first()
+                .map(|workspace| workspace.id.clone())
+        }) else {
+            return Vec::new();
+        };
+        let Some(workspace) = state.workspace(&workspace_id) else {
+            return Vec::new();
+        };
+        let active = state
+            .selected_surface
+            .clone()
+            .filter(|id| {
+                state
+                    .surface(id)
+                    .is_some_and(|surface| surface.workspace_id == workspace.id)
+            })
+            .or_else(|| workspace.active_surface.clone());
+        let mut leaves = Vec::new();
+        layout_panes(
+            &workspace.root,
+            Rect {
+                x: 0,
+                y: 0,
+                w: width,
+                h: height,
+            },
+            &mut leaves,
+        );
+        leaves
+            .into_iter()
+            .map(|(pane_id, rect)| {
+                let surface = state
+                    .panes
+                    .get(&pane_id)
+                    .and_then(|pane| pane.active_surface())
+                    .map(str::to_owned);
+                let focused = surface.is_some() && surface.as_deref() == active.as_deref();
+                PaneView {
+                    surface,
+                    rect,
+                    focused,
+                }
+            })
+            .collect()
+    }
+
     fn request_redraw(&self) {
         if let Some(window) = &self.window {
             window.request_redraw();
@@ -375,47 +439,100 @@ impl Gui {
         (8 * scale, 16 * scale)
     }
 
-    fn sync_size(&mut self) {
+    /// Give every visible surface the grid that fits its pane.
+    fn sync_sizes(&mut self, views: &[PaneView]) {
+        let (cell_w, cell_h) = self.cell_size();
+        for view in views {
+            let Some(surface_id) = &view.surface else {
+                continue;
+            };
+            let inner = view.rect.inset(PANEL_PAD);
+            let cols = (inner.w / cell_w).max(1).min(u16::MAX as usize) as u16;
+            let rows = (inner.h / cell_h).max(1).min(u16::MAX as usize) as u16;
+            if self.sized.get(surface_id) == Some(&(cols, rows)) {
+                continue;
+            }
+            if self.host.resize(surface_id, cols, rows).is_ok() {
+                let mut state = lock(&self.state);
+                if let Some(surface) = state.surface_mut(surface_id) {
+                    surface.cols = cols;
+                    surface.rows = rows;
+                }
+                self.sized.insert(surface_id.clone(), (cols, rows));
+            }
+        }
+    }
+
+    fn sync_title(&mut self) {
+        let Some(window) = &self.window else {
+            return;
+        };
+        let state = lock(&self.state);
+        let Some(workspace_id) = state.selected_workspace.clone().or_else(|| {
+            state
+                .workspaces
+                .first()
+                .map(|workspace| workspace.id.clone())
+        }) else {
+            return;
+        };
+        let Some(workspace) = state.workspace(&workspace_id) else {
+            return;
+        };
+        let title = format!("Berth — {}", workspace.name);
+        if title != self.title {
+            window.set_title(&title);
+            self.title = title;
+        }
+    }
+
+    /// Publisher of core events for actions the GUI takes directly (currently
+    /// focus). Server-dispatched requests already drain their own events.
+    fn flush_events(&self) {
+        let events = {
+            let mut state = lock(&self.state);
+            state.drain_events()
+        };
+        if events.is_empty() {
+            return;
+        }
+        let Some(server) = &self.server else {
+            return;
+        };
+        for event in events {
+            if let Ok(line) = serde_json::to_string(&event) {
+                server.broadcast(&line);
+            }
+        }
+    }
+
+    fn click(&mut self) {
         let Some(window) = &self.window else {
             return;
         };
         let PhysicalSize { width, height } = window.inner_size();
-        if width == 0 || height == 0 {
+        let views = self.views(width as usize, height as usize);
+        let point = (
+            self.pointer.0.max(0.0) as usize,
+            self.pointer.1.max(0.0) as usize,
+        );
+        let Some(view) = views
+            .iter()
+            .find(|view| view.rect.contains(point.0, point.1))
+        else {
+            return;
+        };
+        let Some(surface_id) = view.surface.clone() else {
+            return;
+        };
+        let mut state = lock(&self.state);
+        if let Err(error) = state.activate_surface(&surface_id, self.host.as_ref()) {
+            eprintln!("berth-gui: focus {surface_id}: {error}");
             return;
         }
-        let (cell_w, cell_h) = self.cell_size();
-        let cols = (width as usize / cell_w).max(MIN_COLS as usize) as u16;
-        let rows = (height as usize / cell_h).max(MIN_ROWS as usize) as u16;
-        let active = self.active_surface();
-
-        if let Some(surface_id) = &active {
-            if self.sized_surface.as_deref() != Some(surface_id)
-                || (cols, rows) != (self.cols, self.rows)
-            {
-                if let Some(window) = &self.window {
-                    let state = lock(&self.state);
-                    if let Some(workspace_id) = state.workspace_of_surface(surface_id) {
-                        if let Some(workspace) = state.workspace(workspace_id) {
-                            let title = format!("Berth — {}", workspace.name);
-                            if title != self.title {
-                                window.set_title(&title);
-                                self.title = title;
-                            }
-                        }
-                    }
-                }
-                let _ = self.host.resize(surface_id, cols, rows);
-                if let Ok(mut state) = self.state.lock()
-                    && let Some(surface) = state.surface_mut(surface_id)
-                {
-                    surface.cols = cols;
-                    surface.rows = rows;
-                }
-                self.cols = cols;
-                self.rows = rows;
-                self.sized_surface = Some(surface_id.clone());
-            }
-        }
+        drop(state);
+        self.flush_events();
+        self.request_redraw();
     }
 
     fn key(&mut self, event: winit::event::KeyEvent) {
@@ -466,7 +583,6 @@ impl Gui {
     }
 
     fn redraw(&mut self) {
-        self.sync_size();
         let Some(window) = self.window.clone() else {
             return;
         };
@@ -476,10 +592,10 @@ impl Gui {
             return;
         }
         let (cell_w, cell_h) = self.cell_size();
-        let active = self.active_surface();
-        let view = active
-            .as_deref()
-            .and_then(|surface_id| self.host.screen_view(surface_id).ok());
+        let views = self.views(width, height);
+        self.sync_sizes(&views);
+        self.sync_title();
+
         let Some(soft_surface) = self.surface.as_mut() else {
             return;
         };
@@ -497,9 +613,7 @@ impl Gui {
         };
         buffer.fill(BG);
 
-        if let Some(view) = view {
-            paint_screen(&mut buffer, &view, width, height, cell_w, cell_h);
-        } else {
+        if views.is_empty() {
             let message = "berth: no live surface";
             for (index, character) in message.chars().enumerate() {
                 draw_glyph(
@@ -516,37 +630,201 @@ impl Gui {
             }
         }
 
+        for view in &views {
+            let border = if view.focused { FOCUS_BORDER } else { BORDER };
+            stroke_rect(&mut buffer, width, view.rect, border);
+            let Some(surface_id) = &view.surface else {
+                continue;
+            };
+            let Ok(screen) = self.host.screen_view(surface_id) else {
+                continue;
+            };
+            let inner = view.rect.inset(PANEL_PAD);
+            paint_screen(
+                &mut buffer,
+                &screen,
+                width,
+                inner.x,
+                inner.y,
+                inner.w,
+                inner.h,
+                cell_w,
+                cell_h,
+                view.focused,
+            );
+        }
+
         if buffer.present().is_err() {
             return;
         }
         if !self.ready {
             self.ready = true;
             println!(
-                "berth-gui: window ready {width}x{height} ({}x{} cells)",
-                self.cols, self.rows
+                "berth-gui: window ready {width}x{height} ({} pane(s))",
+                views.len()
             );
         }
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Rect {
+    x: usize,
+    y: usize,
+    w: usize,
+    h: usize,
+}
+
+impl Rect {
+    fn inset(self, padding: usize) -> Self {
+        let width = self.w.saturating_sub(padding.saturating_mul(2));
+        let height = self.h.saturating_sub(padding.saturating_mul(2));
+        Self {
+            x: self.x.saturating_add(padding),
+            y: self.y.saturating_add(padding),
+            w: width,
+            h: height,
+        }
+    }
+
+    fn contains(self, x: usize, y: usize) -> bool {
+        self.w > 0
+            && self.h > 0
+            && x >= self.x
+            && y >= self.y
+            && x < self.x.saturating_add(self.w)
+            && y < self.y.saturating_add(self.h)
+    }
+}
+
+struct PaneView {
+    surface: Option<String>,
+    rect: Rect,
+    focused: bool,
+}
+
+/// Walk the persisted split tree and assign pixel rectangles to leaves. Splits
+/// leave a divider between children; the last child takes the remainder so
+/// rounding never leaves a seam.
+fn layout_panes(node: &PaneNode, rect: Rect, out: &mut Vec<(String, Rect)>) {
+    match node {
+        PaneNode::Leaf { pane_id } => out.push((pane_id.clone(), rect)),
+        PaneNode::Split {
+            orientation,
+            children,
+            weights,
+            ..
+        } => {
+            let count = children.len();
+            if count == 0 {
+                return;
+            }
+            let gap = DIVIDER.saturating_mul(count.saturating_sub(1));
+            let available = match orientation {
+                Orientation::Horizontal => rect.w,
+                Orientation::Vertical => rect.h,
+            }
+            .saturating_sub(gap);
+            let mut resolved = Vec::with_capacity(count);
+            let mut total = 0.0f32;
+            for index in 0..count {
+                let weight = weights
+                    .get(index)
+                    .copied()
+                    .filter(|weight| weight.is_finite() && *weight > 0.0)
+                    .unwrap_or(1.0);
+                resolved.push(weight);
+                total += weight;
+            }
+            let mut consumed = 0usize;
+            let mut offset = 0usize;
+            for (index, child) in children.iter().enumerate() {
+                let extent = if index + 1 == count {
+                    available.saturating_sub(consumed)
+                } else {
+                    let share = available as f32 * (resolved[index] / total);
+                    (share.round() as usize).min(available.saturating_sub(consumed))
+                };
+                consumed = consumed.saturating_add(extent);
+                let child_rect = match orientation {
+                    Orientation::Horizontal => Rect {
+                        x: rect.x.saturating_add(offset),
+                        y: rect.y,
+                        w: extent,
+                        h: rect.h,
+                    },
+                    Orientation::Vertical => Rect {
+                        x: rect.x,
+                        y: rect.y.saturating_add(offset),
+                        w: rect.w,
+                        h: extent,
+                    },
+                };
+                layout_panes(child, child_rect, out);
+                offset = offset.saturating_add(extent).saturating_add(DIVIDER);
+            }
+        }
+    }
+}
+
+fn stroke_rect(buffer: &mut [u32], stride: usize, rect: Rect, color: u32) {
+    if rect.w == 0 || rect.h == 0 {
+        return;
+    }
+    fill_rect(buffer, stride, rect.x, rect.y, rect.w, 1, color);
+    fill_rect(
+        buffer,
+        stride,
+        rect.x,
+        rect.y + rect.h - 1,
+        rect.w,
+        1,
+        color,
+    );
+    fill_rect(buffer, stride, rect.x, rect.y, 1, rect.h, color);
+    fill_rect(
+        buffer,
+        stride,
+        rect.x + rect.w - 1,
+        rect.y,
+        1,
+        rect.h,
+        color,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
 fn paint_screen(
     buffer: &mut [u32],
     view: &ScreenView,
-    width: usize,
-    height: usize,
+    stride: usize,
+    origin_x: usize,
+    origin_y: usize,
+    max_width: usize,
+    max_height: usize,
     cell_w: usize,
     cell_h: usize,
+    show_cursor: bool,
 ) {
-    let cols = view.cols.min((width / cell_w) as u16);
-    let rows = view.rows.min((height / cell_h) as u16);
+    let cols = view.cols.min((max_width / cell_w) as u16);
+    let rows = view.rows.min((max_height / cell_h) as u16);
     for row in 0..rows {
         for col in 0..cols {
             let index = usize::from(row) * usize::from(view.cols) + usize::from(col);
             let Some(cell) = view.cells.get(index) else {
                 continue;
             };
-            let cursor = view.cursor == (row, col);
-            paint_cell(buffer, width, col, row, cell, cursor, cell_w, cell_h);
+            let cursor = show_cursor && view.cursor == (row, col);
+            paint_cell(
+                buffer,
+                stride,
+                origin_x + usize::from(col) * cell_w,
+                origin_y + usize::from(row) * cell_h,
+                cell,
+                cursor,
+                cell_w,
+                cell_h,
+            );
         }
     }
 }
@@ -555,8 +833,8 @@ fn paint_screen(
 fn paint_cell(
     buffer: &mut [u32],
     stride: usize,
-    col: u16,
-    row: u16,
+    x: usize,
+    y: usize,
     cell: &CellView,
     cursor: bool,
     cell_w: usize,
@@ -570,8 +848,6 @@ fn paint_cell(
     if cursor {
         std::mem::swap(&mut fg, &mut bg);
     }
-    let x = usize::from(col) * cell_w;
-    let y = usize::from(row) * cell_h;
     fill_rect(buffer, stride, x, y, cell_w, cell_h, bg);
 
     let character = cell.contents.chars().next().unwrap_or(' ');
@@ -677,4 +953,157 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn split(orientation: Orientation, weights: Vec<f32>, children: Vec<PaneNode>) -> PaneNode {
+        PaneNode::Split {
+            id: "split".into(),
+            orientation,
+            children,
+            weights,
+        }
+    }
+
+    fn leaf(id: &str) -> PaneNode {
+        PaneNode::leaf(id)
+    }
+
+    fn layout(node: &PaneNode, width: usize, height: usize) -> Vec<(String, Rect)> {
+        let mut out = Vec::new();
+        layout_panes(
+            node,
+            Rect {
+                x: 0,
+                y: 0,
+                w: width,
+                h: height,
+            },
+            &mut out,
+        );
+        out
+    }
+
+    #[test]
+    fn a_single_leaf_fills_the_window() {
+        let leaves = layout(&leaf("one"), 100, 60);
+        assert_eq!(leaves.len(), 1);
+        assert_eq!(leaves[0].0, "one");
+        assert_eq!(
+            leaves[0].1,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 100,
+                h: 60
+            }
+        );
+    }
+
+    #[test]
+    fn horizontal_children_share_width_with_a_divider() {
+        let node = split(
+            Orientation::Horizontal,
+            vec![0.7, 0.3],
+            vec![leaf("left"), leaf("right")],
+        );
+        let leaves = layout(&node, 100, 50);
+        assert_eq!(
+            leaves[0].1,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 69,
+                h: 50
+            }
+        );
+        assert_eq!(
+            leaves[1].1,
+            Rect {
+                x: 71,
+                y: 0,
+                w: 29,
+                h: 50
+            }
+        );
+        assert_eq!(leaves[0].1.w + leaves[1].1.w, 98);
+    }
+
+    #[test]
+    fn vertical_children_share_height_with_a_divider() {
+        let node = split(
+            Orientation::Vertical,
+            vec![1.0, 1.0],
+            vec![leaf("top"), leaf("bottom")],
+        );
+        let leaves = layout(&node, 80, 60);
+        assert_eq!(
+            leaves[0].1,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 80,
+                h: 29
+            }
+        );
+        assert_eq!(
+            leaves[1].1,
+            Rect {
+                x: 0,
+                y: 31,
+                w: 80,
+                h: 29
+            }
+        );
+    }
+
+    #[test]
+    fn nested_splits_keep_their_rectangles_inside_the_parent() {
+        let node = split(
+            Orientation::Horizontal,
+            vec![0.5, 0.5],
+            vec![
+                leaf("left"),
+                split(
+                    Orientation::Vertical,
+                    vec![0.5, 0.5],
+                    vec![leaf("top-right"), leaf("bottom-right")],
+                ),
+            ],
+        );
+        let leaves = layout(&node, 100, 60);
+        let left = &leaves[0].1;
+        let top = &leaves[1].1;
+        let bottom = &leaves[2].1;
+        assert_eq!(left.x, 0);
+        assert_eq!(left.w, 49);
+        assert_eq!(top.x, 51);
+        assert_eq!(top.w, 49);
+        assert_eq!(top.y, 0);
+        assert_eq!(bottom.y, 31);
+        assert!(top.contains(60, 10));
+        assert!(!top.contains(60, 40));
+    }
+
+    #[test]
+    fn inset_keeps_the_panel_content_inside_its_border() {
+        let rect = Rect {
+            x: 10,
+            y: 20,
+            w: 100,
+            h: 60,
+        };
+        assert_eq!(
+            rect.inset(PANEL_PAD),
+            Rect {
+                x: 12,
+                y: 22,
+                w: 96,
+                h: 56
+            }
+        );
+    }
 }

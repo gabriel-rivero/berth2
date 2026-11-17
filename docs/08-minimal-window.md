@@ -1,7 +1,7 @@
 # Minimal window (Linux/Windows)
 
-Status: first visible slice. One window, one terminal, no GPU. The split tree,
-tabs and sidebar are still core-only.
+Status: second visible slice. One window, the core's split tree, no GPU. Tabs
+and the sidebar are still core-only.
 
 This is the second half of the Linux shell spike. It reuses `berth-headless`'s
 PTY host and `berth-server`, and adds a renderer and input routing:
@@ -33,16 +33,21 @@ on that choice.
 
 ## What works
 
-- Creates or restores a session, then shows the selected workspace's active
-  surface.
-- Renders the visible `vt100` grid with 256-color/RGB foregrounds and
+- Creates or restores a session, then lays out the selected workspace's
+  `PaneNode` tree. Every leaf gets its own `vt100` view, sized to its rectangle;
+  nested horizontal and vertical splits use the core's weights.
+- Clicking a pane focuses its active surface (and broadcasts
+  `pane.focus_changed`/`workspace.changed`). The focused pane gets a blue border
+  and the only block cursor.
+- Renders each visible `vt100` grid with 256-color/RGB foregrounds and
   backgrounds, bold, inverse and a block cursor.
 - Routes printable text, Ctrl/Alt/Shift combinations, Enter, Tab, Esc,
   Backspace, Delete, Insert, arrows, Home/End, Page keys and F1–F12 through the
-  same key encoder as the headless shell. Cmd/Super is left to the platform.
-- Resizes the PTY when the window changes size; the core surface records the
-  new grid.
-- Starts `berth-server` (unless `--mode off`), so `berth ls`, `berth send`,
+  same key encoder as the headless shell, to the focused surface. Cmd/Super is
+  left to the platform.
+- Resizes every visible PTY to its pane grid when the window or tree changes;
+  the core surface records the new size.
+- Starts `berth-server` (unless `--mode off`), so `berth split`, `berth send`,
   hooks and `session.save` work against the window.
 - Saves a snapshot on close.
 
@@ -73,20 +78,25 @@ On this machine the smoke run prints:
 
 ```
 berth-gui 0.8.0 · socket /tmp/berth-gui/berth.sock · auth trusted
-berth-gui: window ready 960x600 (120x37 cells)
+berth-gui: window ready 960x600 (2 pane(s))
 ```
 
-A screenshot under Xvfb after typing `echo gui-ready-ok` showed the command and
-its output in the window.
+A screenshot under Xvfb after typing `echo gui-ready-ok`, then running
+`berth split <surface> --direction right`, showed both terminals side by side
+with independent output and a focus border. Clicking the left pane switched
+`berth active` back to its surface, and typing went to the clicked pane.
 
 ## Limits
 
-- **Only the active surface is drawn.** Splits, tabs and panes are represented
-  in the core but not laid out; the window follows
-  `selected_workspace → active_surface`.
+- **One workspace, no tabs or sidebar.** The selected workspace's split tree is
+  drawn; panes with multiple surfaces show only their active tab.
 - **No scrollback view.** `surface.read_text` supports it; the renderer always
   shows the live screen.
-- **No mouse, selection, clipboard, IME or scroll gestures.**
+- **No selection, clipboard, IME or scroll gestures.** Mouse input is limited to
+  click-to-focus. Splits are created through the protocol (`berth split`) or
+  another client; there are no keybindings for them yet.
+- **No divider dragging.** `pane.resize`/`split.resize` exist in the core, but
+  the window does not hit-test the dividers.
 - **Bitmap font only, ASCII-first.** Unicode falls back to `?`; a real font
   stack (`ab_glyph`/cosmic-text) is a later slice.
 - **No child-exit callback.** The PTY dies and the screen freezes; the core is
@@ -98,8 +108,8 @@ its output in the window.
 
 ## Next
 
-1. Lay out the split tree: one `vt100` view per leaf, focus follows clicks.
-2. Add a tab strip and workspace sidebar from the core snapshot.
+1. Tab strip per pane and a workspace sidebar from the core snapshot.
+2. Divider dragging wired to `pane.resize`/`split.resize`.
 3. Scrollback, mouse selection and clipboard.
 4. Replace the bitmap font with a real monospace rasterizer.
 5. Then decide whether the production renderer stays winit + a terminal grid or

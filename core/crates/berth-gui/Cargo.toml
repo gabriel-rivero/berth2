@@ -15,6 +15,7 @@ path = "src/main.rs"
 berth-core = { path = "../berth-core" }
 berth-headless = { path = "../berth-headless" }
 berth-server = { path = "../berth-server" }
+serde_json.workspace = true
 winit.workspace = true
 softbuffer.workspace = true
 font8x8.workspace = true

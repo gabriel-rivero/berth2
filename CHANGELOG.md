@@ -29,9 +29,11 @@
 - New `berth-gui` crate (`berth-gui` binary): the first visible Linux/Windows
   window. `winit` + `softbuffer` + an 8×16 bitmap grid, 256/RGB colors, block
   cursor, key routing through the headless encoder, PTY resize, embedded
-  `berth-server`, restore/save. One active surface; split layout, tabs,
-  scrollback, mouse and clipboard are next. `--smoke-ms` renders under Xvfb for
-  headless checks. See `docs/08-minimal-window.md`.
+  `berth-server`, restore/save. Draws the selected workspace's weighted split
+  tree with one terminal per leaf; clicking a pane focuses its surface and
+  broadcasts the focus events. Tabs, sidebar, divider dragging, scrollback,
+  selection and clipboard are next. `--smoke-ms` renders under Xvfb for headless
+  checks. See `docs/08-minimal-window.md`.
 - CI runs fmt, clippy and tests on Ubuntu, macOS and Windows; the Swift app job
   remains macOS-only. The Swift app still uses its Swift transport until the
   UniFFI migration is smoke-tested on a Mac.
