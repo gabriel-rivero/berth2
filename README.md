@@ -13,7 +13,7 @@ make fetch-engine # macOS, Command Line Tools only: download the CI-built Ghostt
 make run          # macOS: bundle + launch
 ```
 
-The Rust half — `berth-core`, `berth-transport`, `berth-server`, `berth-headless`, `berth-gui` and the `berth` CLI — builds and tests on Linux, macOS and Windows. `berth-headless` is the portable PTY/protocol shell; `berth-gui` is the first visible Linux/Windows window (winit + softbuffer, no GPU). See [docs/07-headless-shell.md](docs/07-headless-shell.md) and [docs/08-minimal-window.md](docs/08-minimal-window.md). The Swift/AppKit shell remains the macOS shell; Linux and Windows get their GUI shell on the same protocol (see [docs/05-build.md](docs/05-build.md#portable-core-linux-and-windows)).
+The Rust half — `berth-core`, `berth-transport`, `berth-server`, `berth-headless`, `berth-gui` and the `berth` CLI — builds and tests on Linux, macOS and Windows. `berth-headless` is the portable PTY/protocol shell; `berth-gui` is the first visible Linux/Windows window (winit + softbuffer, no GPU), with the split tree, per-pane tabs and a workspace sidebar. See [docs/07-headless-shell.md](docs/07-headless-shell.md) and [docs/08-minimal-window.md](docs/08-minimal-window.md). The Swift/AppKit shell remains the macOS shell; Linux and Windows get their GUI shell on the same protocol (see [docs/05-build.md](docs/05-build.md#portable-core-linux-and-windows)).
 
 
 ## The idea in one paragraph

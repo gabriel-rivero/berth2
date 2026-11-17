@@ -144,8 +144,8 @@ list.
    `berth` CLI) and `berth-headless` (PTY + VT screen + protocol) are tested on
    Linux/macOS/Windows CI. `berth-gui` adds the first visible window: winit +
    softbuffer, weighted split-tree layout, per-pane terminals, click-to-focus,
-   key routing, resize and session save. Next: tabs/sidebar, divider dragging,
-   then scrollback/mouse/clipboard. Decide from
+   per-pane tab strips, a workspace sidebar, key routing, resize and session
+   save. Next: divider dragging, then scrollback/mouse/clipboard. Decide from
    measured input latency and packaging whether the production renderer stays
    winit + a terminal grid or moves to GTK4 + libghostty-vt. See
    [docs/07-headless-shell.md](07-headless-shell.md) and

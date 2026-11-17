@@ -16,13 +16,13 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use berth_core::model::Orientation;
-use berth_core::{AppState, PaneNode, SurfaceOps, paths};
+use berth_core::{AppState, PaneNode, SpawnRequest, Surface, SurfaceOps, paths};
 use berth_headless::{CellView, PtyHost, ScreenView, restore_session, save_session};
 use berth_server::{Server, ServerConfig, ServerHandle, SocketMode, auth};
 use font8x8::{BASIC_FONTS, UnicodeFonts};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalSize};
-use winit::event::{ElementState, MouseButton, WindowEvent};
+use winit::event::{ElementState, KeyEvent, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
@@ -32,8 +32,17 @@ const BG: u32 = 0x0010_1014;
 const FG: u32 = 0x00e6_e6ee;
 const BORDER: u32 = 0x0024_2430;
 const FOCUS_BORDER: u32 = 0x005f_9fda;
+const SIDEBAR_BG: u32 = 0x0017_171e;
+const SIDEBAR_ACTIVE: u32 = 0x002a_2a38;
+const SIDEBAR_TEXT: u32 = 0x00b8_b8c8;
+const SIDEBAR_DIM: u32 = 0x0070_7080;
+const TAB_BG: u32 = 0x001a_1a22;
+const TAB_ACTIVE: u32 = 0x0030_3040;
+const TAB_TEXT: u32 = 0x00c8_c8d8;
+const TAB_DIM: u32 = 0x0078_7888;
 const PANEL_PAD: usize = 2;
 const DIVIDER: usize = 2;
+const SIDEBAR_WIDTH: f64 = 168.0;
 
 #[derive(Debug)]
 struct Args {
@@ -371,8 +380,10 @@ impl Gui {
     }
 
     /// Lay out the selected workspace's split tree and resolve each leaf to its
-    /// visible surface. The tree is read under the state lock and copied out.
-    fn views(&self, width: usize, height: usize) -> Vec<PaneView> {
+    /// visible surface and tabs. The tree is read under the state lock and
+    /// copied out.
+    fn views(&self, area: Rect) -> Vec<PaneView> {
+        let (cell_w, cell_h) = self.cell_size();
         let state = lock(&self.state);
         let Some(workspace_id) = state.selected_workspace.clone().or_else(|| {
             state
@@ -395,32 +406,112 @@ impl Gui {
             })
             .or_else(|| workspace.active_surface.clone());
         let mut leaves = Vec::new();
-        layout_panes(
-            &workspace.root,
-            Rect {
-                x: 0,
-                y: 0,
-                w: width,
-                h: height,
-            },
-            &mut leaves,
-        );
+        layout_panes(&workspace.root, area, &mut leaves);
         leaves
             .into_iter()
             .map(|(pane_id, rect)| {
-                let surface = state
-                    .panes
-                    .get(&pane_id)
-                    .and_then(|pane| pane.active_surface())
-                    .map(str::to_owned);
+                let mut content = rect.inset(PANEL_PAD);
+                let mut tabs = Vec::new();
+                let mut tab_bar = None;
+                let surface = state.panes.get(&pane_id).and_then(|pane| {
+                    if pane.surfaces.len() > 1 {
+                        let tab_height = cell_h + 4;
+                        let bar = Rect {
+                            x: content.x,
+                            y: content.y,
+                            w: content.w,
+                            h: tab_height,
+                        };
+                        tab_bar = Some(bar);
+                        let mut x = bar.x;
+                        for (index, surface_id) in pane.surfaces.iter().enumerate() {
+                            let Some(surface) = state.surface(surface_id) else {
+                                continue;
+                            };
+                            let remaining = bar.x.saturating_add(bar.w).saturating_sub(x);
+                            if remaining < 12 {
+                                break;
+                            }
+                            let title = tab_title(surface, index);
+                            let width = (title.chars().count() * cell_w + 16).min(remaining);
+                            tabs.push(TabView {
+                                id: surface_id.clone(),
+                                title,
+                                rect: Rect {
+                                    x,
+                                    y: bar.y,
+                                    w: width,
+                                    h: bar.h,
+                                },
+                                active: index == pane.active,
+                            });
+                            x = x.saturating_add(width);
+                        }
+                        content.y = content.y.saturating_add(tab_height);
+                        content.h = content.h.saturating_sub(tab_height);
+                    }
+                    pane.active_surface().map(str::to_owned)
+                });
                 let focused = surface.is_some() && surface.as_deref() == active.as_deref();
                 PaneView {
                     surface,
                     rect,
+                    content,
                     focused,
+                    tabs,
+                    tab_bar,
                 }
             })
             .collect()
+    }
+
+    fn sidebar_width(&self) -> usize {
+        let scale = self
+            .window
+            .as_ref()
+            .map(|window| window.scale_factor())
+            .unwrap_or(1.0)
+            .max(1.0);
+        (SIDEBAR_WIDTH * scale) as usize
+    }
+
+    fn content_area(&self, width: usize, height: usize) -> Rect {
+        let sidebar = self.sidebar_width().min(width.saturating_sub(80));
+        Rect {
+            x: sidebar,
+            y: 0,
+            w: width.saturating_sub(sidebar),
+            h: height,
+        }
+    }
+
+    /// The flat workspace list. Groups are visible in the core but not yet
+    /// rendered as headers in this window.
+    fn workspace_views(&self, width: usize, height: usize) -> Vec<WorkspaceView> {
+        let state = lock(&self.state);
+        let row_height = self.cell_size().1 + 8;
+        let selected = state.selected_workspace.as_deref();
+        let mut y = 28usize;
+        let mut rows = Vec::new();
+        for workspace in &state.workspaces {
+            if y.saturating_add(row_height) > height {
+                break;
+            }
+            rows.push(WorkspaceView {
+                id: workspace.id.clone(),
+                name: workspace.name.clone(),
+                unread: workspace.unread,
+                active: selected == Some(workspace.id.as_str()),
+                rect: Rect {
+                    x: 0,
+                    y,
+                    w: width,
+                    h: row_height,
+                },
+            });
+            y = y.saturating_add(row_height);
+        }
+        rows
     }
 
     fn request_redraw(&self) {
@@ -439,16 +530,15 @@ impl Gui {
         (8 * scale, 16 * scale)
     }
 
-    /// Give every visible surface the grid that fits its pane.
+    /// Give every visible surface the grid that fits its pane content.
     fn sync_sizes(&mut self, views: &[PaneView]) {
         let (cell_w, cell_h) = self.cell_size();
         for view in views {
             let Some(surface_id) = &view.surface else {
                 continue;
             };
-            let inner = view.rect.inset(PANEL_PAD);
-            let cols = (inner.w / cell_w).max(1).min(u16::MAX as usize) as u16;
-            let rows = (inner.h / cell_h).max(1).min(u16::MAX as usize) as u16;
+            let cols = (view.content.w / cell_w).max(1).min(u16::MAX as usize) as u16;
+            let rows = (view.content.h / cell_h).max(1).min(u16::MAX as usize) as u16;
             if self.sized.get(surface_id) == Some(&(cols, rows)) {
                 continue;
             }
@@ -511,22 +601,57 @@ impl Gui {
             return;
         };
         let PhysicalSize { width, height } = window.inner_size();
-        let views = self.views(width as usize, height as usize);
+        let (width, height) = (width as usize, height as usize);
         let point = (
             self.pointer.0.max(0.0) as usize,
             self.pointer.1.max(0.0) as usize,
         );
+        let area = self.content_area(width, height);
+        if point.0 < area.x {
+            let rows = self.workspace_views(area.x, height);
+            let Some(row) = rows.iter().find(|row| row.rect.contains(point.0, point.1)) else {
+                return;
+            };
+            let mut state = lock(&self.state);
+            if let Err(error) = state.select_workspace(&row.id) {
+                eprintln!("berth-gui: select workspace {}: {error}", row.id);
+                return;
+            }
+            let active = state.active_surface_of_workspace(&row.id);
+            drop(state);
+            if let Some(surface_id) = active {
+                let _ = self.host.focus(&surface_id);
+            }
+            self.flush_events();
+            self.request_redraw();
+            return;
+        }
+
+        let views = self.views(area);
+        for view in &views {
+            if let Some(tab) = view
+                .tabs
+                .iter()
+                .find(|tab| tab.rect.contains(point.0, point.1))
+            {
+                self.activate(&tab.id);
+                return;
+            }
+        }
         let Some(view) = views
             .iter()
             .find(|view| view.rect.contains(point.0, point.1))
         else {
             return;
         };
-        let Some(surface_id) = view.surface.clone() else {
-            return;
-        };
+        if let Some(surface_id) = &view.surface {
+            self.activate(surface_id);
+        }
+    }
+
+    fn activate(&mut self, surface_id: &str) {
         let mut state = lock(&self.state);
-        if let Err(error) = state.activate_surface(&surface_id, self.host.as_ref()) {
+        if let Err(error) = state.activate_surface(surface_id, self.host.as_ref()) {
             eprintln!("berth-gui: focus {surface_id}: {error}");
             return;
         }
@@ -535,7 +660,80 @@ impl Gui {
         self.request_redraw();
     }
 
+    fn new_tab(&mut self) {
+        let Some(surface_id) = self.active_surface() else {
+            return;
+        };
+        let mut state = lock(&self.state);
+        let Some(surface) = state.surface(&surface_id).cloned() else {
+            return;
+        };
+        let request = SpawnRequest {
+            cwd: (!surface.cwd.is_empty()).then(|| surface.cwd.clone()),
+            argv: Vec::new(),
+            env: Vec::new(),
+            cols: surface.cols.max(1),
+            rows: surface.rows.max(1),
+        };
+        let result = state.add_surface(&surface.pane_id, request, self.host.as_ref(), true);
+        drop(state);
+        match result {
+            Ok(surface) => {
+                self.flush_events();
+                println!("berth-gui: new tab {}", surface.id);
+                self.request_redraw();
+            }
+            Err(error) => eprintln!("berth-gui: new tab: {error}"),
+        }
+    }
+
+    fn close_tab(&mut self) {
+        let Some(surface_id) = self.active_surface() else {
+            return;
+        };
+        let mut state = lock(&self.state);
+        let Some(surface) = state.surface(&surface_id).cloned() else {
+            return;
+        };
+        let last = state
+            .panes
+            .get(&surface.pane_id)
+            .is_none_or(|pane| pane.surfaces.len() <= 1);
+        if last {
+            return;
+        }
+        let result = state.close_surface(&surface_id, self.host.as_ref());
+        drop(state);
+        match result {
+            Ok(()) => {
+                self.flush_events();
+                self.request_redraw();
+            }
+            Err(error) => eprintln!("berth-gui: close tab: {error}"),
+        }
+    }
+
+    fn cycle_tab(&mut self, delta: i32) {
+        let Some(surface_id) = self.active_surface() else {
+            return;
+        };
+        let mut state = lock(&self.state);
+        let result = state.cycle_surface(&surface_id, delta, self.host.as_ref());
+        drop(state);
+        match result {
+            Ok(surface) => {
+                self.flush_events();
+                let _ = self.host.focus(&surface.id);
+                self.request_redraw();
+            }
+            Err(error) => eprintln!("berth-gui: cycle tab: {error}"),
+        }
+    }
+
     fn key(&mut self, event: winit::event::KeyEvent) {
+        if self.shortcut(&event) {
+            return;
+        }
         let Some(surface_id) = self.active_surface() else {
             return;
         };
@@ -568,6 +766,42 @@ impl Gui {
         }
     }
 
+    /// Window shortcuts. They are deliberately Ctrl+Shift so the shell keeps
+    /// plain Ctrl+Tab/Ctrl+W.
+    fn shortcut(&mut self, event: &KeyEvent) -> bool {
+        if event.repeat
+            || !self.modifiers.control_key()
+            || self.modifiers.alt_key()
+            || self.modifiers.super_key()
+        {
+            return false;
+        }
+        if !self.modifiers.shift_key() {
+            match event.logical_key {
+                Key::Named(NamedKey::PageUp) => {
+                    self.cycle_tab(-1);
+                    return true;
+                }
+                Key::Named(NamedKey::PageDown) => {
+                    self.cycle_tab(1);
+                    return true;
+                }
+                _ => return false,
+            }
+        }
+        if let Key::Character(character) = &event.logical_key {
+            if character.eq_ignore_ascii_case("t") {
+                self.new_tab();
+                return true;
+            }
+            if character.eq_ignore_ascii_case("w") {
+                self.close_tab();
+                return true;
+            }
+        }
+        false
+    }
+
     fn modifier_names(&self) -> Vec<String> {
         let mut mods = Vec::new();
         if self.modifiers.control_key() {
@@ -592,7 +826,9 @@ impl Gui {
             return;
         }
         let (cell_w, cell_h) = self.cell_size();
-        let views = self.views(width, height);
+        let area = self.content_area(width, height);
+        let workspaces = self.workspace_views(area.x, height);
+        let views = self.views(area);
         self.sync_sizes(&views);
         self.sync_title();
 
@@ -612,42 +848,50 @@ impl Gui {
             return;
         };
         buffer.fill(BG);
+        paint_sidebar(
+            &mut buffer,
+            width,
+            height,
+            area.x,
+            &workspaces,
+            cell_w,
+            cell_h,
+        );
 
         if views.is_empty() {
-            let message = "berth: no live surface";
-            for (index, character) in message.chars().enumerate() {
-                draw_glyph(
-                    &mut buffer,
-                    width,
-                    8 + index * cell_w,
-                    8,
-                    character,
-                    FG,
-                    cell_w,
-                    cell_h,
-                    false,
-                );
-            }
+            draw_text(
+                &mut buffer,
+                width,
+                area.x + 8,
+                8,
+                "berth: no live surface",
+                FG,
+                cell_w,
+                cell_h,
+                area.w.saturating_sub(16),
+            );
         }
 
         for view in &views {
             let border = if view.focused { FOCUS_BORDER } else { BORDER };
             stroke_rect(&mut buffer, width, view.rect, border);
+            if let Some(bar) = view.tab_bar {
+                paint_tabs(&mut buffer, width, bar, &view.tabs, cell_w, cell_h);
+            }
             let Some(surface_id) = &view.surface else {
                 continue;
             };
             let Ok(screen) = self.host.screen_view(surface_id) else {
                 continue;
             };
-            let inner = view.rect.inset(PANEL_PAD);
             paint_screen(
                 &mut buffer,
                 &screen,
                 width,
-                inner.x,
-                inner.y,
-                inner.w,
-                inner.h,
+                view.content.x,
+                view.content.y,
+                view.content.w,
+                view.content.h,
                 cell_w,
                 cell_h,
                 view.focused,
@@ -664,6 +908,155 @@ impl Gui {
                 views.len()
             );
         }
+    }
+}
+
+fn paint_sidebar(
+    buffer: &mut [u32],
+    stride: usize,
+    height: usize,
+    width: usize,
+    rows: &[WorkspaceView],
+    cell_w: usize,
+    cell_h: usize,
+) {
+    if width == 0 {
+        return;
+    }
+    fill_rect(buffer, stride, 0, 0, width, height, SIDEBAR_BG);
+    draw_text(
+        buffer,
+        stride,
+        12,
+        8,
+        "WORKSPACES",
+        SIDEBAR_DIM,
+        cell_w,
+        cell_h,
+        width.saturating_sub(20),
+    );
+    for row in rows {
+        if row.active {
+            fill_rect(
+                buffer,
+                stride,
+                row.rect.x,
+                row.rect.y,
+                row.rect.w,
+                row.rect.h,
+                SIDEBAR_ACTIVE,
+            );
+            fill_rect(
+                buffer,
+                stride,
+                row.rect.x,
+                row.rect.y,
+                3,
+                row.rect.h,
+                FOCUS_BORDER,
+            );
+        }
+        let color = if row.active { FG } else { SIDEBAR_TEXT };
+        draw_text(
+            buffer,
+            stride,
+            12,
+            row.rect.y + 4,
+            &row.name,
+            color,
+            cell_w,
+            cell_h,
+            row.rect.w.saturating_sub(32),
+        );
+        if row.unread > 0 {
+            fill_rect(
+                buffer,
+                stride,
+                row.rect.w.saturating_sub(14),
+                row.rect.y + row.rect.h / 2 - 3,
+                6,
+                6,
+                FOCUS_BORDER,
+            );
+        }
+    }
+    fill_rect(
+        buffer,
+        stride,
+        width.saturating_sub(1),
+        0,
+        1,
+        height,
+        BORDER,
+    );
+}
+
+fn paint_tabs(
+    buffer: &mut [u32],
+    stride: usize,
+    bar: Rect,
+    tabs: &[TabView],
+    cell_w: usize,
+    cell_h: usize,
+) {
+    fill_rect(buffer, stride, bar.x, bar.y, bar.w, bar.h, TAB_BG);
+    for tab in tabs {
+        if tab.active {
+            fill_rect(
+                buffer, stride, tab.rect.x, tab.rect.y, tab.rect.w, tab.rect.h, TAB_ACTIVE,
+            );
+            fill_rect(
+                buffer,
+                stride,
+                tab.rect.x,
+                tab.rect.y + tab.rect.h.saturating_sub(2),
+                tab.rect.w,
+                2,
+                FOCUS_BORDER,
+            );
+        }
+        draw_text(
+            buffer,
+            stride,
+            tab.rect.x + 8,
+            tab.rect.y + 2,
+            &tab.title,
+            if tab.active { TAB_TEXT } else { TAB_DIM },
+            cell_w,
+            cell_h,
+            tab.rect.w.saturating_sub(16),
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_text(
+    buffer: &mut [u32],
+    stride: usize,
+    x: usize,
+    y: usize,
+    text: &str,
+    color: u32,
+    cell_w: usize,
+    cell_h: usize,
+    max_width: usize,
+) {
+    if cell_w == 0 {
+        return;
+    }
+    let max_chars = max_width / cell_w;
+    for (index, character) in text.chars().take(max_chars).enumerate() {
+        draw_glyph(
+            buffer,
+            stride,
+            x + index * cell_w,
+            y,
+            character,
+            color,
+            cell_w,
+            cell_h,
+            false,
+        );
     }
 }
 
@@ -700,7 +1093,43 @@ impl Rect {
 struct PaneView {
     surface: Option<String>,
     rect: Rect,
+    content: Rect,
     focused: bool,
+    tabs: Vec<TabView>,
+    tab_bar: Option<Rect>,
+}
+
+struct TabView {
+    id: String,
+    title: String,
+    rect: Rect,
+    active: bool,
+}
+
+struct WorkspaceView {
+    id: String,
+    name: String,
+    unread: u32,
+    rect: Rect,
+    active: bool,
+}
+
+/// Short, stable tab label. PTY title reporting is not wired yet, so fall back
+/// to the cwd's last component and a tab number.
+fn tab_title(surface: &Surface, index: usize) -> String {
+    if !surface.title.is_empty() {
+        return surface.title.clone();
+    }
+    let base = std::path::Path::new(&surface.cwd)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("shell");
+    if index == 0 {
+        base.to_string()
+    } else {
+        format!("{base} {}", index + 1)
+    }
 }
 
 /// Walk the persisted split tree and assign pixel rectangles to leaves. Splits
@@ -1105,5 +1534,32 @@ mod tests {
                 h: 56
             }
         );
+    }
+
+    #[test]
+    fn tab_labels_prefer_the_title_then_the_cwd() {
+        let mut surface = Surface {
+            id: "srf_test".into(),
+            pane_id: "pne_test".into(),
+            workspace_id: "wsp_test".into(),
+            kind: berth_core::model::SurfaceKind::Terminal,
+            title: String::new(),
+            cwd: "/home/me/project".into(),
+            pid: None,
+            tty: None,
+            cols: 80,
+            rows: 24,
+            progress: None,
+            bell_count: 0,
+            agent_id: None,
+            created_ms: 0,
+        };
+        assert_eq!(tab_title(&surface, 0), "project");
+        assert_eq!(tab_title(&surface, 1), "project 2");
+        surface.title = "tests".into();
+        assert_eq!(tab_title(&surface, 0), "tests");
+        surface.title.clear();
+        surface.cwd.clear();
+        assert_eq!(tab_title(&surface, 0), "shell");
     }
 }

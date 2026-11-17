@@ -128,7 +128,9 @@ prompt and type into it, then compare input latency and packaging cost.
 2. ~~Add the core's split tree to that window: one surface per leaf, focus
    routing.~~ Landed in `berth-gui`: weighted horizontal/vertical layout and
    click-to-focus.
-3. Add a tab strip, workspace sidebar and divider dragging.
-4. Add scrollback, mouse selection and clipboard.
+3. ~~Add a tab strip and workspace sidebar.~~ Landed in `berth-gui`: per-pane
+   tabs with click/shortcut switching and a clickable workspace list. Divider
+   dragging remains.
+4. Add divider dragging, scrollback, mouse selection and clipboard.
 5. Decide `vt100` vs `libghostty-vt` from measured input latency and packaging.
 6. Add the child-exit callback to `SurfaceOps`, then wire agent exit states.

@@ -31,9 +31,11 @@
   cursor, key routing through the headless encoder, PTY resize, embedded
   `berth-server`, restore/save. Draws the selected workspace's weighted split
   tree with one terminal per leaf; clicking a pane focuses its surface and
-  broadcasts the focus events. Tabs, sidebar, divider dragging, scrollback,
-  selection and clipboard are next. `--smoke-ms` renders under Xvfb for headless
-  checks. See `docs/08-minimal-window.md`.
+  broadcasts the focus events. Per-pane tab strips (click, Ctrl+Shift+T/W,
+  Ctrl+PageUp/PageDown) and a clickable workspace sidebar sit on the same
+  snapshot. Divider dragging, scrollback, selection and clipboard are next.
+  `--smoke-ms` renders under Xvfb for headless checks. See
+  `docs/08-minimal-window.md`.
 - CI runs fmt, clippy and tests on Ubuntu, macOS and Windows; the Swift app job
   remains macOS-only. The Swift app still uses its Swift transport until the
   UniFFI migration is smoke-tested on a Mac.

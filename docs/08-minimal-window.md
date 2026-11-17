@@ -1,7 +1,7 @@
 # Minimal window (Linux/Windows)
 
-Status: second visible slice. One window, the core's split tree, no GPU. Tabs
-and the sidebar are still core-only.
+Status: third visible slice. One window, the core's split tree, per-pane tab
+strips and a workspace sidebar, no GPU.
 
 This is the second half of the Linux shell spike. It reuses `berth-headless`'s
 PTY host and `berth-server`, and adds a renderer and input routing:
@@ -36,6 +36,12 @@ on that choice.
 - Creates or restores a session, then lays out the selected workspace's
   `PaneNode` tree. Every leaf gets its own `vt100` view, sized to its rectangle;
   nested horizontal and vertical splits use the core's weights.
+- Draws a flat workspace sidebar from the core snapshot. Clicking a row selects
+  that workspace and focuses its active surface; unread workspaces get a dot.
+- Draws a tab strip whenever a pane has more than one surface. Clicking a tab
+  activates it; the terminal grid shrinks to make room.
+- `Ctrl+Shift+T` opens a tab in the focused pane, `Ctrl+Shift+W` closes it (never
+  the pane's last tab), and `Ctrl+PageUp`/`Ctrl+PageDown` cycle tabs.
 - Clicking a pane focuses its active surface (and broadcasts
   `pane.focus_changed`/`workspace.changed`). The focused pane gets a blue border
   and the only block cursor.
@@ -78,7 +84,7 @@ On this machine the smoke run prints:
 
 ```
 berth-gui 0.8.0 · socket /tmp/berth-gui/berth.sock · auth trusted
-berth-gui: window ready 960x600 (2 pane(s))
+berth-gui: window ready 960x600 (1 pane(s))
 ```
 
 A screenshot under Xvfb after typing `echo gui-ready-ok`, then running
@@ -86,15 +92,24 @@ A screenshot under Xvfb after typing `echo gui-ready-ok`, then running
 with independent output and a focus border. Clicking the left pane switched
 `berth active` back to its surface, and typing went to the clicked pane.
 
+With two workspaces in the snapshot, the sidebar listed both and clicking a row
+switched the visible split tree. `Ctrl+Shift+T` twice produced three tabs with
+the third active; clicking the first tab activated it, Ctrl+PageDown moved to
+the second, and Ctrl+Shift+W removed it.
+
 ## Limits
 
-- **One workspace, no tabs or sidebar.** The selected workspace's split tree is
-  drawn; panes with multiple surfaces show only their active tab.
+- **One workspace visible at a time.** The sidebar lists workspaces flat: no
+  group headers, collapse or scrolling, and rows that do not fit are clipped.
+  Creating, renaming and closing workspaces still goes through the CLI/protocol.
+- **Tabs do not overflow or reorder.** Very many tabs run out of strip width.
+  Labels come from the surface title, falling back to the cwd basename plus a
+  number; there is no rename or drag-reorder UI.
 - **No scrollback view.** `surface.read_text` supports it; the renderer always
   shows the live screen.
 - **No selection, clipboard, IME or scroll gestures.** Mouse input is limited to
-  click-to-focus. Splits are created through the protocol (`berth split`) or
-  another client; there are no keybindings for them yet.
+  panes, tabs and sidebar rows. Splits are created through the protocol
+  (`berth split`) or another client; there are no split keybindings yet.
 - **No divider dragging.** `pane.resize`/`split.resize` exist in the core, but
   the window does not hit-test the dividers.
 - **Bitmap font only, ASCII-first.** Unicode falls back to `?`; a real font
@@ -108,8 +123,9 @@ with independent output and a focus border. Clicking the left pane switched
 
 ## Next
 
-1. Tab strip per pane and a workspace sidebar from the core snapshot.
-2. Divider dragging wired to `pane.resize`/`split.resize`.
+1. Divider dragging wired to `pane.resize`/`split.resize`, plus split/close
+   keybindings.
+2. Sidebar groups and workspace create/close, tab overflow and renaming.
 3. Scrollback, mouse selection and clipboard.
 4. Replace the bitmap font with a real monospace rasterizer.
 5. Then decide whether the production renderer stays winit + a terminal grid or
