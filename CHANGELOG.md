@@ -19,6 +19,13 @@
   commands (`>/dev/null 2>&1` on POSIX, `>NUL` on Windows), and atomic file
   replacement that works with Windows `rename` semantics.
 - `SurfaceOps` is now `Send + Sync`, so shells can hand it to the server thread.
+- New `berth-headless` crate (`berth-headless` binary): the first non-Swift
+  shell slice. Real PTYs via `portable-pty`, a `vt100` screen with 10k lines of
+  scrollback, synthetic key encoding, `tcgetpgrp` foreground `pid_info`,
+  atomic session save/restore, and the full `berth-server` contract. Its
+  integration test spawns a workspace, types `echo …` + Enter, reads the screen
+  back, resizes, and closes the PTY on Linux/macOS/Windows CI. No GUI yet; see
+  `docs/07-headless-shell.md`.
 - CI runs fmt, clippy and tests on Ubuntu, macOS and Windows; the Swift app job
   remains macOS-only. The Swift app still uses its Swift transport until the
   UniFFI migration is smoke-tested on a Mac.

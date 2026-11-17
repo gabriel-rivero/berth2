@@ -4,6 +4,7 @@ members = [
     "crates/berth-core",
     "crates/berth-cli",
     "crates/berth-ffi",
+    "crates/berth-headless",
     "crates/berth-server",
     "crates/berth-transport",
 ]
@@ -21,6 +22,10 @@ serde_json = "1"
 # Local sockets: Unix domain sockets on Unix, named pipes on Windows.
 interprocess = "2.4"
 getrandom = "0.4"
+# PTY + VT screen for the headless shell spike (and future GUI shells).
+portable-pty = "0.9"
+vt100 = "0.18"
+libc = "0.2"
 
 [profile.release]
 opt-level = 3

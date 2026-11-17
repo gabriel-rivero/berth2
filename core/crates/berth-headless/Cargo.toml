@@ -1,0 +1,21 @@
+[package]
+name = "berth-headless"
+description = "Headless Berth shell: PTY-backed surfaces and a VT screen, no GUI."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+berth-core = { path = "../berth-core" }
+berth-server = { path = "../berth-server" }
+serde_json = { workspace = true }
+portable-pty = { workspace = true }
+vt100 = { workspace = true }
+libc = { workspace = true }
+
+[dev-dependencies]
+berth-transport = { path = "../berth-transport" }
+
+[lib]
+name = "berth_headless"

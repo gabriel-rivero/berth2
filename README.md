@@ -13,7 +13,7 @@ make fetch-engine # macOS, Command Line Tools only: download the CI-built Ghostt
 make run          # macOS: bundle + launch
 ```
 
-The Rust half — `berth-core`, `berth-transport`, `berth-server` and the `berth` CLI — builds and tests on Linux, macOS and Windows. The Swift/AppKit shell remains the macOS shell; Linux and Windows get their own shell on the same protocol (see [docs/05-build.md](docs/05-build.md#portable-core-linux-and-windows)).
+The Rust half — `berth-core`, `berth-transport`, `berth-server`, `berth-headless` and the `berth` CLI — builds and tests on Linux, macOS and Windows. `berth-headless` is the first shell slice: real PTYs, a VT screen and the full protocol with no window (see [docs/07-headless-shell.md](docs/07-headless-shell.md)). The Swift/AppKit shell remains the macOS shell; Linux and Windows get their GUI shell on the same protocol (see [docs/05-build.md](docs/05-build.md#portable-core-linux-and-windows)).
 
 
 ## The idea in one paragraph
@@ -31,6 +31,7 @@ cmux proved the shape (sidebar of workspaces next to a split grid of terminals) 
 | [docs/04-roadmap.md](docs/04-roadmap.md) | M0–M5 milestones with acceptance criteria, post-v1, kill criteria |
 | [docs/05-build.md](docs/05-build.md) | Toolchain, bootstrap, smoke checklist, known gaps, Ghostty upgrades |
 | [docs/06-0.9.md](docs/06-0.9.md) | 0.9 scope: focus ownership fix, Instruments trace, filed-bug queue |
+| [docs/07-headless-shell.md](docs/07-headless-shell.md) | Linux/Windows shell spike: portable PTY host, VT readback, protocol acceptance |
 | [docs/config.md](docs/config.md) | `config.json`, font/display scale, sidebar density, socket and env vars, logs |
 | [CHANGELOG.md](CHANGELOG.md) | Release notes, including 0.8.4 |
 
@@ -38,10 +39,10 @@ cmux proved the shape (sidebar of workspaces next to a split grid of terminals) 
 
 ```
 app/            Swift 6 + AppKit shell, hosts GhosttyKit (Package.swift + Sources/Berth)
-core/           cargo workspace: berth-core (portable domain) · berth-transport (sockets/pipes) · berth-server (NDJSON server) · berth-cli (`berth`)
+core/           cargo workspace: berth-core (portable domain) · berth-transport (sockets/pipes) · berth-server (NDJSON server) · berth-headless (PTY/VT shell) · berth-cli (`berth`)
 vendor/ghostty  git submodule, pinned to v1.4.0
 scripts/        bootstrap.sh (engine) · fetch-engine.sh (CI-built engine) · bundle.sh (.app)
-docs/           00 teardown · 01 vision · 02 architecture · 03 protocol · 04 roadmap · 05 build
+docs/           00 teardown · 01 vision · 02 architecture · 03 protocol · 04 roadmap · 05 build · 07 headless shell
 ```
 
 

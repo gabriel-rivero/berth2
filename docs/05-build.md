@@ -323,6 +323,7 @@ The non-UI half is supported on all three platforms and tested in a CI matrix:
 | `berth-core` | model, agent state machine, protocol, persistence schema | ✓ | ✓ | ✓ |
 | `berth-transport` | NDJSON framing; Unix socket vs named pipe | ✓ | ✓ | ✓ |
 | `berth-server` | auth, subscriptions, replay, backpressure; hosts the core | ✓ | ✓ | ✓ |
+| `berth-headless` | PTY + VT screen shell, no window | ✓ | ✓ | ✓ |
 | `berth` CLI | `ls/send/read/events/run/hooks` client | ✓ | ✓ | ✓ |
 | Swift/AppKit shell | Ghostty-rendered workspace UI | — | ✓ | — |
 
@@ -342,9 +343,22 @@ Path rules (implemented in `berth-core::paths`, overridable by env):
 | override | `BERTH_SOCKET_PATH`, `BERTH_TOKEN_FILE`, `BERTH_DATA_DIR` | same |
 
 A Linux/Windows shell embeds `berth-server` (or speaks the protocol itself) and
-implements `SurfaceOps`; the CLI and hooks work unchanged. The Swift app still
-runs its Swift transport (`app/Sources/Berth/SocketServer.swift`) and will move
-to `berth-server` through UniFFI on a Mac, where the change can be built and
+implements `SurfaceOps`; the CLI and hooks work unchanged. `berth-headless` is
+the first such shell: it owns real PTYs and a VT screen but paints nothing. Run
+it alone, or use it for the protocol acceptance check without a display:
+
+```sh
+cargo build -p berth-headless -p berth-cli
+BERTH_DATA_DIR=/tmp/berth-spike BERTH_SOCKET_PATH=/tmp/berth-spike/berth.sock \
+  ./target/debug/berth-headless --mode trusted
+# another shell, same BERTH_SOCKET_PATH:
+./target/debug/berth new --name spike && ./target/debug/berth ls
+```
+
+See [docs/07-headless-shell.md](07-headless-shell.md) for the design, the
+renderer decision and the remaining GUI work. The Swift app still runs its Swift
+transport (`app/Sources/Berth/SocketServer.swift`) and will move to
+`berth-server` through UniFFI on a Mac, where the change can be built and
 smoke-tested.
 
 Hooks are platform-aware: `berth hooks install claude` writes POSIX redirection

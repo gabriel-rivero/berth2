@@ -124,6 +124,10 @@ shell can host:
 - The macOS app still runs the equivalent Swift transport (`SocketServer.swift`
   + `CoreHandler.swift`); both implement docs/03 and both are tested. Moving the
   app onto `berth-server` through UniFFI is a Mac-side follow-up.
+- `berth-headless` is the first non-Swift shell: `berth-server` + a `SurfaceOps`
+  implementation backed by `portable-pty` and a `vt100` screen. It proves the
+  seam end-to-end (spawn, type, read back, resize, restore) on Linux, macOS and
+  Windows before a GUI renderer exists. See docs/07-headless-shell.md.
 
 On Unix the socket is `0600`; on Windows the named pipe inherits the user's
 `%APPDATA%` ACL, and the token file is user-scoped.
@@ -213,6 +217,7 @@ berth2/
     crates/berth-core/       model, state, policy, codec, persistence, paths
     crates/berth-transport/  local sockets / named pipes + NDJSON framing
     crates/berth-server/     auth, subscriptions, replay, portable socket server
+    crates/berth-headless/   PTY + VT screen shell, no GUI (`berth-headless`)
     crates/berth-ffi/        UniFFI scaffolding, SurfaceOps trait
     crates/berth-cli/        `berth` binary
   scripts/                   bootstrap, ghostty build, ffi gen, dev-sign
