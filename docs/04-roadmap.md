@@ -66,15 +66,16 @@ remain M5.
 
 ## M4 — Daily driver (≈2 weeks)
 
-**Status:** code complete. The two-week personal-use observation is the only open
-criterion. Hooks landed: `berth hooks install` merges Claude Code settings and
-writes an opencode plugin; both record state/detail and the provider session id,
-so restore uses `--resume`. Crash hardening is in: surfaces free their PTY before
-`ghostty_app_free`, snapshots are validated before mutating live state, restore
-replaces rather than appends, the journal is capped, and corrupt journal entries
-fall back to the newest good snapshot. Polish landed: attention panel,
-onboarding, theme tokens, compact sidebar, per-display/live font reload,
-split-weight round-trip, and `docs/config.md`.
+**Status:** code complete and released as 0.8.4. 0.9 closes the milestone
+(`docs/06-0.9.md`): the focus bug filed during daily use, plus the Instruments
+trace against the §9 budgets. Hooks landed: `berth hooks install` merges Claude
+Code settings and writes an opencode plugin; both record state/detail and the
+provider session id, so restore uses `--resume`. Crash hardening is in: surfaces
+free their PTY before `ghostty_app_free`, snapshots are validated before mutating
+live state, restore replaces rather than appends, the journal is capped, and
+corrupt journal entries fall back to the newest good snapshot. Polish landed:
+attention panel, onboarding, theme tokens, compact sidebar, per-display/live font
+reload, split-weight round-trip, and `docs/config.md`.
 
 Daily use on the Mac surfaced three defects, all fixed and released:
 
@@ -106,9 +107,9 @@ app by downloading the CI-built GhosttyKit.
 Ship the smallest useful daily driver first; these are the known gaps that should
 not be mistaken for missing architecture.
 
-- **M4 remainder.** The Instruments trace of startup and the keystroke path
-  against the §9 budgets, and the two-week personal-use observation that is the
-  M4 done criterion.
+- **M4 close-out is 0.9** (`docs/06-0.9.md`): the focus bug filed in daily use
+  and the Instruments trace against the §9 budgets. The rest of this list starts
+  at 0.10.
 - **Group management UI.** Groups render and collapse, but there is no
   create/rename/color picker even though `group.create/update/delete` exist.
 - **Geometric focus.** ⌘] / ⌘[ walk the tree; arrow-key spatial navigation is not
