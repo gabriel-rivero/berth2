@@ -6,10 +6,11 @@ CONFIG ?= release
 ZIG_FLAGS := -Doptimize=ReleaseFast -Dapp-runtime=none -Demit-xcframework=true \
              -Demit-macos-app=false -Dxcframework-target=native
 
-.PHONY: help bootstrap core-lib bindings build app run cli acceptance m3 schema test test-core fmt fmt-check clean engine-clean
+.PHONY: help bootstrap fetch-engine core-lib bindings build app run cli acceptance m3 schema test test-core fmt fmt-check clean engine-clean
 
 help:
 	@echo "make bootstrap   fetch pinned Ghostty submodule + build GhosttyKit (macOS)"
+	@echo "make fetch-engine download the CI-built GhosttyKit (macOS, no Xcode needed)"
 	@echo "make core-lib    build libberth_ffi.a for this Mac"
 	@echo "make bindings    regenerate UniFFI Swift bindings (commit them)"
 	@echo "make build       swift build ($(CONFIG))"
@@ -25,6 +26,9 @@ help:
 
 bootstrap:
 	./scripts/bootstrap.sh
+
+fetch-engine:
+	./scripts/fetch-engine.sh
 
 core-lib:
 	./scripts/core-lib.sh

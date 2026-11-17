@@ -95,6 +95,26 @@ jobs:
       - name: swift test
         run: swift test --package-path app
 
+      # Local development on a Mac without Xcode cannot compile Ghostty's Metal
+      # shaders, so it cannot run scripts/bootstrap.sh. Publish the engine this
+      # job built and `scripts/fetch-engine.sh` drops it in place, which makes
+      # `swift build`/`swift test`/`make app` work without a 10 GB Xcode install.
+      - name: stage engine
+        if: github.ref == 'refs/heads/main'
+        run: |
+          mkdir -p engine-artifact/macos engine-artifact/zig-out/share
+          cp -R vendor/ghostty/macos/GhosttyKit.xcframework engine-artifact/macos/
+          cp -R vendor/ghostty/zig-out/share/ghostty engine-artifact/zig-out/share/
+
+      - name: upload engine
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: ghostty-engine-${{ steps.engine.outputs.sha }}
+          path: engine-artifact
+          retention-days: 90
+
       - name: bundle app
         run: ./scripts/bundle.sh release
 
