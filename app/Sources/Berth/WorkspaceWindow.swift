@@ -74,6 +74,10 @@ final class MainWindow: NSWindow {
     /// notifications whose handlers report divider positions to the core, and
     /// that feedback re-entered this method through `reconcileAll`.
     func apply(layout: WorkspaceLayout, views: [String: GhosttySurfaceView], actions: PaneActions) {
+        Diagnostics.trace(
+            "layout",
+            "apply \(layout.structureKey) panes=\(layout.panes.count) "
+                + "surfaces=\(layout.surfaceIDs.count)")
         LayoutRebuild.perform {
             title = layout.name.isEmpty ? "Berth" : layout.name
             let node = LayoutBuilder.build(
@@ -238,9 +242,12 @@ final class SplitCoordinator: NSObject, NSSplitViewDelegate {
     }
 
     func splitViewDidResizeSubviews(_ notification: Notification) {
-        guard !applying,
-              !LayoutRebuild.isActive,
-              let split = notification.object as? NSSplitView,
+        guard !applying else { return }
+        guard !LayoutRebuild.isActive else {
+            Diagnostics.trace("layout", "resize ignored: tree is being rebuilt")
+            return
+        }
+        guard let split = notification.object as? NSSplitView,
               split.arrangedSubviews.count > 1
         else { return }
         let total = isVertical ? split.bounds.width : split.bounds.height
@@ -249,7 +256,9 @@ final class SplitCoordinator: NSObject, NSSplitViewDelegate {
             let child = split.arrangedSubviews[index]
             let size = isVertical ? child.frame.width : child.frame.height
             let share = Double(size / total)
-            actions.resizeSplit(splitID, index, min(max(share, 0.05), 0.95))
+            let weight = min(max(share, 0.05), 0.95)
+            Diagnostics.trace("layout", "resize \(splitID) index=\(index) weight=\(weight)")
+            actions.resizeSplit(splitID, index, weight)
         }
     }
 }

@@ -65,6 +65,7 @@ final class CoreHandler: RequestHandler {
     /// Run the core on the main thread. The socket forwards requests here
     /// asynchronously, so this should always already be main.
     private func dispatch(_ request: String, rewriteHello: Bool = false) -> String {
+        let started = Date()
         let raw: String
         if Thread.isMainThread {
             raw = engine.dispatch(request: request)
@@ -76,6 +77,7 @@ final class CoreHandler: RequestHandler {
                 engine.dispatch(request: request)
             }
         }
+        Diagnostics.trace("socket", "core dispatch \(Diagnostics.millis(since: started))ms")
         guard rewriteHello else { return raw }
         return Self.injectAuthMode(raw, mode: authMode)
     }

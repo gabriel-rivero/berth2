@@ -71,10 +71,22 @@ without writing. See `docs/05-build.md` for the acceptance checkpoints.
 ## Logs
 
 Unified logging uses subsystem `dev.berth.app` with categories `app`, `core`,
-`socket`, `agent`, `restore`, and `ui`:
+`socket`, `agent`, `restore`, `ui`, and `layout`:
 
 ```sh
 log stream --predicate 'subsystem == "dev.berth.app"' --level debug
 ```
 
-Uncaught exceptions are appended to `~/Library/Logs/Berth/crash.log`.
+Two files under `~/Library/Logs/Berth/` are the fastest way to diagnose a hang
+or a crash:
+
+- `berth.log` — rolling breadcrumbs: reconciles and their duration, layout
+  rebuilds, ignored divider resizes, core dispatches, detection passes. Capped at
+  2 MiB, rotated once to `berth.log.1`.
+- `crash.log` — uncaught exceptions and main-thread stalls, each with the 40
+  breadcrumbs that preceded it. A stall line means the main thread stopped
+  servicing the runloop; the breadcrumbs name what was in flight.
+
+A background watchdog pings the main queue once a second and records a stall
+when a ping stays unserviced for two seconds or more.
+

@@ -333,7 +333,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               let data = try? JSONSerialization.data(withJSONObject: params),
               let json = String(data: data, encoding: .utf8)
         else { return }
+        let started = Date()
         _ = engine.dispatch(request: #"{"id":"ui","method":"\#(method)","params":\#(json)}"#)
+        Diagnostics.trace("ui", "\(method) \(Diagnostics.millis(since: started))ms")
         handler?.flushEvents()
         BerthCoreHost.shared.reconcileAll()
         scheduleSessionSave()
@@ -425,6 +427,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func saveSession(truncateJournal: Bool = false) {
         guard let engine else { return }
+        let started = Date()
         let snapshot = engine.snapshot()
         do {
             try FileManager.default.createDirectory(
@@ -434,6 +437,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             try appendJournal(snapshot)
             if truncateJournal {
                 try? FileManager.default.removeItem(at: Self.journalURL)
+            }
+            let took = Diagnostics.millis(since: started)
+            if took > 250 {
+                Diagnostics.trace("restore", "slow session save \(took)ms bytes=\(snapshot.utf8.count)")
             }
             BerthLog.restore.debug(
                 "saved session bytes=\(snapshot.utf8.count, privacy: .public) clean=\(truncateJournal, privacy: .public)")

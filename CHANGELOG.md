@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.8.3
+
+### Lock fix
+
+- The app could stop responding a second or two after launch, with the busy
+  cursor and dead keystrokes. `Engine.dispatch` holds the core's state mutex for
+  the whole request, and passive agent detection runs off the main thread and
+  asked for the foreground pid with `DispatchQueue.main.sync`. When the main
+  thread was inside a core dispatch, it was waiting for the mutex the detection
+  thread held while waiting for the main thread: both wedged. `pidInfo` now
+  reads a pid snapshot the main thread publishes once per detection tick, and
+  notifications are queued instead of blocking.
+- Detection no longer hops to the main thread at all, so `ps` still runs
+  off-main and keystrokes never wait for it.
+
+### Diagnostics
+
+- `~/Library/Logs/Berth/berth.log` keeps rolling breadcrumbs (reconcile and
+  dispatch durations, layout rebuilds, ignored divider resizes, detection
+  passes), capped at 2 MiB with one rotation.
+- A watchdog pings the main queue once a second and appends a stall to
+  `crash.log` with the 40 breadcrumbs before it when the runloop stops
+  answering for two seconds.
+- `make fetch-engine` downloads the CI-built GhosttyKit, so a Mac with only the
+  Command Line Tools can build and run the app.
+
 ## 0.8.2
 
 ### Crash fix

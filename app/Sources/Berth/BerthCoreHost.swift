@@ -192,14 +192,41 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
         }
     }
 
-    /// Foreground process facts for passive agent detection. Only the view
-    /// lookup and the Ghostty pid read touch the main thread; `ps` runs on the
+    /// Foreground pids published for the off-main detection pass. `pidInfo`
+    /// reads this instead of hopping to the main thread: the core holds its
+    /// state lock while calling us, and the main thread can be waiting for that
+    /// same lock, which deadlocks both threads.
+    private let foregroundPIDs = PidSnapshot()
+
+    /// Ghostty surface reads are main-thread only, so the detection pass takes
+    /// this snapshot on the main thread before it goes off-main.
+    @MainActor
+    private func refreshForegroundPIDs() {
+        var pids: [String: UInt32] = [:]
+        for (id, view) in surfaces {
+            guard let handle = view.surfaceHandle else { continue }
+            let pid = ghostty_surface_foreground_pid(handle)
+            if pid > 0 { pids[id] = UInt32(truncatingIfNeeded: pid) }
+        }
+        foregroundPIDs.replace(pids)
+    }
+
+    /// Foreground process facts for passive agent detection. `ps` runs on the
     /// caller's queue (the detection loop dispatches off-main), so a slow or
     /// hung process table cannot stall keystrokes.
     func pidInfo(surfaceId: String) throws -> FfiPidInfo? {
-        let pid: UInt32 = try onMain {
-            guard let view = surfaces[surfaceId], let handle = view.surfaceHandle else { return 0 }
-            return UInt32(truncatingIfNeeded: ghostty_surface_foreground_pid(handle))
+        let pid: UInt32
+        if Thread.isMainThread {
+            pid = try onMain {
+                guard let view = surfaces[surfaceId], let handle = view.surfaceHandle else {
+                    return 0
+                }
+                return UInt32(truncatingIfNeeded: ghostty_surface_foreground_pid(handle))
+            }
+        } else {
+            // Off-main callers must never wait on the main thread here; see
+            // `foregroundPIDs`.
+            pid = foregroundPIDs.pid(for: surfaceId) ?? 0
         }
         guard pid > 0 else { return nil }
 
@@ -224,22 +251,32 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
     }
 
     func notify(title: String, body: String, workspaceId: String?) {
-        // Best effort: a missed banner must never fail the core call.
-        try? onMain { [self] in
-            // No banner for work the user is looking at; the sidebar and pane
-            // ring already carry that signal.
-            if let workspaceId, workspaceId == selectedWorkspaceID { return }
-            requestNotificationPermissionIfNeeded()
-            let content = UNMutableNotificationContent()
-            content.title = title
-            content.body = body
-            content.sound = nil
-            let request = UNNotificationRequest(
-                identifier: UUID().uuidString,
-                content: content,
-                trigger: nil)
-            UNUserNotificationCenter.current().add(request)
+        // Fire and forget: a core dispatch must never block on the main thread,
+        // because the main thread may be waiting for the core's state lock.
+        if Thread.isMainThread {
+            MainActor.assumeIsolated { presentNotification(title: title, body: body, workspaceId: workspaceId) }
+        } else {
+            DispatchQueue.main.async { [self] in
+                presentNotification(title: title, body: body, workspaceId: workspaceId)
+            }
         }
+    }
+
+    @MainActor
+    private func presentNotification(title: String, body: String, workspaceId: String?) {
+        // No banner for work the user is looking at; the sidebar and pane ring
+        // already carry that signal.
+        if let workspaceId, workspaceId == selectedWorkspaceID { return }
+        requestNotificationPermissionIfNeeded()
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = nil
+        let request = UNNotificationRequest(
+            identifier: UUID().uuidString,
+            content: content,
+            trigger: nil)
+        UNUserNotificationCenter.current().add(request)
     }
 
     // MARK: - Layout
@@ -264,13 +301,20 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
     func reconcileAll() {
         try? onMain { [self] in
             BerthLog.expectMain("reconcileAll")
+            Diagnostics.trace("reconcile", "begin")
             guard !isReconciling else {
                 needsAnotherReconcile = true
+                Diagnostics.trace("reconcile", "re-entered while reconciling; deferring")
                 return
             }
             isReconciling = true
+            var applied = false
+            let started = Date()
             defer {
                 isReconciling = false
+                Diagnostics.trace(
+                    "reconcile",
+                    "end applied=\(applied) \(Diagnostics.millis(since: started))ms")
                 if needsAnotherReconcile {
                     needsAnotherReconcile = false
                     scheduleReconcile()
@@ -386,6 +430,7 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
                     || lastAppliedStructure != layout.structureKey
                 if structuralChange {
                     win.apply(layout: layout, views: surfaces, actions: paneActions)
+                    applied = true
                     lastAppliedStructure = layout.structureKey
                     lastSelectedWorkspace = selected
                 } else if win.isKeyWindow,
@@ -442,8 +487,10 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
               let data = try? JSONSerialization.data(withJSONObject: params),
               let json = String(data: data, encoding: .utf8)
         else { return }
+        let started = Date()
         _ = engine.dispatch(
             request: #"{"id":"ui","method":"\#(method)","params":\#(json)}"#)
+        Diagnostics.trace("ui", "\(method) \(Diagnostics.millis(since: started))ms")
         onEvents?()
         reconcileAll()
     }
@@ -510,8 +557,11 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
     /// `agent.detect` is idempotent, so the timer can simply keep asking.
     /// The loop runs off-main: the only main-thread work is reading each
     /// surface's foreground pid, and `ps` never blocks the render path.
+    @MainActor
     func detectAgents() {
         guard let engine else { return }
+        refreshForegroundPIDs()
+        let started = Date()
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let agents = Self.agentItems(engine)
             let bound = Set(agents.compactMap { $0["surface_id"] as? String })
@@ -530,6 +580,12 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
                    detected["agent"] is [String: Any] {
                     created = true
                 }
+            }
+            let took = Diagnostics.millis(since: started)
+            if created || took > 250 {
+                Diagnostics.trace(
+                    "agent",
+                    "detect pass surfaces=\(surfaces.count) created=\(created) \(took)ms")
             }
             guard created else { return }
             Task { @MainActor [weak self] in
@@ -757,8 +813,13 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
         if Thread.isMainThread {
             MainActor.assumeIsolated { box.result = Result { try body() } }
         } else {
+            let started = Date()
             DispatchQueue.main.sync {
                 MainActor.assumeIsolated { box.result = Result { try body() } }
+            }
+            let waited = Diagnostics.millis(since: started)
+            if waited > 250 {
+                Diagnostics.trace("core", "main hop blocked \(waited)ms")
             }
         }
         guard let result = box.result else {
@@ -769,6 +830,27 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
 
     private final class Box<T>: @unchecked Sendable {
         var result: Result<T, Error>?
+    }
+
+    /// Thread-safe foreground pid snapshot: the main thread writes it once per
+    /// detection tick, the detection queue reads it. A lock rather than a
+    /// main-queue hop, because the core calls `pidInfo` while holding its own
+    /// state lock and the main thread may be waiting for that lock.
+    final class PidSnapshot: @unchecked Sendable {
+        private let lock = NSLock()
+        private var pids: [String: UInt32] = [:]
+
+        func replace(_ pids: [String: UInt32]) {
+            lock.lock()
+            self.pids = pids
+            lock.unlock()
+        }
+
+        func pid(for surfaceId: String) -> UInt32? {
+            lock.lock()
+            defer { lock.unlock() }
+            return pids[surfaceId]
+        }
     }
 
     /// `ok:true` result object of a protocol response.
