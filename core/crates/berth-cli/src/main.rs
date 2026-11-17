@@ -4,23 +4,19 @@
 //! can do, another client can do; that is the point of the protocol.
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use berth_transport::LocalStream;
 use serde_json::{Value, json};
 
 fn socket_path() -> PathBuf {
-    if let Ok(p) = std::env::var("BERTH_SOCKET_PATH") {
-        return PathBuf::from(p);
-    }
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    PathBuf::from(home).join("Library/Application Support/Berth/berth.sock")
+    // BERTH_SOCKET_PATH is honoured by the core path helper.
+    berth_core::paths::socket_path()
 }
 
 fn token_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    PathBuf::from(home).join("Library/Application Support/Berth/token")
+    berth_core::paths::token_path()
 }
 
 fn token() -> Option<String> {
@@ -36,8 +32,8 @@ fn token() -> Option<String> {
 }
 
 struct Client {
-    stream: BufReader<UnixStream>,
-    writer: UnixStream,
+    stream: BufReader<LocalStream>,
+    writer: LocalStream,
     next_id: u64,
     token: Option<String>,
 }
@@ -45,13 +41,13 @@ struct Client {
 impl Client {
     fn connect() -> Result<Self, String> {
         let path = socket_path();
-        let stream = UnixStream::connect(&path).map_err(|e| {
+        let stream = berth_transport::connect(&path).map_err(|e| {
             format!(
                 "cannot connect to {} ({e}). Is Berth running? Set BERTH_SOCKET_PATH to override.",
                 path.display()
             )
         })?;
-        let writer = stream.try_clone().map_err(|e| e.to_string())?;
+        let writer = berth_transport::try_clone(&stream).map_err(|e| e.to_string())?;
         Ok(Self {
             stream: BufReader::new(stream),
             writer,
@@ -148,7 +144,7 @@ fn positional(args: &[String]) -> Vec<String> {
 fn provider_for(argv: &[String]) -> String {
     let program = argv
         .first()
-        .map(|a| a.rsplit('/').next().unwrap_or(a).to_ascii_lowercase())
+        .map(|a| program_basename(a).to_ascii_lowercase())
         .unwrap_or_default();
     if program.starts_with("claude") {
         "claude-code".into()
@@ -165,23 +161,57 @@ fn provider_for(argv: &[String]) -> String {
 /// so `claude` on the user's PATH is invisible unless we resolve it here and
 /// pass that PATH along. Absolute paths also keep restore independent of PATH.
 fn resolve_program(program: &str) -> Option<String> {
-    use std::os::unix::fs::PermissionsExt;
-
     fn executable(path: &std::path::Path) -> bool {
-        path.metadata()
-            .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-            .unwrap_or(false)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            path.metadata()
+                .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+                .unwrap_or(false)
+        }
+        #[cfg(not(unix))]
+        {
+            path.is_file()
+        }
     }
 
-    if program.contains('/') {
+    if program.contains('/') || program.contains('\\') {
         let path = std::path::Path::new(program);
         return executable(path).then(|| program.to_string());
     }
     let paths = std::env::var_os("PATH")?;
-    std::env::split_paths(&paths)
-        .map(|dir| dir.join(program))
-        .find(|path| executable(path))
-        .map(|path| path.display().to_string())
+
+    #[cfg(windows)]
+    {
+        // Windows resolves through PATHEXT; `.exe` is also accepted bare.
+        let extensions =
+            std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
+        for dir in std::env::split_paths(&paths) {
+            for extension in extensions.split(';').filter(|e| !e.is_empty()) {
+                let candidate = dir.join(format!("{program}{extension}"));
+                if executable(&candidate) {
+                    return Some(candidate.display().to_string());
+                }
+            }
+            let bare = dir.join(program);
+            if executable(&bare) {
+                return Some(bare.display().to_string());
+            }
+        }
+        None
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::split_paths(&paths)
+            .map(|dir| dir.join(program))
+            .find(|path| executable(path))
+            .map(|path| path.display().to_string())
+    }
+}
+
+/// Basename for a program path on any platform.
+fn program_basename(program: &str) -> &str {
+    program.rsplit(['/', '\\']).next().unwrap_or(program)
 }
 
 fn agent_id() -> String {
@@ -279,11 +309,10 @@ fn run_claude_hook(c: &mut Client) -> Result<(), String> {
 }
 
 fn home_dir() -> Result<PathBuf, String> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| "HOME is not set".to_string())
+    berth_core::paths::home_dir().ok_or_else(|| "no home directory is set".to_string())
 }
 
+#[cfg(not(windows))]
 fn shell_quote(value: &str) -> String {
     if value
         .chars()
@@ -295,12 +324,39 @@ fn shell_quote(value: &str) -> String {
     }
 }
 
+#[cfg(windows)]
+fn shell_quote(value: &str) -> String {
+    if value.contains([' ', '&', '(', ')']) {
+        format!("\"{value}\"")
+    } else {
+        value.to_string()
+    }
+}
+
+/// The hook command is executed by Claude Code's shell, which differs by
+/// platform: POSIX shells need `>/dev/null 2>&1 || true`, cmd.exe uses NUL.
+fn hook_command(berth: &str) -> String {
+    #[cfg(windows)]
+    {
+        format!("{} hook claude >NUL 2>&1", shell_quote(berth))
+    }
+    #[cfg(not(windows))]
+    {
+        format!("{} hook claude >/dev/null 2>&1 || true", shell_quote(berth))
+    }
+}
+
 fn write_atomic(path: &std::path::Path, contents: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
     let tmp = path.with_extension(format!("tmp{}", std::process::id()));
     std::fs::write(&tmp, contents).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    // Windows' rename refuses to replace an existing file.
+    #[cfg(windows)]
+    if path.exists() {
+        let _ = std::fs::remove_file(path);
+    }
     std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
@@ -325,7 +381,7 @@ fn claude_hook_entry(event: &str, command: &str) -> Value {
 }
 
 fn claude_hook_settings(berth: &str) -> Value {
-    let command = format!("{} hook claude >/dev/null 2>&1 || true", shell_quote(berth));
+    let command = hook_command(berth);
     let mut hooks = serde_json::Map::new();
     for event in CLAUDE_HOOK_EVENTS {
         hooks.insert(
@@ -353,7 +409,7 @@ fn install_claude_hooks(berth: &str) -> Result<PathBuf, String> {
         root["hooks"] = json!({});
     }
     let hooks = root["hooks"].as_object_mut().unwrap();
-    let command = format!("{} hook claude >/dev/null 2>&1 || true", shell_quote(berth));
+    let command = hook_command(berth);
     for event in CLAUDE_HOOK_EVENTS {
         let groups = hooks
             .entry((*event).to_string())
@@ -770,7 +826,7 @@ fn run() -> Result<(), String> {
             });
             let provider = arg_after(flags, "--provider").unwrap_or_else(|| provider_for(&argv));
             let name = arg_after(flags, "--name")
-                .unwrap_or_else(|| argv[0].rsplit('/').next().unwrap_or("agent").to_string());
+                .unwrap_or_else(|| program_basename(&argv[0]).to_string());
 
             let listed = c.call("workspace.list", json!({}))?;
             if listed["workspaces"].as_array().is_none_or(|w| w.is_empty()) {

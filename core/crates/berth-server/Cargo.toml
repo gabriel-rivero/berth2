@@ -1,0 +1,18 @@
+[package]
+name = "berth-server"
+description = "Portable NDJSON socket server for Berth: framing, auth, subscriptions, replay."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+berth-core = { path = "../berth-core" }
+berth-transport = { path = "../berth-transport" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+interprocess = { workspace = true }
+getrandom = { workspace = true }
+
+[lib]
+name = "berth_server"

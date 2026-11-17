@@ -4,7 +4,7 @@ The protocol is the durable contract. Everything else (Swift shell, CLI, future 
 
 ## 1. Transport
 
-- Unix domain socket at `~/Library/Application Support/Berth/berth.sock` (override: `BERTH_SOCKET_PATH`).
+- Local IPC: a Unix domain socket on Linux/macOS (`$XDG_RUNTIME_DIR/berth/berth.sock` or `~/Library/Application Support/Berth/berth.sock`) and a named pipe on Windows (`\\.\pipe\berth-<user>`). Override: `BERTH_SOCKET_PATH`.
 - **NDJSON**: one JSON object per line, `\n`-terminated, UTF-8. Bidirectional: clients send requests, server sends responses **and** events on the same connection.
 - No length prefixes, no binary framing. Payloads above 8 MiB are rejected (`payload_too_large`).
 
@@ -24,7 +24,7 @@ Modes (config `socket` in `~/.config/berth/config.json`):
 | `local` (default) | socket `0600`, same-uid only; mutating methods require the token |
 | `trusted` | socket `0600`, same-uid only; no token (hooks convenience) |
 
-Token: `~/Library/Application Support/Berth/token` (`0600`), also exported to children as `BERTH_TOKEN`. Clients pass it as a top-level `token` field (or inside `params`). Auth is uid + token, not process ancestry — ancestry checks break under tmux, `nohup`, editors, and remote shells, which is exactly where we need to work. Read-only methods (`*.list`, `*.get`, `system.*`, `events.subscribe`, `session.dump`) are allowed without a token in `local` mode; anything that reads terminal text or mutates state needs one. A failed check returns `permission_denied` with the request `id` and does not close the connection.
+Token: `<data>/token` (`0600`; `~/Library/Application Support/Berth/token` on macOS, `%APPDATA%\Berth\token` on Windows, `$XDG_DATA_HOME/berth/token` on Linux), also exported to children as `BERTH_TOKEN`. Clients pass it as a top-level `token` field (or inside `params`). Auth is uid + token, not process ancestry — ancestry checks break under tmux, `nohup`, editors, and remote shells, which is exactly where we need to work. Read-only methods (`*.list`, `*.get`, `system.*`, `events.subscribe`, `session.dump`) are allowed without a token in `local` mode; anything that reads terminal text or mutates state needs one. A failed check returns `permission_denied` with the request `id` and does not close the connection.
 
 Limits: request lines above 8 MiB are rejected (`payload_too_large`) and the connection is closed, because the framing can no longer be trusted. If a client stops reading and its outbound queue exceeds 4 MiB, the server disconnects it rather than growing without bound.
 

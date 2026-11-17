@@ -45,8 +45,9 @@ without reinstalling; the socket mode is read at launch.
 
 `off`, `local`, or `trusted`.
 
-- `local` (default) creates a 0600 token at
-  `~/Library/Application Support/Berth/token` and requires it for mutating
+- `local` (default) creates a 0600 token under the platform data directory
+  (`~/Library/Application Support/Berth/token` on macOS, `%APPDATA%\Berth\token`
+  on Windows, `$XDG_DATA_HOME/berth/token` on Linux) and requires it for mutating
   methods. Read-only methods (`*.list`, `*.get`, `system.*`,
   `events.subscribe`) do not need it.
 - `trusted` is intended for a same-user automation setup and bypasses the token.
@@ -56,7 +57,9 @@ Environment overrides for clients and children:
 
 | variable | meaning |
 | --- | --- |
-| `BERTH_SOCKET_PATH` | socket path override |
+| `BERTH_SOCKET_PATH` | socket path override (Unix path or `\\.\pipe\name`) |
+| `BERTH_DATA_DIR` | data directory override (token, session snapshot) |
+| `BERTH_TOKEN_FILE` | token file override |
 | `BERTH_TOKEN` | token injected into every child; used by `berth` |
 | `BERTH_SURFACE_ID` / `BERTH_WORKSPACE_ID` | injected into spawned terminals |
 | `BERTH_AGENT_ID` | injected by `berth run` and agent restore |

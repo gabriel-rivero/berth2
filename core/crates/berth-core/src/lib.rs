@@ -17,6 +17,7 @@
 pub mod agent;
 pub mod ids;
 pub mod model;
+pub mod paths;
 pub mod protocol;
 pub mod providers;
 pub mod router;
@@ -36,7 +37,7 @@ pub use state::AppState;
 ///
 /// Implemented by the macOS shell (Swift ↔ UniFFI), and later by a Linux shell.
 /// All ids are opaque strings minted by [`ids`].
-pub trait SurfaceOps {
+pub trait SurfaceOps: Send + Sync {
     /// Create a terminal surface and its child process.
     fn spawn(&self, req: SpawnRequest) -> Result<Spawned, CoreError>;
     /// Write text to the surface as if typed.

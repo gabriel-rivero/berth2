@@ -1,0 +1,13 @@
+[package]
+name = "berth-transport"
+description = "Local-socket transport for Berth: Unix sockets on Unix, named pipes on Windows."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+interprocess = { workspace = true }
+
+[lib]
+name = "berth_transport"

@@ -1,0 +1,10 @@
+# The tree is authored with LF. Windows checkouts must not rewrite it, or
+# `cargo fmt --check`, shell scripts and the committed Swift bindings drift.
+* text=auto
+*.rs text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.sh text eol=lf
+*.json text eol=lf

@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+### Portable foundation: Linux and Windows
+
+- `berth-core` now owns every platform path decision (`berth_core::paths`):
+  `~/Library/Application Support/Berth` on macOS (unchanged), `$XDG_DATA_HOME` /
+  `~/.local/share/berth` on Linux, `%APPDATA%\Berth` on Windows, with
+  `BERTH_DATA_DIR`, `BERTH_SOCKET_PATH` and `BERTH_TOKEN_FILE` overrides.
+- New `berth-transport` crate: one local-socket API — Unix domain sockets on
+  Linux/macOS, named pipes on Windows — plus the NDJSON framer and its limits.
+- New `berth-server` crate: the NDJSON server (hello, token auth, read-only
+  classification, subscription filters, 1024-event replay ring with `gap`,
+  constant-time token compare, backpressure) in Rust, hostable by any shell.
+  `session.save` is a shell callback; events are drained after every request.
+- `berth` CLI now runs on Linux and Windows: portable socket connect, platform
+  path resolution, `PATHEXT`-aware `berth run` resolution, absolute-path hook
+  commands (`>/dev/null 2>&1` on POSIX, `>NUL` on Windows), and atomic file
+  replacement that works with Windows `rename` semantics.
+- `SurfaceOps` is now `Send + Sync`, so shells can hand it to the server thread.
+- CI runs fmt, clippy and tests on Ubuntu, macOS and Windows; the Swift app job
+  remains macOS-only. The Swift app still uses its Swift transport until the
+  UniFFI migration is smoke-tested on a Mac.
+
 ## 0.9.0
 
 ### Focus fix

@@ -16,9 +16,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # The portable core: pure logic, no GPU, no window. Fast and platform-neutral.
+  # The portable core: pure logic, no GPU, no window. Runs on every desktop OS.
   core:
-    runs-on: ubuntu-latest
+    name: core (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -38,8 +43,9 @@ jobs:
         working-directory: core
 
       # The generated Swift bindings are committed; regenerate and fail if the
-      # checked-in copy drifted from the Rust definitions.
+      # checked-in copy drifted from the Rust definitions. Needs a Unix shell.
       - name: bindings are current
+        if: runner.os == 'Linux'
         run: |
           ./scripts/bindings.sh
           git diff --exit-code -- app/Sources/BerthCore app/Sources/berth_ffiFFI

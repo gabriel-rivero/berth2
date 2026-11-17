@@ -1,5 +1,6 @@
 # Berth — developer entry points.
-# macOS for the app; the Rust core builds and tests anywhere cargo does.
+# The Rust workspace builds and tests on Linux, macOS and Windows; the macOS
+# app targets (build/app/run) need macOS + Xcode.
 
 SHELL := /bin/bash
 CONFIG ?= release
@@ -20,7 +21,7 @@ help:
 	@echo "make acceptance  run the M2 protocol check against the running app"
 	@echo "make m3          run the M3 agent check against the running app"
 	@echo "make test        swift tests (no window)"
-	@echo "make test-core   cargo test --workspace (any platform)"
+	@echo "make test-core   cargo test --workspace (Linux, macOS, Windows)"
 	@echo "make fmt         rustfmt + swift-format (if present)"
 	@echo "make clean       remove build products (keeps submodule)"
 

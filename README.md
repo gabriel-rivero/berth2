@@ -7,11 +7,13 @@ Status: 0.8.4, M4 code complete; 0.9 closes the milestone with the focus-ownersh
 Download: [latest release](https://github.com/gabriel-rivero/berth2/releases) (macOS 14+, Apple Silicon, ad-hoc signed).
 
 ```sh
-make test-core    # rust core, any platform
+make test-core    # rust core + transport + server, any platform (Linux/macOS/Windows)
 make bootstrap    # macOS + Xcode: build pinned GhosttyKit
 make fetch-engine # macOS, Command Line Tools only: download the CI-built GhosttyKit
 make run          # macOS: bundle + launch
 ```
+
+The Rust half — `berth-core`, `berth-transport`, `berth-server` and the `berth` CLI — builds and tests on Linux, macOS and Windows. The Swift/AppKit shell remains the macOS shell; Linux and Windows get their own shell on the same protocol (see [docs/05-build.md](docs/05-build.md#portable-core-linux-and-windows)).
 
 
 ## The idea in one paragraph
@@ -36,7 +38,7 @@ cmux proved the shape (sidebar of workspaces next to a split grid of terminals) 
 
 ```
 app/            Swift 6 + AppKit shell, hosts GhosttyKit (Package.swift + Sources/Berth)
-core/           cargo workspace: berth-core (portable domain) + berth-cli (`berth`)
+core/           cargo workspace: berth-core (portable domain) · berth-transport (sockets/pipes) · berth-server (NDJSON server) · berth-cli (`berth`)
 vendor/ghostty  git submodule, pinned to v1.4.0
 scripts/        bootstrap.sh (engine) · fetch-engine.sh (CI-built engine) · bundle.sh (.app)
 docs/           00 teardown · 01 vision · 02 architecture · 03 protocol · 04 roadmap · 05 build

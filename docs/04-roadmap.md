@@ -139,7 +139,7 @@ list.
 2. **Cost + token meter** per workspace, from adapter-reported usage.
 3. **Session search** — find the workspace where that `pnpm test` failed, from screen text we already can read.
 4. **Editor integration** — `berth` LSP-ish shim so an agent in Neovim/Zed can report state without hooks.
-5. **Linux shell spike** — one week, throwaway: GTK4 + libghostty-vt + a minimal renderer, reusing `berth-core` and the identical protocol. Decide from evidence whether Windows/Linux is a real roadmap item.
+5. **Linux shell spike** — one week, throwaway: GTK4 + libghostty-vt + a minimal renderer, reusing `berth-core` and the identical protocol. The portable foundation is already in place (`berth-core::paths`, `berth-transport`, `berth-server`, cross-platform `berth` CLI); start from `berth-server` rather than writing another socket layer. Decide from evidence whether Windows/Linux is a real roadmap item.
 6. **Browser pane**, **SSH workspaces**, **remote tmux mirror** — only if the above is boring and stable.
 
 ## Explicitly deferred

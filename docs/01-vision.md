@@ -33,7 +33,7 @@ Explicitly out of scope, so they stop being tempting:
 - SSH workspaces, remote tmux mirroring, cloud VMs
 - iOS companion, push notifications, team/multiplayer features
 - Plugin marketplaces, TUI mode, custom command DSLs
-- Windows/Linux builds (the *design* keeps that door open; the code does not open it yet)
+- Windows/Linux GUI shells (the Rust core, transport, server and CLI are portable and CI-tested; the native shells are the next project, not a v1 commitment)
 - Feature parity with cmux. Roughly a fifth of cmux's surface is the product; copying it is how this fails.
 
 ## 5. Differentiators

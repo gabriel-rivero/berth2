@@ -47,7 +47,7 @@ pub struct JournalLine {
 
 pub fn snapshot_path() -> String {
     // The shell supplies the real path; this is the documented default.
-    "~/Library/Application Support/Berth/session.json".to_string()
+    crate::paths::display(&crate::paths::snapshot_path())
 }
 
 impl AppState {
@@ -458,7 +458,7 @@ pub fn ensure_default_workspace(
 }
 
 fn dirs_fallback() -> Option<String> {
-    std::env::var("HOME").ok()
+    crate::paths::home_dir().map(|p| crate::paths::display(&p))
 }
 
 /// A fresh tree with a single pane, for tests and restore-of-empty.

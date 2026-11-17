@@ -304,14 +304,52 @@ Then run the M0 smoke checklist. Cost budget: one day per bump, all C access con
 
 ```sh
 cd core
-cargo test --workspace        # 61 tests, no window needed
-cargo run -p berth-cli -- ls  # needs a running Berth (socket in Application Support)
+cargo test --workspace        # core + transport + server tests, no window needed
+cargo run -p berth-cli -- ls  # needs a running Berth
 ```
 
 After changing anything in `core/crates/berth-ffi`, regenerate the committed
 bindings with `make bindings`; CI fails if they drift.
 
-`core/` has no platform dependencies and no I/O in `berth-core`; the only impure surface is the `SurfaceOps` trait, implemented by the shell.
+`berth-core` is pure logic; its only impure surface is the `SurfaceOps` trait,
+implemented by the shell.
+
+## Portable core (Linux and Windows)
+
+The non-UI half is supported on all three platforms and tested in a CI matrix:
+
+| Piece | What it does | Linux | macOS | Windows |
+| --- | --- | --- | --- | --- |
+| `berth-core` | model, agent state machine, protocol, persistence schema | ✓ | ✓ | ✓ |
+| `berth-transport` | NDJSON framing; Unix socket vs named pipe | ✓ | ✓ | ✓ |
+| `berth-server` | auth, subscriptions, replay, backpressure; hosts the core | ✓ | ✓ | ✓ |
+| `berth` CLI | `ls/send/read/events/run/hooks` client | ✓ | ✓ | ✓ |
+| Swift/AppKit shell | Ghostty-rendered workspace UI | — | ✓ | — |
+
+```sh
+cd core
+cargo test --workspace                    # works under cmd, PowerShell and bash
+cargo build --release -p berth-cli        # target/release/berth(.exe)
+```
+
+Path rules (implemented in `berth-core::paths`, overridable by env):
+
+| | Linux/BSD | Windows |
+| --- | --- | --- |
+| data | `$XDG_DATA_HOME/berth` or `~/.local/share/berth` | `%APPDATA%\Berth` |
+| socket | `$XDG_RUNTIME_DIR/berth/berth.sock` | `\\.\pipe\berth-<user>` |
+| token | `<data>/token` | `<data>\token` |
+| override | `BERTH_SOCKET_PATH`, `BERTH_TOKEN_FILE`, `BERTH_DATA_DIR` | same |
+
+A Linux/Windows shell embeds `berth-server` (or speaks the protocol itself) and
+implements `SurfaceOps`; the CLI and hooks work unchanged. The Swift app still
+runs its Swift transport (`app/Sources/Berth/SocketServer.swift`) and will move
+to `berth-server` through UniFFI on a Mac, where the change can be built and
+smoke-tested.
+
+Hooks are platform-aware: `berth hooks install claude` writes POSIX redirection
+on Linux/macOS and `>NUL` on Windows, resolving `berth` to an absolute path in
+both cases.
 
 ## Troubleshooting
 

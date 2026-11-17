@@ -107,9 +107,26 @@ committed, and verified for drift in CI.
 
 This trait is also the **portability seam**: a future Rust shell on Linux implements it with its own PTY + libghostty-vt renderer, and `berth-core` does not change.
 
-### 2.4 Protocol server (Swift)
+### 2.4 Protocol server (portable Rust, with a Swift twin today)
 
-A POSIX `AF_UNIX` socket at `berth.sock`, `0600`, NDJSON framing, one serial queue per connection (`SocketServer.swift`). Each connection is greeted with a `hello` event, then bytes → auth check (`SocketAuth.swift`) → `Engine.dispatch` → bytes. The transport keeps a bounded replay ring (`EventRing.swift`, last 1024 events) so `events.subscribe {"since": N}` can replay or report a `gap`; per-connection type filters and a monotonic `seq` cursor are enforced there. Request lines over 8 MiB close the connection as `payload_too_large`; a 4 MiB outbound backlog disconnects a stalled subscriber instead of growing without bound. After each request the handler drains the core's queue and fans the lines out to subscribed clients (`CoreHandler.swift`).
+The wire contract is served by a portable Rust crate, `berth-server`, which any
+shell can host:
+
+- `berth-transport` hides the platform split (Unix domain socket on Linux/macOS,
+  named pipe on Windows) and owns NDJSON framing.
+- `berth-server` owns auth (`local`/`trusted`/`off`), per-connection
+  subscriptions, the 1024-event replay ring, and backpressure (4 MiB outbound
+  cap, 8 MiB request line). It dispatches into `berth-core` through
+  `SurfaceOps`, so domain decisions stay out of the transport.
+- A shell supplies the state (`Arc<Mutex<AppState>>`), the `SurfaceOps`
+  implementation, and an optional `session.save` callback. Requests are
+  serialized so event `seq` order matches response order across connections.
+- The macOS app still runs the equivalent Swift transport (`SocketServer.swift`
+  + `CoreHandler.swift`); both implement docs/03 and both are tested. Moving the
+  app onto `berth-server` through UniFFI is a Mac-side follow-up.
+
+On Unix the socket is `0600`; on Windows the named pipe inherits the user's
+`%APPDATA%` ACL, and the token file is user-scoped.
 
 ### 2.5 CLI — `berth` (Rust, no UI deps)
 
@@ -193,7 +210,9 @@ berth2/
     Sources/Berth/BerthCoreHost.swift  HostOps implementation (Ghostty/AppKit)
     Sources/BerthDaemon/     socket server, subscriptions, framing
   core/                      cargo workspace
-    crates/berth-core/       model, state, policy, codec, persistence
+    crates/berth-core/       model, state, policy, codec, persistence, paths
+    crates/berth-transport/  local sockets / named pipes + NDJSON framing
+    crates/berth-server/     auth, subscriptions, replay, portable socket server
     crates/berth-ffi/        UniFFI scaffolding, SurfaceOps trait
     crates/berth-cli/        `berth` binary
   scripts/                   bootstrap, ghostty build, ffi gen, dev-sign
