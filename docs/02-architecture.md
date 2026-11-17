@@ -230,6 +230,11 @@ berth2/
 | Idle CPU, 8 panes, 1 hidden window | < 1 % |
 | RSS, 8 panes × 10k scrollback | ≤ 1.2 GB |
 
+Reconcile, core-dispatch and detection-pass timings are written to
+`~/Library/Logs/Berth/berth.log`, and a watchdog appends any main-thread stall
+over two seconds, with the preceding breadcrumbs, to `crash.log`. Use those
+before reaching for Instruments.
+
 ## 10. Operational risks
 
 - Ghostty C API drift → pin tag, adapter file, upgrade checklist, smoke test suite (open 8 panes, run vim/htop/ssh, resize, close).

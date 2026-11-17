@@ -7,14 +7,20 @@ Two toolchains, two halves. The Rust core builds anywhere; the app needs macOS.
 | Need | Version | Notes |
 | --- | --- | --- |
 | macOS | 14+ | Apple Silicon; Metal required |
-| Xcode | 16+ | Swift 6 toolchain, macOS SDK |
+| Xcode | 16+ | optional: needed only to compile GhosttyKit (Swift 6 toolchain, Metal shader compiler) |
 | Zig | 0.17.x | `vendor/ghostty/build.zig.zon` pins the minimum; `scripts/bootstrap.sh` checks |
 | Rust | stable | the portable core; `make core-lib` builds the static library |
 | git | any | submodule handling |
 
 No Homebrew packages required. Nothing is installed system-wide except Zig.
 
+With only the Command Line Tools installed, skip the engine build and download
+the one CI built for the pinned submodule commit (see below). `swift test` needs
+Xcode's XCTest, so on a CLT-only machine the tests run in CI.
+
 ## First run
+
+With Xcode:
 
 ```sh
 git submodule update --init --recursive   # or: make bootstrap
@@ -23,6 +29,20 @@ make build                                # builds libberth_ffi.a, then swift bu
 make app                                  # assembles + ad-hoc signs build/Berth.app
 open build/Berth.app
 ```
+
+Without Xcode (Command Line Tools only):
+
+```sh
+git submodule update --init --recursive
+make fetch-engine                         # downloads the CI-built GhosttyKit + resources
+make build
+make app
+```
+
+`make fetch-engine` looks up the `ghostty-engine-<submodule-sha>` artifact that
+the `app` job uploads from every push to `main`, so it only works after CI has
+built the engine once for the pinned commit. It is the same artifact built from
+the same sources; `FORCE=1` replaces an existing engine.
 
 `make bootstrap` runs, inside `vendor/ghostty`:
 
@@ -46,8 +66,8 @@ Both are gitignored. `app/Package.swift` references the xcframework by path, so 
 ## Everyday loop
 
 ```sh
-make test-core   # cargo test --workspace — 35 tests, no window needed
-make test        # swift tests (framing, helpers; nothing GPU/PTY)
+make test-core   # cargo test --workspace — 61 tests, no window needed
+make test        # swift tests — 17 tests (framing, layout, lock-order guards)
 make run         # bundle + launch
 ```
 
@@ -244,18 +264,32 @@ mistaken for missing architecture.
    PTYs. A crash loses at most the last 500 ms debounce window.
 5. **Geometric focus.** ⌘] / ⌘[ move between panes in tree order; rectangle-based
    arrow navigation is not implemented.
-8. **Live font reload.** Font size applies on relaunch.
-9. **Agent mute and multi-agent rows.** Banners are suppressed for the focused
+6. **Agent mute and multi-agent rows.** Banners are suppressed for the focused
    workspace, but there is no per-provider mute. A workspace row shows one
    primary agent (highest attention, then newest) when several share it.
+7. **Instruments trace.** Startup and keystroke-path budgets are measured by the
+   breadcrumbs in `~/Library/Logs/Berth/berth.log`, not by a profiler run.
 
 Done since the scaffold: key routing, IME and dead keys, mouse (wheel
 scrollback, drag selection, terminal mouse reporting, right/middle buttons),
 core bridge over UniFFI, clipboard with paste confirmation, OSC reporting
 (title, cwd, progress, bell, notifications, URLs), split tree with draggable
 dividers, sidebar with live metadata and drag reorder, per-pane tab stacks,
-command palette, editable shortcuts, and session restore with cwd and active
-tab.
+command palette, editable shortcuts, session restore with cwd and active tab,
+live per-surface font reload, and diagnostics (breadcrumbs, stall watchdog,
+surface geometry).
+
+## Diagnostics
+
+Two files under `~/Library/Logs/Berth/` answer "why did it hang or die":
+
+- `berth.log` — rolling breadcrumbs: reconcile and dispatch durations, layout
+  rebuilds, ignored divider resizes, detection passes, and one `surface:` line
+  per geometry change. Capped at 2 MiB with one rotation.
+- `crash.log` — uncaught exceptions and main-thread stalls, each with the 40
+  breadcrumbs before it.
+
+`docs/config.md` has the details, including the unified-logging predicate.
 
 ## Upgrading Ghostty
 
@@ -270,7 +304,7 @@ Then run the M0 smoke checklist. Cost budget: one day per bump, all C access con
 
 ```sh
 cd core
-cargo test --workspace        # 40 tests, no window needed
+cargo test --workspace        # 61 tests, no window needed
 cargo run -p berth-cli -- ls  # needs a running Berth (socket in Application Support)
 ```
 
@@ -283,9 +317,11 @@ bindings with `make bindings`; CI fails if they drift.
 
 | Symptom | Cause |
 | --- | --- |
-| `artifact path does not exist: GhosttyKit.xcframework` | run `make bootstrap` |
+| `artifact path does not exist: GhosttyKit.xcframework` | run `make bootstrap`, or `make fetch-engine` on a machine without Xcode |
 | `ghostty_init` returns non-zero | resources not bundled; check `Berth.app/Contents/Resources/ghostty`, or set `GHOSTTY_RESOURCES_DIR` |
 | blank window, no prompt | surface never created — check `createSurface` logs, view size 0 at first layout |
+| app freezes seconds after launch, busy cursor | `crash.log` has `STALL main thread blocked`; a host callback waited on the main thread while the core held its state lock. Never block in a `HostOps` callback (see `pidInfo`, `notify`) |
+| terminal draws at half size in the corner of the pane, clicks land at double | `layer.contentsScale` disagrees with the window's backing scale; `syncSize` must set it (Ghostty draws cells with the content scale but sizes its drawable from the layer) |
 | app crashes on quit | a surface freed after its layer; free surfaces before `ghostty_app_free` |
 | `Library not loaded: /Users/.../libberth_ffi.dylib` | the core was linked as a dylib; `Package.swift` must name `libberth_ffi.a` by path (CI checks the bundle with `otool -L`) |
 | `zig: error: no module named ...` | wrong Zig version; `make bootstrap` prints the required one |

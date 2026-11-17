@@ -2,13 +2,14 @@
 
 A native macOS terminal workspace for running coding agents side by side — built on Ghostty's renderer, with a typed agent lifecycle and a push-based protocol.
 
-Status: M4. The daily-driver work is in progress: `berth hooks install` wires Claude Code hooks and an opencode plugin so agent state, tool detail, and the provider session id feed the M3 agent layer (hooks also make `claude --resume <id>` work across relaunch). M3 remains the agent layer: `AgentSurface` state machine with attention/notification dedupe, one-second passive foreground-process detection, process-exit → `errored` within the same tick, `berth run` registration with resume payloads, sidebar agent badges and attention-first ordering, pane attention rings, acknowledging `⌘⇧U` jump, `⌘I` attention panel, and agent-aware session restore. M4 hardening frees PTYs before Ghostty shuts down, validates session snapshots before restoring, rotates the crash journal, and logs races/crashes under `dev.berth.app`; corrupt-journal fallback remains. M0–M2 remain the shell and authenticated NDJSON protocol spine, now with generated JSON Schema.
+Status: 0.8.4, M4 code complete. The daily-driver work is in: `berth hooks install` wires Claude Code hooks and an opencode plugin so agent state, tool detail, and the provider session id feed the M3 agent layer (hooks also make `claude --resume <id>` work across relaunch). M3 remains the agent layer: `AgentSurface` state machine with attention/notification dedupe, one-second passive foreground-process detection, process-exit → `errored` within the same tick, `berth run` registration with resume payloads, sidebar agent badges and attention-first ordering, pane attention rings, acknowledging `⌘⇧U` jump, `⌘I` attention panel, and agent-aware session restore. M4 hardening frees PTYs before Ghostty shuts down, validates session snapshots before restoring, rotates the crash journal, and records rolling breadcrumbs plus a main-thread stall watchdog under `~/Library/Logs/Berth/`. Real use surfaced three defects, all fixed: a split-resize feedback loop that crashed ⌘D (0.8.2), a detection deadlock that froze the app a second or two after launch (0.8.3), and a 1× display scale mismatch that drew the grid at half size (0.8.4). The only open M4 criterion is the two-week personal-use observation. M0–M2 remain the shell and authenticated NDJSON protocol spine, now with generated JSON Schema.
 
 Download: [latest release](https://github.com/gabriel-rivero/berth2/releases) (macOS 14+, Apple Silicon, ad-hoc signed).
 
 ```sh
 make test-core    # rust core, any platform
-make bootstrap    # macOS: build pinned GhosttyKit
+make bootstrap    # macOS + Xcode: build pinned GhosttyKit
+make fetch-engine # macOS, Command Line Tools only: download the CI-built GhosttyKit
 make run          # macOS: bundle + launch
 ```
 
@@ -25,10 +26,10 @@ cmux proved the shape (sidebar of workspaces next to a split grid of terminals) 
 | [docs/01-vision.md](docs/01-vision.md) | User, principles, non-goals, differentiators, definition of done |
 | [docs/02-architecture.md](docs/02-architecture.md) | Process model, layers, Ghostty integration, Rust core, repo layout, ADRs, budgets |
 | [docs/03-protocol.md](docs/03-protocol.md) | Socket transport, auth, methods, events, agent schema and state machine |
-| [docs/04-roadmap.md](docs/04-roadmap.md) | M0–M4 milestones with acceptance criteria, post-v1, kill criteria |
-| [docs/05-build.md](docs/05-build.md) | Toolchain, bootstrap, smoke checklist, scaffold gaps, Ghostty upgrades |
+| [docs/04-roadmap.md](docs/04-roadmap.md) | M0–M5 milestones with acceptance criteria, post-v1, kill criteria |
+| [docs/05-build.md](docs/05-build.md) | Toolchain, bootstrap, smoke checklist, known gaps, Ghostty upgrades |
 | [docs/config.md](docs/config.md) | `config.json`, font/display scale, sidebar density, socket and env vars, logs |
-| [CHANGELOG.md](CHANGELOG.md) | Release notes, including 0.8.2 |
+| [CHANGELOG.md](CHANGELOG.md) | Release notes, including 0.8.4 |
 
 ## Repo layout
 
@@ -36,7 +37,7 @@ cmux proved the shape (sidebar of workspaces next to a split grid of terminals) 
 app/            Swift 6 + AppKit shell, hosts GhosttyKit (Package.swift + Sources/Berth)
 core/           cargo workspace: berth-core (portable domain) + berth-cli (`berth`)
 vendor/ghostty  git submodule, pinned to v1.4.0
-scripts/        bootstrap.sh (engine) · bundle.sh (ad-hoc signed .app)
+scripts/        bootstrap.sh (engine) · fetch-engine.sh (CI-built engine) · bundle.sh (.app)
 docs/           00 teardown · 01 vision · 02 architecture · 03 protocol · 04 roadmap · 05 build
 ```
 

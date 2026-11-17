@@ -13,6 +13,8 @@ Goal: a window with a fast terminal in it.
 
 **Done when:** `vim`, `htop`, `less` and a 4k-line `cat` look and feel identical to stock Ghostty; resize is artifact-free; closing the window kills children; idle CPU < 1 %.
 
+**Status:** implemented. The M0 smoke checklist in `docs/05-build.md` is the standing check; the last display-correctness defect found there (half-size rendering on a 1× monitor) was fixed in 0.8.4.
+
 ## M1 — Workspace shell (≈3 weeks)
 
 Goal: the cmux shape, without agent features.
@@ -24,6 +26,8 @@ Goal: the cmux shape, without agent features.
 - Command palette (fuzzy, ~10 verbs), shortcuts config, app settings window.
 
 **Done when:** I can build a 3-workspace, 6-pane layout, quit, relaunch, and land exactly where I left off — including cwd — with no visible startup hitch.
+
+**Status:** implemented. The M1 restore checklist in `docs/05-build.md` is the standing check; split weights round-trip as of 0.8.0.
 
 ## M2 — Core + protocol (≈3 weeks)
 
@@ -62,22 +66,38 @@ remain M5.
 
 ## M4 — Daily driver (≈2 weeks)
 
-**Status:** in progress. Hooks landed: `berth hooks install` merges Claude Code
-settings and writes an opencode plugin; both record state/detail and the
-provider session id, so restore uses `--resume`. Crash hardening is in:
-surfaces free their PTY before `ghostty_app_free`, snapshots are validated
-before mutating live state, restore replaces rather than appends, the journal is
-capped, and corrupt journal entries fall back to the newest good snapshot.
-Polish landed: attention panel, onboarding, theme tokens, compact sidebar,
-per-display/live font reload, split-weight round-trip, and `docs/config.md`.
-The remaining M4 work is the two-week personal-use observation and running the
-Instruments trace on the Mac.
+**Status:** code complete. The two-week personal-use observation is the only open
+criterion. Hooks landed: `berth hooks install` merges Claude Code settings and
+writes an opencode plugin; both record state/detail and the provider session id,
+so restore uses `--resume`. Crash hardening is in: surfaces free their PTY before
+`ghostty_app_free`, snapshots are validated before mutating live state, restore
+replaces rather than appends, the journal is capped, and corrupt journal entries
+fall back to the newest good snapshot. Polish landed: attention panel,
+onboarding, theme tokens, compact sidebar, per-display/live font reload,
+split-weight round-trip, and `docs/config.md`.
+
+Daily use on the Mac surfaced three defects, all fixed and released:
+
+- **0.8.2** — splitting a pane posted split-resize notifications during the
+  layout rebuild, and the handler fed them back to the core, which rebuilt again
+  until the stack overflowed (⌘D crash).
+- **0.8.3** — passive detection held the core's state mutex while hopping to the
+  main thread, deadlocking against any main-thread dispatch a second or two
+  after launch.
+- **0.8.4** — on a 1× display the surface layer kept a 2× scale, so the grid
+  drew at half size in a corner and mouse mapping was doubled.
+
+The diagnostics that found them stay: rolling breadcrumbs in
+`~/Library/Logs/Berth/berth.log`, a main-queue stall watchdog that writes
+breadcrumbs to `crash.log`, and one `surface:` geometry line per size change.
+`make fetch-engine` lets a Mac with only the Command Line Tools build and run the
+app by downloading the CI-built GhosttyKit.
 
 - Hook recipes for Claude Code and opencode (shipped as copy-paste snippets + `berth hooks install`). **Done.**
-- Perf pass against the budgets in `docs/02-architecture.md` §9; Instruments trace of startup and keystroke path.
-- Crash/quit safety, zombie PTY audit, restore fuzzing (kill -9 mid-session). **Eager PTY teardown, snapshot validation, and corruption tests landed; Mac audit remains.**
-- Polish: notification popover, empty states, sidebar density, theme tokens, onboarding (one screen).
-- Docs: README, protocol reference, config reference.
+- Perf pass against the budgets in `docs/02-architecture.md` §9; Instruments trace of startup and keystroke path. **Reconcile, core dispatch and detection-pass timings are logged; the Instruments trace is still open.**
+- Crash/quit safety, zombie PTY audit, restore fuzzing (kill -9 mid-session). **Done: eager PTY teardown, snapshot validation, corruption tests, and the three defects above.**
+- Polish: notification popover, empty states, sidebar density, theme tokens, onboarding (one screen). **Done.**
+- Docs: README, protocol reference, config reference. **Done.**
 
 **Done when:** two weeks of personal use with zero fallbacks to another terminal.
 
@@ -86,6 +106,9 @@ Instruments trace on the Mac.
 Ship the smallest useful daily driver first; these are the known gaps that should
 not be mistaken for missing architecture.
 
+- **M4 remainder.** The Instruments trace of startup and the keystroke path
+  against the §9 budgets, and the two-week personal-use observation that is the
+  M4 done criterion.
 - **Group management UI.** Groups render and collapse, but there is no
   create/rename/color picker even though `group.create/update/delete` exist.
 - **Geometric focus.** ⌘] / ⌘[ walk the tree; arrow-key spatial navigation is not
