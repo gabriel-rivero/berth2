@@ -113,6 +113,9 @@ pub struct ScreenMeta {
     pub clipboard: Option<String>,
     /// Latest OSC 9 / OSC 777 desktop notification body.
     pub notification: Option<String>,
+    /// Replies the terminal owes the program (cursor position, device
+    /// attributes). The reader drains them back to the PTY.
+    pub responses: Vec<String>,
 }
 
 /// Callbacks handed to `vt100`, writing into the surface's [`ScreenMeta`].
@@ -145,6 +148,41 @@ impl vt100::Callbacks for ScreenEvents {
     fn copy_to_clipboard(&mut self, _: &mut vt100::Screen, _: &[u8], data: &[u8]) {
         if let Some(text) = decode_base64(data) {
             lock(&self.meta).clipboard = Some(text);
+        }
+    }
+
+    fn unhandled_csi(
+        &mut self,
+        screen: &mut vt100::Screen,
+        i1: Option<u8>,
+        _i2: Option<u8>,
+        params: &[&[u16]],
+        c: char,
+    ) {
+        let first = params
+            .first()
+            .and_then(|param| param.first())
+            .copied()
+            .unwrap_or(0);
+        let mut meta = lock(&self.meta);
+        match (i1, c) {
+            // Device status report: 5 is "ready", 6 is the cursor position.
+            (None, 'n') => match first {
+                5 => meta.responses.push("\x1b[0n".into()),
+                6 => {
+                    let (row, col) = screen.cursor_position();
+                    meta.responses.push(format!(
+                        "\x1b[{};{}R",
+                        row.saturating_add(1),
+                        col.saturating_add(1)
+                    ));
+                }
+                _ => {}
+            },
+            // Primary and secondary device attributes.
+            (None, 'c') => meta.responses.push("\x1b[?1;2c".into()),
+            (Some(b'>'), 'c') => meta.responses.push("\x1b[>0;0;0c".into()),
+            _ => {}
         }
     }
 
@@ -235,7 +273,7 @@ type Parser = vt100::Parser<ScreenEvents>;
 struct Surface {
     /// Kept for resize and foreground-process queries.
     master: Mutex<Box<dyn MasterPty + Send>>,
-    writer: Mutex<Box<dyn Write + Send>>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
     screen: Arc<Mutex<Parser>>,
     meta: Arc<Mutex<ScreenMeta>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
@@ -377,6 +415,9 @@ impl PtyHost {
             progress: meta.progress,
             clipboard: meta.clipboard.take(),
             notification: meta.notification.take(),
+            // Replies belong to the reader, which writes them to the PTY; the
+            // window must not take them or the program waits forever.
+            responses: Vec::new(),
         };
         Ok(taken)
     }
@@ -518,9 +559,10 @@ impl SurfaceOps for PtyHost {
         let reader = master
             .try_clone_reader()
             .map_err(|error| CoreError::internal(format!("pty reader: {error}")))?;
-        let writer = master
-            .take_writer()
-            .map_err(|error| CoreError::internal(format!("pty writer: {error}")))?;
+        let writer =
+            Arc::new(Mutex::new(master.take_writer().map_err(|error| {
+                CoreError::internal(format!("pty writer: {error}"))
+            })?));
         let killer = child.clone_killer();
 
         let meta = Arc::new(Mutex::new(ScreenMeta::default()));
@@ -533,17 +575,18 @@ impl SurfaceOps for PtyHost {
         )));
         let alive = Arc::new(AtomicBool::new(true));
 
-        #[cfg(windows)]
-        eprintln!(
-            "pty-trace: spawned pid={pid} tty={tty:?} size={cols}x{rows} prog={:?}",
-            req.argv
+        spawn_reader(
+            reader,
+            Arc::clone(&screen),
+            Arc::clone(&alive),
+            Arc::clone(&writer),
+            Arc::clone(&meta),
         );
-        spawn_reader(reader, Arc::clone(&screen), Arc::clone(&alive));
         spawn_waiter(child, Arc::clone(&alive));
 
         let surface = Arc::new(Surface {
             master: Mutex::new(master),
-            writer: Mutex::new(writer),
+            writer,
             screen,
             meta,
             killer: Mutex::new(killer),
@@ -698,36 +741,22 @@ fn spawn_reader(
     mut reader: Box<dyn Read + Send>,
     screen: Arc<Mutex<Parser>>,
     alive: Arc<AtomicBool>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    meta: Arc<Mutex<ScreenMeta>>,
 ) {
     let _ = thread::Builder::new()
         .name("berth-pty-reader".into())
         .spawn(move || {
             let mut buffer = [0u8; 16 * 1024];
-            let mut first = true;
             loop {
                 match reader.read(&mut buffer) {
-                    Ok(0) => {
-                        #[cfg(windows)]
-                        eprintln!("pty-trace: reader EOF");
-                        break;
-                    }
+                    Ok(0) => break,
                     Ok(n) => {
-                        #[cfg(windows)]
-                        if first {
-                            eprintln!(
-                                "pty-trace: first read {n} bytes: {:?}",
-                                String::from_utf8_lossy(&buffer[..n.min(120)])
-                            );
-                            first = false;
-                        }
                         lock(&screen).process(&buffer[..n]);
+                        answer_queries(&meta, &writer);
                     }
                     Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                    Err(error) => {
-                        #[cfg(windows)]
-                        eprintln!("pty-trace: reader error {error}");
-                        break;
-                    }
+                    Err(_) => break,
                 }
             }
             alive.store(false, Ordering::Relaxed);
@@ -741,6 +770,20 @@ fn spawn_waiter(mut child: Box<dyn portable_pty::Child + Send + Sync>, alive: Ar
             let _ = child.wait();
             alive.store(false, Ordering::Relaxed);
         });
+}
+
+/// Send the replies the parser queued, so a program waiting for a cursor
+/// position or a device-attributes answer can continue.
+fn answer_queries(meta: &Arc<Mutex<ScreenMeta>>, writer: &Arc<Mutex<Box<dyn Write + Send>>>) {
+    let replies = std::mem::take(&mut lock(meta).responses);
+    if replies.is_empty() {
+        return;
+    }
+    let mut writer = lock(writer);
+    for reply in replies {
+        let _ = writer.write_all(reply.as_bytes());
+    }
+    let _ = writer.flush();
 }
 
 fn truncate(text: String, max_bytes: usize) -> Readback {
@@ -1005,6 +1048,29 @@ mod meta_tests {
         let screen = parser.screen();
         assert!(screen.cell(0, 0).unwrap().is_wide());
         assert!(screen.cell(0, 1).unwrap().is_wide_continuation());
+    }
+
+    #[test]
+    fn given_a_cursor_position_query_when_parsed_then_a_report_is_queued() {
+        let (meta, mut parser) = parser();
+        parser.process(b"\x1b[6n");
+        let responses = &lock(&meta).responses;
+        assert_eq!(responses.len(), 1);
+        assert!(responses[0].starts_with("\x1b["), "{}", responses[0]);
+        assert!(responses[0].ends_with('R'), "{}", responses[0]);
+        assert_eq!(responses[0], "\x1b[1;1R");
+    }
+
+    #[test]
+    fn given_a_device_attributes_query_when_parsed_then_a_vt100_reply_is_queued() {
+        let (meta, mut parser) = parser();
+        parser.process(b"\x1b[c");
+        assert_eq!(lock(&meta).responses, vec!["\x1b[?1;2c".to_string()]);
+        parser.process(b"\x1b[>c");
+        assert_eq!(
+            lock(&meta).responses.last().map(String::as_str),
+            Some("\x1b[>0;0;0c")
+        );
     }
 
     #[test]
