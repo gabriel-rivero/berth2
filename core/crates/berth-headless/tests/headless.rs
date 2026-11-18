@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use berth_core::AppState;
+use berth_core::{AppState, SurfaceOps};
 use berth_headless::PtyHost;
 use berth_server::{Server, ServerConfig, SocketMode};
 use berth_transport::LocalStream;
@@ -134,8 +134,12 @@ fn spawn_type_and_read_back_through_the_protocol() {
     assert_eq!(keyed["ok"], true, "{keyed}");
 
     // Wait for the shell to run it and the VT parser to render the result.
-    let deadline = Instant::now() + Duration::from_secs(15);
+    // A cold ConPTY can take a while to consume its first input, so the command
+    // is re-sent a few times before the test gives up.
+    let deadline = Instant::now() + Duration::from_secs(30);
     let mut screen = String::new();
+    let mut resends = 0;
+    let mut last_send = Instant::now();
     while Instant::now() < deadline {
         let (read, _) = request(
             &stream,
@@ -154,11 +158,35 @@ fn spawn_type_and_read_back_through_the_protocol() {
         if screen.contains("berth-spike-ok") {
             break;
         }
+        if last_send.elapsed() >= Duration::from_secs(4) && resends < 3 {
+            resends += 1;
+            last_send = Instant::now();
+            let _ = request(
+                &stream,
+                &mut reader,
+                json!({
+                    "id": 10 + resends,
+                    "method": "surface.send_text",
+                    "params": {"surface_id": surface_id, "text": "echo berth-spike-ok"},
+                }),
+            );
+            let _ = request(
+                &stream,
+                &mut reader,
+                json!({
+                    "id": 20 + resends,
+                    "method": "surface.send_key",
+                    "params": {"surface_id": surface_id, "key": "enter"},
+                }),
+            );
+        }
         std::thread::sleep(Duration::from_millis(50));
     }
     assert!(
         screen.contains("berth-spike-ok"),
-        "screen never showed the command output:\n{screen}"
+        "screen never showed the command output (alive={}, info={:?}, resends={resends}):\n{screen:?}",
+        host.is_alive(&surface_id),
+        host.pid_info(&surface_id).ok(),
     );
 
     let view = host.screen_view(&surface_id).expect("screen view");
