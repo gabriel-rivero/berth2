@@ -13,9 +13,11 @@ if [[ ! -x "$BIN" ]]; then
   exit 1
 fi
 
-VERSION="$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')"
-VERSION="${VERSION:-0.0.0}"
-BUILD="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
+# A shallow CI checkout has no tags, so a failed describe must not abort under
+# `set -e`; callers can pass VERSION/BUILD explicitly.
+VERSION="${VERSION:-$(git describe --tags --abbrev=0 2>/dev/null || echo 0.0.0)}"
+VERSION="${VERSION#v}"
+BUILD="${BUILD:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}"
 
 echo "==> assembling $APP ($VERSION build $BUILD)"
 rm -rf "$APP"

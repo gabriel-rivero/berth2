@@ -106,6 +106,7 @@ jobs:
             tar -czf "berth-gui-${version}-${{ matrix.target }}.tar.gz" -C dist berth-gui
           fi
           if [ "$RUNNER_OS" = "macOS" ]; then
+            if [[ "$GITHUB_REF" == refs/tags/* ]]; then export VERSION="$version"; fi
             ./scripts/bundle-gui.sh release
             ditto -c -k --keepParent build/BerthGui.app \
               "berth-gui-${version}-${{ matrix.target }}.app.zip"
