@@ -133,23 +133,43 @@ not be mistaken for missing architecture.
 MVP gate stays the M1 restore criterion plus the M0 smoke checklist, not this
 list.
 
+## 0.10–0.11 — Portable window parity
+
+The Rust window (`berth-gui`) is the Linux/Windows shell and matches the AppKit
+shell on the daily-use surface: real text, scrollback, selection with
+auto-scroll, clipboard, mouse reporting, IME, links, dividers, sidebar (groups,
+drag-reorder, wheel), palette, attention list, settings, agent detection,
+autosave, journal, accessibility, a desktop notification path, and per-platform
+release archives. What remains is tracked here rather than in the
+Swift gaps list, because several items are new to both shells.
+
+- **In-terminal search** (new; the macOS app has no search UI either). Find text
+  in the 10k-line scrollback, highlight matches, `Enter`/`⇧Enter` for
+  next/previous, `Esc` to clear. Ships in the portable window first, then the
+  AppKit surface through the same core helper.
+- **Tab rename and drag-reorder** (new). Both need protocol work before UI:
+  a per-surface user title that an OSC 0/2 update does not clobber, and a
+  `surface.move` method for order. Then a rename affordance (double-click or
+  context) and drag in the strip, in both shells.
+- ~~Accessibility tree~~: shipped in 0.11 as an AccessKit tree with the focused
+  terminal as a `Terminal` node; sidebar and panels are still outside it.
+- **Packaging**: 0.11 publishes the portable window binaries next to the macOS
+  app (Linux/Windows/macOS archives); installers and notarization are next.
+- **Graphics protocols** (sixel/kitty/iTerm images) stay with the renderer
+  decision: `vt100` cannot carry them, so this is the reason to move to
+  `libghostty-vt` or add a decoder. Not planned before that call.
+
 ## After v1 (ordered, not scheduled)
 
 1. **Agent inbox / journal** — per-agent timeline of state transitions and notifications (we already generate the events; this is persistence + UI).
 2. **Cost + token meter** per workspace, from adapter-reported usage.
 3. **Session search** — find the workspace where that `pnpm test` failed, from screen text we already can read.
 4. **Editor integration** — `berth` LSP-ish shim so an agent in Neovim/Zed can report state without hooks.
-5. **Linux shell spike** — in progress, two slices landed. The portable half
-   (`berth-core::paths`, `berth-transport`, `berth-server`, cross-platform
-   `berth` CLI) and `berth-headless` (PTY + VT screen + protocol) are tested on
-   Linux/macOS/Windows CI. `berth-gui` adds the first visible window: winit +
-   softbuffer, weighted split-tree layout, per-pane terminals, click-to-focus,
-   per-pane tab strips, a workspace sidebar, key routing, resize and session
-   save. Next: divider dragging, then scrollback/mouse/clipboard. Decide from
-   measured input latency and packaging whether the production renderer stays
-   winit + a terminal grid or moves to GTK4 + libghostty-vt. See
-   [docs/07-headless-shell.md](07-headless-shell.md) and
-   [docs/08-minimal-window.md](08-minimal-window.md).
+5. **Portable window** — shipped as 0.10/0.11 (see the section above). Both
+   halves run on Linux/macOS/Windows CI, including a real window smoke on
+   Linux. The renderer decision (winit + `vt100` + `cosmic-text` vs GTK4 +
+   `libghostty-vt`) is still open and is now bounded by one concrete question:
+   do we need terminal graphics? See [docs/08-minimal-window.md](08-minimal-window.md).
 6. **Browser pane**, **SSH workspaces**, **remote tmux mirror** — only if the above is boring and stable.
 
 The complete audited gap list (GUI, headless shell, core/server/CLI and the

@@ -22,4 +22,7 @@ softbuffer.workspace = true
 font8x8.workspace = true
 cosmic-text.workspace = true
 arboard.workspace = true
+accesskit.workspace = true
+accesskit_winit.workspace = true
+ctrlc.workspace = true
 png = "0.17"

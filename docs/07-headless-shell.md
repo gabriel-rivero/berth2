@@ -119,8 +119,8 @@ across the GUI, headless shell, core/server/CLI and macOS app is
   mouse escapes itself.
 - **Windows/macOS PTY paths are compile-tested and CI-tested, not manually
   smoke-tested.** ConPTY output and key encoding deserve a real Windows run.
-- **No graceful shutdown hook.** `session.save` is explicit; SIGTERM does not
-  write a snapshot.
+- `berth-gui` saves on SIGTERM and Ctrl+C and clears the journal, but the
+  headless binary still needs an explicit `session.save`.
 - **`berth-headless` is a spike binary, not a packaged service.**
 
 ## Next slice

@@ -869,26 +869,120 @@ pub fn session_path() -> PathBuf {
     berth_core::paths::snapshot_path()
 }
 
-/// Write the current session snapshot atomically, 0600 on Unix.
+/// Journal beside the session snapshot, the same file the macOS shell keeps.
+pub fn journal_path() -> PathBuf {
+    berth_core::paths::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("journal.ndjson")
+}
+
+/// Write the current session snapshot atomically, 0600 on Unix, and append it
+/// to the crash journal.
 pub fn save_session(state: &Arc<Mutex<AppState>>) -> io::Result<PathBuf> {
     let snapshot = lock(state).snapshot();
     let path = session_path();
     let bytes = serde_json::to_vec_pretty(&snapshot)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     write_atomic(&path, &bytes)?;
+    if let Some(dir) = path.parent() {
+        let _ = append_journal_in(dir, &snapshot);
+    }
     Ok(path)
 }
 
-/// Restore the snapshot if one exists. A corrupt snapshot is reported, not
-/// deleted: the next `session.save` will replace it.
+/// Journals kept before the oldest is dropped.
+const JOURNAL_LINES: usize = 5;
+
+/// Append one snapshot to `journal.ndjson` in `dir`, keeping the last few so a
+/// crash can be recovered without unbounded growth.
+pub fn append_journal_in(dir: &Path, snapshot: &Snapshot) -> io::Result<()> {
+    let line = berth_core::store::JournalLine {
+        ts_ms: berth_core::time::now_ms(),
+        op: "snapshot".to_string(),
+        data: serde_json::to_value(snapshot)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
+    };
+    let text = serde_json::to_string(&line)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let path = dir.join("journal.ndjson");
+    {
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)?;
+        file.write_all(text.as_bytes())?;
+        file.write_all(b"\n")?;
+    }
+    trim_journal(&path)
+}
+
+fn trim_journal(path: &Path) -> io::Result<()> {
+    let text = fs::read_to_string(path)?;
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    if lines.len() <= JOURNAL_LINES {
+        return Ok(());
+    }
+    let tail = lines[lines.len() - JOURNAL_LINES..].join("\n");
+    write_atomic(path, format!("{tail}\n").as_bytes())
+}
+
+/// The newest valid snapshot in the journal, if any.
+pub fn newest_journal_snapshot_in(dir: &Path) -> io::Result<Option<Snapshot>> {
+    let path = dir.join("journal.ndjson");
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let mut newest: Option<Snapshot> = None;
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        let Ok(entry) = serde_json::from_str::<berth_core::store::JournalLine>(line) else {
+            continue;
+        };
+        if entry.op != "snapshot" {
+            continue;
+        }
+        let Ok(snapshot) = serde_json::from_value::<Snapshot>(entry.data) else {
+            continue;
+        };
+        if newest
+            .as_ref()
+            .is_none_or(|current| snapshot.saved_ms > current.saved_ms)
+        {
+            newest = Some(snapshot);
+        }
+    }
+    Ok(newest)
+}
+
+/// Delete the journal after a clean quit, like the macOS shell.
+pub fn clear_journal() -> io::Result<()> {
+    match fs::remove_file(journal_path()) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+/// Restore the newest session: the snapshot, or a newer journal entry left by a
+/// crash. A corrupt snapshot is reported, not deleted.
 pub fn restore_session(
     state: &Arc<Mutex<AppState>>,
     ops: &dyn SurfaceOps,
 ) -> Result<usize, CoreError> {
     let path = session_path();
-    let bytes = match fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
+    let directory = path.parent().unwrap_or_else(|| Path::new("."));
+    let from_file = match fs::read(&path) {
+        Ok(bytes) => Some(serde_json::from_slice::<Snapshot>(&bytes).map_err(|error| {
+            CoreError::new(
+                ErrorCode::BadRequest,
+                format!("parse {}: {error}", path.display()),
+            )
+        })?),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
         Err(error) => {
             return Err(CoreError::internal(format!(
                 "read {}: {error}",
@@ -896,12 +990,19 @@ pub fn restore_session(
             )));
         }
     };
-    let snapshot: Snapshot = serde_json::from_slice(&bytes).map_err(|error| {
-        CoreError::new(
-            ErrorCode::BadRequest,
-            format!("parse {}: {error}", path.display()),
-        )
-    })?;
+    let from_journal = newest_journal_snapshot_in(directory).unwrap_or(None);
+    let snapshot = match (from_file, from_journal) {
+        (Some(file), Some(journal)) => {
+            if journal.saved_ms > file.saved_ms {
+                journal
+            } else {
+                file
+            }
+        }
+        (Some(file), None) => file,
+        (None, Some(journal)) => journal,
+        (None, None) => return Ok(0),
+    };
     let mut state = lock(state);
     berth_core::store::restore(&mut state, snapshot, ops)
 }
@@ -1076,5 +1177,74 @@ mod meta_tests {
     #[test]
     fn given_a_percent_encoded_url_when_decoded_then_utf8_survives() {
         assert_eq!(percent_decode("/caf%C3%A9"), "/café");
+    }
+}
+
+#[cfg(test)]
+mod journal_tests {
+    use super::*;
+    use berth_core::NullOps;
+
+    fn snapshot(state: &AppState) -> Snapshot {
+        state.snapshot()
+    }
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "berth-journal-{tag}-{}-{}",
+            std::process::id(),
+            berth_core::time::now_ms()
+        ));
+        fs::create_dir_all(&dir).expect("temp dir");
+        dir
+    }
+
+    #[test]
+    fn given_a_saved_snapshot_when_appended_then_the_journal_returns_it() {
+        let dir = temp_dir("append");
+        let state = Arc::new(Mutex::new(AppState::default()));
+        lock(&state)
+            .create_workspace(Some("one"), None, None, &NullOps)
+            .unwrap();
+        let snapshot = snapshot(&lock(&state));
+        append_journal_in(&dir, &snapshot).unwrap();
+        let newest = newest_journal_snapshot_in(&dir)
+            .unwrap()
+            .expect("journal entry");
+        assert_eq!(newest.workspaces.len(), 1);
+        assert_eq!(newest.saved_ms, snapshot.saved_ms);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn given_more_than_five_entries_when_appended_then_only_the_last_five_survive() {
+        let dir = temp_dir("trim");
+        let state = Arc::new(Mutex::new(AppState::default()));
+        lock(&state)
+            .create_workspace(Some("one"), None, None, &NullOps)
+            .unwrap();
+        let snapshot = snapshot(&lock(&state));
+        for _ in 0..8 {
+            append_journal_in(&dir, &snapshot).unwrap();
+        }
+        let text = fs::read_to_string(dir.join("journal.ndjson")).unwrap();
+        assert_eq!(text.lines().count(), JOURNAL_LINES);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn given_a_corrupt_line_when_read_then_it_is_skipped() {
+        let dir = temp_dir("corrupt");
+        let state = Arc::new(Mutex::new(AppState::default()));
+        lock(&state)
+            .create_workspace(Some("one"), None, None, &NullOps)
+            .unwrap();
+        append_journal_in(&dir, &snapshot(&lock(&state))).unwrap();
+        let path = dir.join("journal.ndjson");
+        let mut text = fs::read_to_string(&path).unwrap();
+        text.push_str("not json\n");
+        fs::write(&path, text).unwrap();
+        assert!(newest_journal_snapshot_in(&dir).unwrap().is_some());
+        let _ = fs::remove_dir_all(&dir);
     }
 }

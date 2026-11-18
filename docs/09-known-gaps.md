@@ -1,9 +1,9 @@
 # Known gaps and missing behavior
 
-Last audited: 2026-11-18, code at the 0.10.0 release: real text, scrollback,
-selection, clipboard, mouse reporting, links, OSC events, divider and sidebar
-dragging, the palette, attention and settings panels, agent detection, autosave
-and the log. This is the
+Last audited: 2026-11-18, code at the 0.11.0 release: real text, scrollback,
+selection with auto-scroll, clipboard, mouse reporting, IME, links, OSC events,
+divider and sidebar dragging, the palette, attention and settings panels, agent
+detection, autosave, journal, accessibility, logs and per-platform archives. This is the
 honest inventory of what is **not** in the tree. It separates missing UI, missing
 platform work, and deliberate non-goals so the three do not get confused.
 
@@ -16,27 +16,26 @@ app itself has the gaps listed in
 
 ### Terminal rendering
 
-- **One font, no configuration.** The system monospace face at `fontSize` ×
-  `fontScale`; there is no family, weight, line-height or zoom control, and no
-  per-font metric tuning.
+- **One font family.** The system monospace face at `fontSize` × `fontScale`;
+  there is no family, weight, line-height or zoom control, and no per-font
+  metric tuning.
 - **No text effects beyond bold/italic/dim/underline.** No strikethrough, blink,
   underline colour, hyperlinks or per-cell font changes.
 - **No scrollbar.** Wheel and Shift+Page keys scroll, but nothing shows how far
   into the scrollback the view is.
 - **No audible bell, dock badge or per-provider mute.** Bells flash a pane ring;
   OSC 9/777 notifications also reach the desktop on macOS and Linux.
-- **No search**, no graphics protocols (sixel/kitty/iTerm images) and no
-  hyperlink (`OSC 8`) handling.
-- **No IME preedit.** Committed text works; there is no composition window, and
-  dead keys depend on the platform.
+- **No search**, no graphics protocols (sixel/kitty/iTerm images), and no
+  hyperlink (`OSC 8`) hover styling beyond the text scan.
+
 
 ### Input and clipboard
 
 - **No selection auto-scroll.** Dragging past the top or bottom of a pane does
   not extend the view, and words cannot be dragged over.
-- **No accessibility.** The window is one painted buffer: no accessibility tree,
-  screen-reader labels, high-contrast mode or keyboard traversal of the sidebar
-  and tabs.
+- **Accessibility covers the terminal only.** The focused pane is a `Terminal`
+  node with its text; the sidebar, tabs and panels are not in the tree, and there
+  is no high-contrast mode.
 - **No settings window.** `⌘,` prints "no window yet"; font size, font scale,
   sidebar density and shortcuts are edited by hand in `config.json`.
 - **The palette lists actions only.** It has no workspace or session commands
@@ -81,8 +80,9 @@ app itself has the gaps listed in
 
 - **Linux/X11 is the only scripted path.** Wayland, Windows and macOS are compile
   and test coverage; punch-through to a real desktop is manual.
-- **No packaging.** No `.deb`/AppImage/Flatpak, Windows installer, `.app`
-  wrapper, signing, auto-update or single-instance handoff.
+- **No installers.** Releases publish the portable window as single-binary
+  archives (plus the macOS `.app`); there is no `.deb`/AppImage/Flatpak, Windows
+  installer, signing or auto-update.
 - **HiDPI and multi-monitor** are exercised through winit's scale factor and the
   font rebuild on scale change; mixed-DPI hotplug is untested.
 
@@ -171,7 +171,7 @@ notarized distribution, and the final decision between this renderer and GTK4 +
 | `berth-core`, `berth-transport`, `berth-server` | Unit + integration tests | Linux local; Ubuntu/macOS/Windows CI |
 | `berth-cli` | Integration round-trip | Linux local; CI |
 | `berth-headless` | PTY integration test + OSC/meta unit tests | Linux local; CI |
-| `berth-gui` | Geometry, view-model, font, config, keymap, mouse, link and panel tests | PNG frames on macOS; Xvfb smoke + artifact on Linux CI |
+| `berth-gui` | Geometry, view-model, font, config, keymap, mouse, link, panel, a11y and journal tests | PNG frames on macOS; Xvfb smoke + artifact on Linux CI; release archives per platform |
 | macOS app | Swift tests + build in CI | manual daily use |
 
 ## 7. Recommended order

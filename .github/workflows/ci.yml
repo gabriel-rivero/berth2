@@ -70,6 +70,64 @@ jobs:
           ./scripts/bindings.sh
           git diff --exit-code -- app/Sources/BerthCore app/Sources/berth_ffiFFI
 
+  # The portable window, packaged per platform and attached to tagged releases.
+  portable:
+    name: portable (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x86_64
+          - os: macos-15
+            target: macos-aarch64
+          - os: windows-latest
+            target: windows-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - name: build
+        run: cargo build --release -p berth-gui
+        working-directory: core
+      - name: package
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp core/target/release/berth-gui.exe dist/
+            (cd dist && 7z a "../berth-gui-${version}-${{ matrix.target }}.zip" berth-gui.exe >/dev/null)
+          else
+            cp core/target/release/berth-gui dist/
+            tar -czf "berth-gui-${version}-${{ matrix.target }}.tar.gz" -C dist berth-gui
+          fi
+          ls -la berth-gui-*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: portable-${{ matrix.target }}
+          path: berth-gui-*
+          retention-days: 7
+
+  # Attach the portable archives to the release the app job published.
+  portable-release:
+    needs: [app, portable]
+    runs-on: ubuntu-latest
+    if: always() && startsWith(github.ref, 'refs/tags/v') && needs.app.result == 'success'
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: portable-*
+          merge-multiple: true
+          path: portable
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: portable/*
+          prerelease: true
+
   # The real product: pinned Ghostty engine + AppKit shell, built into a .app.
   app:
     runs-on: macos-15
@@ -191,6 +249,9 @@ jobs:
             echo
             echo "Download \`Berth-*.zip\`, unzip, and right-click → Open the first"
             echo "time (the app is ad-hoc signed, not notarized)."
+            echo
+            echo "The portable window is in \`berth-gui-*\` (Linux/Windows/macOS,"
+            echo "unsigned, one binary, run it from a terminal)."
             echo
           } > release-notes.md
           awk -v ver="$version" '

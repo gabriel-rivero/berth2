@@ -15,16 +15,17 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use berth_core::model::Orientation;
-use berth_core::{AppState, CoreError, Request, Response, SurfaceOps, paths};
+use berth_core::{AppState, CoreError, ReadScope, Request, Response, SurfaceOps, paths};
 use berth_headless::{MouseEncoding, MouseMode, PtyHost, restore_session, save_session};
 use berth_server::{Server, ServerConfig, ServerHandle, SocketMode, auth};
 use winit::application::ApplicationHandler;
-use winit::dpi::{LogicalSize, PhysicalSize};
-use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
+use winit::event::{ElementState, Ime, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{CursorIcon, Window, WindowId};
 
+mod a11y;
 mod config;
 mod desktop;
 mod font;
@@ -249,13 +250,22 @@ fn main() {
         }
     }
 
-    let event_loop = match EventLoop::new() {
+    let event_loop = match EventLoop::<UserEvent>::with_user_event().build() {
         Ok(event_loop) => event_loop,
         Err(error) => {
             eprintln!("berth-gui: event loop: {error}");
             std::process::exit(1);
         }
     };
+    let proxy = event_loop.create_proxy();
+    {
+        let proxy = proxy.clone();
+        if let Err(error) = ctrlc::set_handler(move || {
+            let _ = proxy.send_event(UserEvent::Quit);
+        }) {
+            eprintln!("berth-gui: signal handler: {error}");
+        }
+    }
     event_loop.set_control_flow(ControlFlow::Wait);
 
     let mut app = Gui {
@@ -293,6 +303,11 @@ fn main() {
         window_focused: true,
         overlay: None,
         mouse_down: None,
+        preedit: None,
+        a11y: None,
+        a11y_active: false,
+        a11y_text: String::new(),
+        proxy: proxy.clone(),
         cursor_icon: CursorIcon::Default,
         last_detect: Instant::now(),
         last_sweep: Instant::now(),
@@ -308,6 +323,19 @@ fn main() {
     }
     if app.exit_code != 0 {
         std::process::exit(app.exit_code);
+    }
+}
+
+/// Events the window sends itself: accessibility requests from the platform
+/// adapter, and a clean-quit request from the signal handler.
+enum UserEvent {
+    A11y(accesskit_winit::Event),
+    Quit,
+}
+
+impl From<accesskit_winit::Event> for UserEvent {
+    fn from(event: accesskit_winit::Event) -> Self {
+        Self::A11y(event)
     }
 }
 
@@ -427,6 +455,12 @@ struct Gui {
     last_sweep: Instant,
     /// Button currently held, for drag reports and local selection.
     mouse_down: Option<MouseButton>,
+    /// Composing text from an input method, shown at the cursor until commit.
+    preedit: Option<String>,
+    a11y: Option<accesskit_winit::Adapter>,
+    a11y_active: bool,
+    a11y_text: String,
+    proxy: EventLoopProxy<UserEvent>,
     cursor_icon: CursorIcon,
     save_due: Option<Instant>,
     save_seq: u64,
@@ -435,7 +469,7 @@ struct Gui {
     captured: bool,
 }
 
-impl ApplicationHandler for Gui {
+impl ApplicationHandler<UserEvent> for Gui {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
@@ -444,7 +478,10 @@ impl ApplicationHandler for Gui {
             Window::default_attributes()
                 .with_title("Berth")
                 .with_inner_size(LogicalSize::new(1180.0, 720.0))
-                .with_min_inner_size(LogicalSize::new(640.0, 320.0)),
+                .with_min_inner_size(LogicalSize::new(640.0, 320.0))
+                // The accessibility adapter must exist before the window is
+                // shown, so it starts hidden and is revealed below.
+                .with_visible(false),
         ) {
             Ok(window) => Arc::new(window),
             Err(error) => {
@@ -472,6 +509,12 @@ impl ApplicationHandler for Gui {
                 return;
             }
         };
+        window.set_ime_allowed(true);
+        self.a11y = Some(accesskit_winit::Adapter::with_event_loop_proxy(
+            &window,
+            self.proxy.clone(),
+        ));
+        window.set_visible(true);
         self.scale = window.scale_factor();
         self.sidebar_width = self.config.sidebar_pixels().max(config::MIN_SIDEBAR_WIDTH);
         self.context = Some(context);
@@ -489,11 +532,14 @@ impl ApplicationHandler for Gui {
         if self.window.as_ref().map(|window| window.id()) != Some(window_id) {
             return;
         }
+        if let Some(window) = self.window.clone()
+            && let Some(adapter) = self.a11y.as_mut()
+        {
+            adapter.process_event(&window, &event);
+        }
         match event {
             WindowEvent::CloseRequested => {
-                if let Err(error) = save_session(&self.state) {
-                    eprintln!("berth-gui: session.save: {error}");
-                }
+                self.save_and_close();
                 event_loop.exit();
             }
             WindowEvent::RedrawRequested => self.redraw(),
@@ -511,6 +557,7 @@ impl ApplicationHandler for Gui {
                 }
                 self.request_redraw();
             }
+            WindowEvent::Ime(ime) => self.ime(ime),
             WindowEvent::ModifiersChanged(modifiers) => {
                 self.modifiers = modifiers.state();
             }
@@ -558,6 +605,27 @@ impl ApplicationHandler for Gui {
         }
     }
 
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
+        match event {
+            UserEvent::Quit => {
+                self.save_and_close();
+                event_loop.exit();
+            }
+            UserEvent::A11y(event) => match event.window_event {
+                accesskit_winit::WindowEvent::InitialTreeRequested => {
+                    self.a11y_active = true;
+                    self.refresh_a11y();
+                }
+                accesskit_winit::WindowEvent::ActionRequested(request) => {
+                    self.a11y_action(request);
+                }
+                accesskit_winit::WindowEvent::AccessibilityDeactivated => {
+                    self.a11y_active = false;
+                }
+            },
+        }
+    }
+
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let smoke_done = self
             .smoke
@@ -568,18 +636,18 @@ impl ApplicationHandler for Gui {
                 eprintln!("berth-gui: smoke finished before the first frame");
                 self.exit_code = 1;
             }
-            if let Err(error) = save_session(&self.state) {
-                eprintln!("berth-gui: session.save: {error}");
-            }
+            self.save_and_close();
             event_loop.exit();
             return;
         }
         self.tick_agents();
         self.tick_save();
+        self.tick_selection_autoscroll();
+        if self.a11y_active {
+            self.refresh_a11y();
+        }
         if self.quit {
-            if let Err(error) = save_session(&self.state) {
-                eprintln!("berth-gui: session.save: {error}");
-            }
+            self.save_and_close();
             event_loop.exit();
             return;
         }
@@ -629,6 +697,68 @@ impl Gui {
             if !changed.is_empty() {
                 self.flush_events();
             }
+        }
+    }
+
+    /// Drag past the top or bottom of a pane and the view scrolls, extending the
+    /// selection with it.
+    fn tick_selection_autoscroll(&mut self) {
+        let Some(surface_id) = self.active_surface() else {
+            return;
+        };
+        if !self
+            .selection
+            .get(&surface_id)
+            .is_some_and(|selection| selection.dragging)
+        {
+            return;
+        }
+        let nav = self.nav();
+        let pane = {
+            let state = lock(&self.state);
+            ui::build_panes(&state, nav.area, nav.cell.height, nav.tab_height, None)
+                .0
+                .into_iter()
+                .find(|pane| pane.surface.as_deref() == Some(surface_id.as_str()))
+        };
+        let Some(pane) = pane else {
+            return;
+        };
+        let y = self.pointer.1.max(0.0) as usize;
+        let rows = (pane.content.h / nav.cell.height.max(1)).max(1);
+        let (older, row) = if y < pane.content.y {
+            (true, 0u16)
+        } else if y >= pane.content.bottom() {
+            (false, (rows - 1) as u16)
+        } else {
+            return;
+        };
+        let current = self.scroll.get(&surface_id).copied().unwrap_or(0);
+        let target = if older {
+            current + 1
+        } else {
+            current.saturating_sub(1)
+        };
+        if target == current {
+            return;
+        }
+        match self.host.set_scrollback(&surface_id, target) {
+            Ok(applied) => {
+                if applied == current {
+                    return;
+                }
+                let shift = applied as i32 - current as i32;
+                self.scroll.insert(surface_id.clone(), applied);
+                if let Some(selection) = self.selection.get_mut(&surface_id) {
+                    selection.shift(shift, u16::MAX);
+                    selection.head = Cell {
+                        row,
+                        col: selection.head.col,
+                    };
+                }
+                self.request_redraw();
+            }
+            Err(error) => eprintln!("berth-gui: autoscroll: {error}"),
         }
     }
 
@@ -1047,6 +1177,38 @@ impl Gui {
                 };
                 let font = self.font();
                 painter.screen(font, &screen, pane.content, &options);
+                if pane.focused
+                    && let Some(preedit) = self.preedit.clone()
+                {
+                    let (row, col) = screen.cursor;
+                    let origin = (
+                        pane.content.x + usize::from(col) * cell.width,
+                        pane.content.y + usize::from(row) * cell.height,
+                    );
+                    let text_width = preedit.chars().count() * cell.width;
+                    painter.fill(
+                        Rect::new(origin.0, origin.1, text_width.max(cell.width), cell.height),
+                        theme.terminal_bg,
+                    );
+                    let font = self.font();
+                    painter.text(
+                        font,
+                        origin,
+                        &preedit,
+                        font::TextStyle::NORMAL,
+                        theme.terminal_fg,
+                        pane.content.right().saturating_sub(origin.0),
+                    );
+                    painter.fill(
+                        Rect::new(
+                            origin.0,
+                            origin.1 + cell.height.saturating_sub(4),
+                            text_width.max(cell.width),
+                            1,
+                        ),
+                        theme.accent,
+                    );
+                }
             }
 
             if let Some(content) = self.panel_data() {
@@ -1088,6 +1250,7 @@ impl Gui {
             }
         }
 
+        self.update_ime_cursor(width, height);
         buffer
             .present()
             .map_err(|error| format!("softbuffer present: {error}"))?;
@@ -2562,6 +2725,117 @@ impl Gui {
             None => {}
         }
         self.request_redraw();
+    }
+
+    /// Publish the focused pane's text to the platform accessibility API when it
+    /// changed. Called once a second, not per frame.
+    fn refresh_a11y(&mut self) {
+        let Some(surface_id) = self.active_surface() else {
+            return;
+        };
+        let Ok(read) = self.host.read_text(&surface_id, ReadScope::Screen, 1 << 20) else {
+            return;
+        };
+        if read.text == self.a11y_text {
+            return;
+        }
+        self.a11y_text = read.text.clone();
+        let title = {
+            let state = lock(&self.state);
+            ui::active_workspace(&state)
+                .and_then(|id| state.workspace(&id).map(|workspace| workspace.name.clone()))
+                .map(|name| format!("Berth — {name}"))
+                .unwrap_or_else(|| "Berth".to_string())
+        };
+        let update = a11y::tree(&title, &read.text);
+        if let Some(adapter) = self.a11y.as_mut() {
+            adapter.update_if_active(|| update);
+        }
+    }
+
+    fn a11y_action(&mut self, request: accesskit::ActionRequest) {
+        match request.action {
+            accesskit::Action::Focus | accesskit::Action::Click => {
+                if let Some(surface_id) = self.active_surface() {
+                    self.activate(&surface_id);
+                }
+            }
+            accesskit::Action::ReplaceSelectedText => {
+                if let Some(accesskit::ActionData::Value(text)) = request.data
+                    && let Some(surface_id) = self.active_surface()
+                {
+                    if let Err(error) = self.host.send_text(&surface_id, &text) {
+                        eprintln!("berth-gui: a11y text: {error}");
+                    }
+                    self.reset_scroll(&surface_id);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Save the session and drop the journal, so a clean exit never looks like
+    /// a crash.
+    fn save_and_close(&mut self) {
+        if let Err(error) = save_session(&self.state) {
+            eprintln!("berth-gui: session.save: {error}");
+            log::line(&format!("session save failed on exit: {error}"));
+        }
+        if let Err(error) = berth_headless::clear_journal() {
+            log::line(&format!("journal clear failed: {error}"));
+        }
+    }
+
+    /// Input-method events. Commits are sent as text; composition is drawn at
+    /// the cursor until then.
+    fn ime(&mut self, ime: Ime) {
+        match ime {
+            Ime::Enabled | Ime::Disabled => self.preedit = None,
+            Ime::Preedit(text, _) => {
+                self.preedit = if text.is_empty() { None } else { Some(text) };
+            }
+            Ime::Commit(text) => {
+                self.preedit = None;
+                if let Some(surface_id) = self.active_surface() {
+                    if let Err(error) = self.host.send_text(&surface_id, &text) {
+                        eprintln!("berth-gui: ime: {error}");
+                    }
+                    self.reset_scroll(&surface_id);
+                }
+            }
+        }
+        self.request_redraw();
+    }
+
+    /// Move the IME candidate window to the focused cursor cell.
+    fn update_ime_cursor(&mut self, width: usize, height: usize) {
+        let Some(window) = self.window.clone() else {
+            return;
+        };
+        let cell = self.cell();
+        let area = self.content_area(width, height);
+        let panes = {
+            let state = lock(&self.state);
+            ui::build_panes(&state, area, cell.height, self.tab_height(), None).0
+        };
+        let Some(pane) = panes.iter().find(|pane| pane.focused) else {
+            return;
+        };
+        let Some(surface_id) = &pane.surface else {
+            return;
+        };
+        let Ok(view) = self.host.screen_view(surface_id) else {
+            return;
+        };
+        let (row, col) = view.cursor;
+        let position = PhysicalPosition::new(
+            (pane.content.x + usize::from(col) * cell.width) as i32,
+            (pane.content.y + usize::from(row) * cell.height) as i32,
+        );
+        window.set_ime_cursor_area(
+            position,
+            PhysicalSize::new(cell.width as u32, cell.height as u32),
+        );
     }
 
     // ---- keyboard ----------------------------------------------------

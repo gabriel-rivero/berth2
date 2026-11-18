@@ -11,7 +11,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.10.1"
+version = "0.11.0"
 edition = "2024"
 rust-version = "1.89"
 license = "MIT"
@@ -36,6 +36,11 @@ font8x8 = "0.3"
 cosmic-text = { version = "0.19", default-features = false, features = ["std", "swash"] }
 # System clipboard, text only.
 arboard = "3"
+# Screen-reader support for the window.
+accesskit = "0.17"
+accesskit_winit = "0.23"
+# Ctrl+C and SIGTERM save the session before the window exits.
+ctrlc = { version = "3", features = ["termination"] }
 
 [profile.release]
 opt-level = 3

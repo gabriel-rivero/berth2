@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.11.0
+
+The portable window closes the remaining daily-use parity with the AppKit shell
+and ships as a download.
+
+### Portable window: parity closure
+
+- Input methods: composition is drawn at the cursor and committed text is sent
+  on `Ime::Commit`; the candidate window follows the cursor cell. Dead keys and
+  CJK input work through the platform IME.
+- Selection auto-scrolls when a drag passes the top or bottom of a pane.
+- Crash journal: every save appends `journal.ndjson` (last five snapshots, like
+  the macOS shell), restore takes the newest of the snapshot and the journal, and
+  a clean exit clears it.
+- Accessibility: an AccessKit tree publishes the focused pane as a `Terminal`
+  node with its visible text and accepts `ReplaceSelectedText`; the window is
+  created hidden so the adapter exists before it is shown.
+- `Ctrl+C` and `SIGTERM` save the session and exit cleanly instead of losing the
+  last changes.
+- Releases now attach `berth-gui-<version>-<platform>` archives for Linux
+  x86_64, Windows x86_64 and macOS arm64, built by a new CI matrix job.
+
 ## 0.10.1
 
 ### Fixes

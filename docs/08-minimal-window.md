@@ -62,7 +62,7 @@ the macOS window's 12pt labels.
   any keystroke returns to the live screen. The cursor disappears while
   scrolled, like Ghostty.
 - Drag, shift-drag and double-click selection over the visible view or
-  scrollback; `Super+C`/`Ctrl+Shift+C` copies, `Super+V`/`Ctrl+Shift+V` pastes,
+  scrollback, with auto-scroll when the drag passes the top or bottom; `Super+C`/`Ctrl+Shift+C` copies, `Super+V`/`Ctrl+Shift+V` pastes,
   bracketed paste is honoured when the program enables it, and a multi-line
   paste opens a preview that sends only on Enter.
 - Mouse reporting: a program that enables X10, UTF-8 or SGR tracking receives
@@ -82,6 +82,15 @@ the macOS window's 12pt labels.
 - OSC 9/777 notifications reach the desktop through `osascript` on macOS and
   `notify-send` on Linux, in addition to the attention list. Agent rows show
   token counts and cost when the hooks report them.
+- Input methods: composition is shown at the cursor with an underline and the
+  committed text is sent on `Ime::Commit`; the candidate window follows the
+  cursor cell. Dead keys and CJK input work through the platform IME.
+- Accessibility: the window publishes an AccessKit tree with the focused pane as
+  a `Terminal` node carrying its visible text, refreshed when the text changes.
+  Screen readers can read the screen and send text through
+  `ReplaceSelectedText`.
+- `Ctrl+C` and `SIGTERM` save the session and exit cleanly, like closing the
+  window.
 - Passive agent detection runs once a second over surfaces without an agent,
   using the foreground process group (`tcgetpgrp` plus `/proc` on Linux and `ps`
   on macOS), then sweeps stale agents every 30 seconds. A `claude`, `codex` or
@@ -130,6 +139,10 @@ Options: `--socket`, `--mode off|local|trusted`, `--token`, `--no-restore`,
 `--smoke-ms <ms>`, `--smoke-png <path>`. `--mode` defaults to the `socket` key in
 `config.json`, then `local`.
 
+Releases also ship the portable window as `berth-gui-<version>-<platform>`
+archives (Linux x86_64, Windows x86_64, macOS arm64): single unsigned binaries,
+run from a terminal.
+
 A one-frame check, isolated from any running Berth:
 
 ```sh
@@ -148,18 +161,20 @@ These are the window's limits; [docs/09-known-gaps.md](09-known-gaps.md) has the
 full audited inventory.
 
 - **One window, one visible workspace.** No multi-window, no detachable panes.
-- **No IME preedit.** Committed text works; composition windows do not.
-- **No search, no tab reorder or rename, and no graphics protocols**
-  (sixel/kitty/iTerm images).
-- **No accessibility tree.** The window is one painted buffer.
+- **No graphics protocols** (sixel/kitty/iTerm images): `vt100` cannot carry
+  them, so images stay with the renderer decision.
+- **No search, tab rename or tab reorder.** Tracked on the roadmap, not present
+  in the macOS app either.
+- **No installers.** The release publishes archives; there is no `.deb`,
+  AppImage or Windows installer.
 - **Detection is process-name only**, and a Windows notification is not raised.
 - **Linux/X11 is the only scripted path.** Windows and Wayland are compile
   coverage; macOS runs the same code path and is the development host.
-- **Not packaged.** No installer or menu bar. A second launch refuses to start
-  when the endpoint is live, but it does not hand off to the first window.
+- **No menu bar or single-instance handoff.** A second launch refuses to start
+  when the endpoint is live but does not bring the first window forward.
 
 ## Next
 
-1. Search, IME preedit and tab reorder, the remaining daily-use gaps.
-2. OS notifications on Windows; dock/taskbar badges and mute.
-3. Packaging: installers, single-instance handoff, notarization.
+1. Search, tab rename and tab reorder (roadmap: they need core support).
+2. OS notifications on Windows; dock/taskbar badges.
+3. Installers and notarization for the portable archives.
