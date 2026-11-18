@@ -695,7 +695,21 @@ fn process_comm(pid: u32) -> Option<String> {
         .filter(|text| !text.is_empty())
 }
 
-#[cfg(not(target_os = "linux"))]
+/// macOS has no `/proc`; `ps` is the portable answer and is what the AppKit
+/// shell uses for passive detection too.
+#[cfg(target_os = "macos")]
+fn process_comm(pid: u32) -> Option<String> {
+    let output = std::process::Command::new("ps")
+        .args(["-o", "comm=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Some(text)
+        .filter(|text| !text.is_empty())
+        .map(|text| text.rsplit('/').next().unwrap_or(&text).to_string())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn process_comm(_pid: u32) -> Option<String> {
     None
 }
@@ -713,7 +727,21 @@ fn process_argv(pid: u32) -> Vec<String> {
         .unwrap_or_default()
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+fn process_argv(pid: u32) -> Vec<String> {
+    let Ok(output) = std::process::Command::new("ps")
+        .args(["-o", "args=", "-p", &pid.to_string()])
+        .output()
+    else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .map(str::to_string)
+        .collect()
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn process_argv(_pid: u32) -> Vec<String> {
     Vec::new()
 }

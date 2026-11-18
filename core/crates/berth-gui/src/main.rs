@@ -233,6 +233,11 @@ fn main() {
                 );
                 server = Some(handle);
             }
+            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+                eprintln!("berth-gui: {error}");
+                eprintln!("berth-gui: close the other instance, or pass --socket with a new path");
+                std::process::exit(1);
+            }
             Err(error) => eprintln!("berth-gui: server not started: {error}"),
         }
     }
@@ -279,6 +284,10 @@ fn main() {
         exit_announced: HashMap::new(),
         window_focused: true,
         overlay: None,
+        last_detect: Instant::now(),
+        last_sweep: Instant::now(),
+        save_due: None,
+        save_seq: 0,
         quit: false,
         captured: false,
     };
@@ -377,6 +386,10 @@ struct Gui {
     exit_announced: HashMap<String, bool>,
     window_focused: bool,
     overlay: Option<Overlay>,
+    last_detect: Instant,
+    last_sweep: Instant,
+    save_due: Option<Instant>,
+    save_seq: u64,
     /// Set when a one-frame run (PNG smoke) has written its frame.
     quit: bool,
     captured: bool,
@@ -507,6 +520,8 @@ impl ApplicationHandler for Gui {
             event_loop.exit();
             return;
         }
+        self.tick_agents();
+        self.tick_save();
         if self.quit {
             if let Err(error) = save_session(&self.state) {
                 eprintln!("berth-gui: session.save: {error}");
@@ -524,6 +539,64 @@ impl ApplicationHandler for Gui {
 }
 
 impl Gui {
+    /// Passive detection, the same cadence as the macOS shell: once a second for
+    /// surfaces without an agent, then a stale sweep every 30 seconds.
+    fn tick_agents(&mut self) {
+        if self.last_detect.elapsed() < Duration::from_secs(1) {
+            return;
+        }
+        self.last_detect = Instant::now();
+        let candidates: Vec<String> = {
+            let state = lock(&self.state);
+            state
+                .surfaces
+                .values()
+                .filter(|surface| surface.pid.is_some())
+                .filter(|surface| state.agent_for_surface(&surface.id).is_none())
+                .map(|surface| surface.id.clone())
+                .collect()
+        };
+        for surface_id in candidates {
+            if !self.host.is_alive(&surface_id) {
+                continue;
+            }
+            let params = serde_json::json!({"surface_id": surface_id});
+            if let Err(error) = self.dispatch("agent.detect", params) {
+                eprintln!("berth-gui: agent.detect: {error}");
+            }
+        }
+        if self.last_sweep.elapsed() >= Duration::from_secs(30) {
+            self.last_sweep = Instant::now();
+            let now = berth_core::time::now_ms();
+            let changed = {
+                let mut state = lock(&self.state);
+                state.sweep_stale(now, 180_000, self.host.as_ref())
+            };
+            if !changed.is_empty() {
+                self.flush_events();
+            }
+        }
+    }
+
+    /// Write the snapshot half a second after the last core event, like the
+    /// macOS autosave. Watching the event sequence covers changes made by the
+    /// server thread, not only the ones this window dispatched.
+    fn tick_save(&mut self) {
+        let seq = lock(&self.state).last_seq();
+        if seq != self.save_seq {
+            self.save_seq = seq;
+            self.save_due = Some(Instant::now() + Duration::from_millis(500));
+        }
+        if let Some(due) = self.save_due
+            && Instant::now() >= due
+        {
+            self.save_due = None;
+            if let Err(error) = save_session(&self.state) {
+                eprintln!("berth-gui: autosave: {error}");
+            }
+        }
+    }
+
     fn sync_scale(&mut self) {
         let Some(window) = &self.window else {
             return;
@@ -572,7 +645,7 @@ impl Gui {
     }
 
     fn dispatch(
-        &self,
+        &mut self,
         method: &str,
         params: serde_json::Value,
     ) -> Result<serde_json::Value, CoreError> {
@@ -598,14 +671,16 @@ impl Gui {
     }
 
     /// Publish core events produced by actions the window took directly.
-    fn flush_events(&self) {
+    fn flush_events(&mut self) {
         let events = lock(&self.state).drain_events();
-        let Some(server) = &self.server else {
+        if events.is_empty() {
             return;
-        };
-        for event in events {
-            if let Ok(line) = serde_json::to_string(&event) {
-                server.broadcast(&line);
+        }
+        if let Some(server) = &self.server {
+            for event in events {
+                if let Ok(line) = serde_json::to_string(&event) {
+                    server.broadcast(&line);
+                }
             }
         }
     }

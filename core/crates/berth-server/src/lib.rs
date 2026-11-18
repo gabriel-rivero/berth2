@@ -126,6 +126,18 @@ impl Server {
             SocketMode::Trusted | SocketMode::Off => self.config.token,
         };
 
+        if self.config.mode != SocketMode::Off
+            && berth_transport::connect(&self.config.path).is_ok()
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AddrInUse,
+                format!(
+                    "another Berth is already listening on {}",
+                    self.config.path.display()
+                ),
+            ));
+        }
+
         let shared = Arc::new(Shared {
             state: self.state,
             ops: self.ops,
@@ -147,12 +159,17 @@ impl Server {
         let mut handle = ServerHandle {
             shared: Arc::clone(&shared),
             thread: None,
+            owns_endpoint: false,
         };
         if self.config.mode == SocketMode::Off {
             return Ok(handle);
         }
 
+        // A live instance owns its endpoint. Binding unlinks a stale socket
+        // file, so the probe above keeps a second copy from cutting the first
+        // one off from the CLI.
         let listener = berth_transport::bind(&self.config.path)?;
+        handle.owns_endpoint = true;
         let thread = thread::Builder::new()
             .name("berth-accept".into())
             .spawn(move || accept_loop(listener, shared))?;
@@ -165,6 +182,8 @@ impl Server {
 pub struct ServerHandle {
     shared: Arc<Shared>,
     thread: Option<JoinHandle<()>>,
+    /// Only the handle that bound the endpoint may unlink it on stop.
+    owns_endpoint: bool,
 }
 
 impl ServerHandle {
@@ -199,7 +218,7 @@ impl ServerHandle {
             let _ = thread.join();
         }
         #[cfg(unix)]
-        {
+        if self.owns_endpoint {
             let _ = std::fs::remove_file(&self.shared.path);
         }
     }
@@ -712,4 +731,41 @@ fn inject_auth_mode(response: &str, mode: &str) -> String {
         result["auth"] = json!(mode);
     }
     serde_json::to_string(&value).unwrap_or_else(|_| response.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use berth_core::{AppState, NullOps};
+
+    fn temp_socket(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "berth-server-{tag}-{}-{}",
+            std::process::id(),
+            berth_core::time::now_ms()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        dir.join("berth.sock")
+    }
+
+    fn server(path: &std::path::Path) -> Server {
+        Server::new(
+            ServerConfig::new(path, SocketMode::Trusted),
+            Arc::new(Mutex::new(AppState::default())),
+            Arc::new(NullOps),
+        )
+    }
+
+    #[test]
+    fn given_a_live_server_when_a_second_starts_then_it_refuses_the_endpoint() {
+        let path = temp_socket("live");
+        let first = server(&path).start().expect("first server starts");
+        let error = server(&path).start().expect_err("second must refuse");
+        assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse);
+        // The first instance is untouched: its endpoint still accepts clients.
+        assert!(berth_transport::connect(&path).is_ok());
+        drop(first);
+        let third = server(&path).start();
+        assert!(third.is_ok(), "a freed endpoint can be bound again");
+    }
 }

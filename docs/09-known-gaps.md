@@ -62,9 +62,9 @@ app itself has the gaps listed in
 
 ### Agents, attention and notifications
 
-- **No agent detection loop.** The protocol and `pid_info` support passive
-  detection; the window never calls `agent.detect`, so a Claude/Codex/opencode
-  process started by hand is not picked up.
+- **Detection is process-name only.** A provider is recognised from the
+  foreground process name and argv; an agent whose CLI name changed, or one
+  running through a wrapper script, is not detected.
 - **Notifications are only in the attention list.** `⌘I` lists unacknowledged
   notifications (Enter jumps and acknowledges); there is no filter, grouping or
   bulk acknowledge, and the list is not reachable from the sidebar.
@@ -74,11 +74,12 @@ app itself has the gaps listed in
 
 ### Session and lifecycle
 
-- **No autosave.** The snapshot is written on close, `session.save` and the smoke
-  exit; a crash or SIGTERM loses changes.
+- **Autosave is debounced, not journaled.** A change is written 500 ms after the
+  last event; a crash inside that window loses the last interaction, and there is
+  still no replayable journal.
 - **No crash journal.** `journal.ndjson` remains a macOS-store behavior.
-- **No single-instance guard.** A second window unlinks and rebinds the socket
-  path; the first instance keeps running with a dead endpoint.
+- **No single-instance handoff.** A second launch detects the live endpoint and
+  exits instead of rebinding it, but it cannot bring the first window forward.
 - **No logs.** The window writes nothing to `paths::log_dir`; diagnostics are
   stdout/stderr.
 
@@ -121,9 +122,10 @@ app itself has the gaps listed in
   check, per-client identity, audit trail, rate limit or documented client cap.
 - **`BERTH_TOKEN` is injected into child environments**, so processes in a
   terminal can read the token; `trusted` mode intentionally has no token check.
-- **Socket ownership is not exclusive.** `bind` removes a stale socket file and
-  rebinds; there is no lockfile/singleton handshake, so two servers can race for
-  the same path.
+- **Socket ownership is probed, not locked.** `Server::start` connects first and
+  refuses with `AddrInUse` when a live instance answers, and only the handle that
+  bound the endpoint unlinks it. Two starts that race inside the probe window can
+  still clash; there is no lockfile.
 - **CLI surface is incomplete.** No `tab`/`surface.create`, `session.save`,
   `workspace.select`, pane focus/close or workspace rename command; those exist
   only in the protocol. `berth schema` is documentation, not a typed client.

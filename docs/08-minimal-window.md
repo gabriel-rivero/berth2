@@ -65,6 +65,13 @@ the macOS window's 12pt labels.
   OSC 9/777 create a core notification.
 - A child exit is reported once as `surface.exited`; the pane keeps its final
   screen with a red "process exited" banner until the tab is closed.
+- Passive agent detection runs once a second over surfaces without an agent,
+  using the foreground process group (`tcgetpgrp` plus `/proc` on Linux and `ps`
+  on macOS), then sweeps stale agents every 30 seconds. A `claude`, `codex` or
+  `opencode` started inside a pane becomes a sidebar agent row.
+- The session autosaves 500 ms after the last core event, including changes made
+  by the CLI or hooks through the socket, so a crash loses at most one
+  interaction.
 - Keys go through the headless encoder: printable text, Ctrl/Alt/Shift
   combinations, Enter, Tab, Esc, Backspace, Delete, Insert, arrows, Home/End,
   Page keys and F1–F12.
@@ -132,7 +139,8 @@ full audited inventory.
   arrow.
 - **Linux/X11 is the only manually scripted path.** Windows and Wayland are
   compile coverage; macOS runs the same code path and is the development host.
-- **Spike, not packaged.** No installer, single-instance handoff or menu bar.
+- **Spike, not packaged.** No installer or menu bar. A second launch refuses to
+  start when the endpoint is live, but it does not hand off to the first window.
 
 ## Next
 

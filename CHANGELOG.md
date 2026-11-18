@@ -36,6 +36,17 @@
   surface that raised one on Enter. Both share one panel geometry, keyboard
   handling and hit testing; clicking outside or focusing another window closes
   them.
+- Passive agent detection runs in the window on the macOS cadence: once a second
+  over surfaces without an agent, then a stale sweep every 30 seconds. macOS
+  process names come from `ps`, so a `claude`/`codex`/`opencode` started inside a
+  pane appears as a sidebar agent row.
+- The session autosaves 500 ms after the last core event, including changes made
+  by another client through the socket.
+- `Server::start` probes the endpoint before binding and refuses with
+  `AddrInUse` when another Berth is listening, so a second launch can no longer
+  unlink a live socket. A handle that did not bind also no longer removes the
+  endpoint on drop, which previously made `--mode off` delete a running
+  instance's socket.
 - `config.json` is now read by the portable window: `fontSize`, `fontScale`,
   `compactSidebar`, `socket` and all 14 `shortcuts`, with a Ctrl-based default
   table outside macOS. `BERTH_CONFIG` overrides the path.
