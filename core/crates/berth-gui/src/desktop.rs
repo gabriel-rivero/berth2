@@ -34,6 +34,7 @@ pub fn notify(title: &str, body: &str) -> std::io::Result<()> {
 }
 
 /// Quote a string for AppleScript, escaping what would end it early.
+#[cfg(target_os = "macos")]
 pub fn apple_script_string(text: &str) -> String {
     let mut out = String::with_capacity(text.len() + 2);
     out.push('"');
@@ -49,7 +50,7 @@ pub fn apple_script_string(text: &str) -> String {
     out
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
 

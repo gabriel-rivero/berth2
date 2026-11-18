@@ -93,22 +93,35 @@ pub fn socket_path() -> PathBuf {
     default_socket_path()
 }
 
+#[cfg(windows)]
 fn default_socket_path() -> PathBuf {
-    #[cfg(windows)]
-    {
-        let user = env_string("USERNAME").unwrap_or_else(|| "default".into());
-        let user: String = user
-            .chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-            .collect();
-        return PathBuf::from(format!(r"\\.\pipe\berth-{user}"));
+    let user = env_string("USERNAME").unwrap_or_else(|| "default".into());
+    let user: String = user
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    PathBuf::from(format!(r"\\.\pipe\berth-{user}"))
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn default_socket_path() -> PathBuf {
+    if let Some(runtime) = env_path("XDG_RUNTIME_DIR") {
+        return runtime.join("berth").join("berth.sock");
     }
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        if let Some(runtime) = env_path("XDG_RUNTIME_DIR") {
-            return runtime.join("berth").join("berth.sock");
-        }
-    }
+    data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("berth.sock")
+}
+
+#[cfg(target_os = "macos")]
+fn default_socket_path() -> PathBuf {
+    data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("berth.sock")
+}
+
+#[cfg(not(any(unix, windows)))]
+fn default_socket_path() -> PathBuf {
     data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("berth.sock")
