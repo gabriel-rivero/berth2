@@ -168,6 +168,12 @@ pub struct SidebarRow {
     pub rect: Rect,
 }
 
+/// The rendered sidebar plus how many rows exist in total, for scroll limits.
+pub struct Sidebar {
+    pub rows: Vec<SidebarRow>,
+    pub total: usize,
+}
+
 /// The header button that creates a workspace, matching the macOS "+".
 pub fn new_workspace_button(sidebar: Rect) -> Rect {
     Rect::new(
@@ -246,10 +252,24 @@ pub fn workspace_agent<'a>(state: &'a AppState, workspace_id: &str) -> Option<&'
 }
 
 fn agent_view(agent: &AgentSurface, theme: &Theme) -> AgentView {
+    let mut detail = agent.detail.clone();
+    if agent.tokens_in + agent.tokens_out > 0 {
+        let tokens = agent.tokens_in + agent.tokens_out;
+        if !detail.is_empty() {
+            detail.push_str(" · ");
+        }
+        detail.push_str(&format!("{tokens} tok"));
+    }
+    if agent.cost_usd > 0.0 {
+        if !detail.is_empty() {
+            detail.push_str(" · ");
+        }
+        detail.push_str(&format!("${:.2}", agent.cost_usd));
+    }
     AgentView {
         glyph: Theme::provider_glyph(&agent.provider),
         name: agent.name.clone(),
-        detail: agent.detail.clone(),
+        detail,
         state_label: Theme::agent_state_label(agent.state.as_str()),
         color: theme.agent_state_color(agent.state.as_str()),
         progress: agent.progress,
@@ -278,9 +298,10 @@ pub fn build_sidebar(
     area: Rect,
     row_height: f64,
     theme: &Theme,
-) -> Vec<SidebarRow> {
+    scroll: usize,
+) -> Sidebar {
     let mut rows = Vec::new();
-    let mut y = area.y.saturating_add(SIDEBAR_HEADER);
+    let mut y = 0usize;
     let group_height = (GROUP_ROW_HEIGHT * row_height / WORKSPACE_ROW_HEIGHT) as usize;
     let workspace_height = row_height as usize;
 
@@ -357,9 +378,6 @@ pub fn build_sidebar(
             .map(|workspace| workspace.id.clone())
             .collect();
         for id in ordered_workspaces(state, &ids) {
-            if y + workspace_height > area.bottom() {
-                break;
-            }
             if let Some(row) = workspace_row(&id, y, workspace_height) {
                 y = y.saturating_add(workspace_height);
                 rows.push(row);
@@ -378,15 +396,32 @@ pub fn build_sidebar(
         .map(|workspace| workspace.id.clone())
         .collect();
     for id in ordered_workspaces(state, &loose) {
-        if y + workspace_height > area.bottom() {
-            break;
-        }
         if let Some(row) = workspace_row(&id, y, workspace_height) {
             y = y.saturating_add(workspace_height);
             rows.push(row);
         }
     }
-    rows
+
+    // Rows are laid out in virtual space, then scrolled and clipped to the
+    // list area below the header.
+    let total = rows.len();
+    let offset = rows.get(scroll).map(|row| row.rect.y).unwrap_or(y);
+    let top = area.y.saturating_add(SIDEBAR_HEADER);
+    let mut visible = Vec::with_capacity(total.saturating_sub(scroll));
+    for mut row in rows.into_iter().skip(scroll) {
+        row.rect.y = top + row.rect.y.saturating_sub(offset);
+        if row.rect.y >= area.bottom() {
+            break;
+        }
+        if let RowKind::Workspace(workspace) = &mut row.kind {
+            workspace.rect = row.rect;
+        }
+        visible.push(row);
+    }
+    Sidebar {
+        rows: visible,
+        total,
+    }
 }
 
 /// The visible workspace's panes, their tab strips and the draggable dividers.
@@ -639,11 +674,56 @@ mod tests {
     }
 
     #[test]
+    fn given_a_workspace_when_the_sidebar_is_built_then_rows_start_below_the_header() {
+        let mut state = AppState::default();
+        state
+            .create_workspace(Some("one"), None, None, &berth_core::NullOps)
+            .unwrap();
+        let sidebar = build_sidebar(
+            &state,
+            Rect::new(0, 0, 200, 400),
+            62.0,
+            &Theme::default(),
+            0,
+        );
+        assert_eq!(sidebar.total, 1);
+        assert_eq!(sidebar.rows[0].rect.y, SIDEBAR_HEADER);
+    }
+
+    #[test]
+    fn given_a_scrolled_sidebar_when_built_then_the_first_row_moves_up_by_rows() {
+        let mut state = AppState::default();
+        for index in 0..5 {
+            state
+                .create_workspace(Some(&format!("w{index}")), None, None, &berth_core::NullOps)
+                .unwrap();
+        }
+        let sidebar = build_sidebar(
+            &state,
+            Rect::new(0, 0, 200, 400),
+            62.0,
+            &Theme::default(),
+            2,
+        );
+        assert_eq!(sidebar.total, 5);
+        assert_eq!(sidebar.rows.len(), 3);
+        assert_eq!(sidebar.rows[0].rect.y, SIDEBAR_HEADER);
+        assert_eq!(sidebar.rows[1].rect.y, SIDEBAR_HEADER + 62);
+    }
+
+    #[test]
     fn given_two_workspaces_when_one_needs_attention_then_it_is_listed_first() {
         let mut state = AppState::default();
         let _quiet = workspace_with_agent(&mut state, "quiet", berth_core::AgentState::Thinking);
         let loud = workspace_with_agent(&mut state, "loud", berth_core::AgentState::WaitingInput);
-        let rows = build_sidebar(&state, Rect::new(0, 0, 200, 400), 62.0, &Theme::default());
+        let rows = build_sidebar(
+            &state,
+            Rect::new(0, 0, 200, 400),
+            62.0,
+            &Theme::default(),
+            0,
+        )
+        .rows;
         let first = rows.iter().find_map(|row| match &row.kind {
             RowKind::Workspace(workspace) => Some(workspace.id.clone()),
             RowKind::Group { .. } => None,
@@ -663,7 +743,14 @@ mod tests {
         if let Some(workspace) = state.workspace_mut(&pinned.id) {
             workspace.pinned = true;
         }
-        let rows = build_sidebar(&state, Rect::new(0, 0, 200, 400), 62.0, &Theme::default());
+        let rows = build_sidebar(
+            &state,
+            Rect::new(0, 0, 200, 400),
+            62.0,
+            &Theme::default(),
+            0,
+        )
+        .rows;
         let ids: Vec<String> = rows
             .iter()
             .filter_map(|row| match &row.kind {
@@ -690,7 +777,14 @@ mod tests {
         state
             .update_group(&group.id, None, None, Some(true))
             .unwrap();
-        let rows = build_sidebar(&state, Rect::new(0, 0, 200, 400), 62.0, &Theme::default());
+        let rows = build_sidebar(
+            &state,
+            Rect::new(0, 0, 200, 400),
+            62.0,
+            &Theme::default(),
+            0,
+        )
+        .rows;
         assert_eq!(rows.len(), 1);
         assert!(matches!(
             rows[0].kind,
@@ -702,7 +796,14 @@ mod tests {
         state
             .update_group(&group.id, None, None, Some(false))
             .unwrap();
-        let rows = build_sidebar(&state, Rect::new(0, 0, 200, 400), 62.0, &Theme::default());
+        let rows = build_sidebar(
+            &state,
+            Rect::new(0, 0, 200, 400),
+            62.0,
+            &Theme::default(),
+            0,
+        )
+        .rows;
         assert_eq!(rows.len(), 2);
         assert!(matches!(&rows[1].kind, RowKind::Workspace(w) if w.id == workspace.id));
     }
@@ -710,7 +811,14 @@ mod tests {
     #[test]
     fn given_no_workspace_when_the_sidebar_is_built_then_it_is_empty() {
         let state = AppState::default();
-        let rows = build_sidebar(&state, Rect::new(0, 0, 200, 400), 62.0, &Theme::default());
+        let rows = build_sidebar(
+            &state,
+            Rect::new(0, 0, 200, 400),
+            62.0,
+            &Theme::default(),
+            0,
+        )
+        .rows;
         assert!(rows.is_empty());
     }
 

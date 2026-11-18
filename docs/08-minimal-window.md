@@ -45,8 +45,13 @@ the macOS window's 12pt labels.
   the workspace name and cwd, an agent line and an OSC 9;4 progress bar.
 - The sidebar edge drags between 180 and 360 points; `+` and double-clicking
   empty space create a workspace; middle-click closes a workspace or tab.
+- The sidebar scrolls with the wheel, and dragging a row reorders workspaces
+  live through `workspace.move`.
 - `--smoke-ms` and `--smoke-png` render for headless checks; the PNG flag is the
-  visual diff tool used while closing the gap.
+  visual diff tool used while closing the gap, and CI runs `scripts/gui-smoke.sh`
+  under Xvfb and uploads the frame.
+- Breadcrumbs go to `paths::log_dir()/berth.log`, rotating once at 1 MiB, so a
+  crash leaves a trace next to the macOS app's log.
 
 **Terminal**
 
@@ -58,13 +63,25 @@ the macOS window's 12pt labels.
   scrolled, like Ghostty.
 - Drag, shift-drag and double-click selection over the visible view or
   scrollback; `Super+C`/`Ctrl+Shift+C` copies, `Super+V`/`Ctrl+Shift+V` pastes,
-  bracketed paste is honoured when the program enables it.
+  bracketed paste is honoured when the program enables it, and a multi-line
+  paste opens a preview that sends only on Enter.
+- Mouse reporting: a program that enables X10, UTF-8 or SGR tracking receives
+  presses, releases, drags and wheel events with modifier bits. Shift-click
+  always selects locally, so copy still works inside a TUI.
+- Links: `Super`-click (macOS) or `Ctrl`-click opens a URL or an absolute path
+  under the pointer with the platform handler. The pointer changes shape over
+  links, dividers, the sidebar edge and terminal text.
+- A thin scrollbar appears in a pane while its view is scrolled, so the position
+  in the scrollback is visible.
 - OSC 0/2 titles reach the core as `surface.title_changed` and become tab labels
   and the window title. OSC 7 sets the cwd, BEL and the visual bell increment
   `surface.bell`, OSC 9;4 reports progress, OSC 52 writes the clipboard, and
   OSC 9/777 create a core notification.
 - A child exit is reported once as `surface.exited`; the pane keeps its final
   screen with a red "process exited" banner until the tab is closed.
+- OSC 9/777 notifications reach the desktop through `osascript` on macOS and
+  `notify-send` on Linux, in addition to the attention list. Agent rows show
+  token counts and cost when the hooks report them.
 - Passive agent detection runs once a second over surfaces without an agent,
   using the foreground process group (`tcgetpgrp` plus `/proc` on Linux and `ps`
   on macOS), then sweeps stale agents every 30 seconds. A `claude`, `codex` or
@@ -84,7 +101,12 @@ the macOS window's 12pt labels.
 - `⌘I` opens the attention list: unacknowledged notifications newest first, with
   the level colour, body and workspace. Enter acknowledges the notification,
   selects its workspace and focuses the surface that raised it.
-- Clicking outside a panel or focusing another window closes it.
+- `⌘,` opens settings: font size, display scale, compact sidebar, socket mode,
+  and all 14 shortcuts. Arrows adjust or cycle a value, Enter toggles or starts
+  recording a chord, Backspace unbinds. Every change applies live and is written
+  to `config.json` with the keys the window does not own preserved.
+- Long panels scroll to follow the selection. Clicking outside a panel or
+  focusing another window closes it.
 
 **Window actions**
 
@@ -125,26 +147,19 @@ when Xvfb is absent.
 These are the window's limits; [docs/09-known-gaps.md](09-known-gaps.md) has the
 full audited inventory.
 
-- **No settings window.** `⌘,` is bound and prints "no window yet"; the palette
-  and attention list are the only panels, and settings are edited in
-  `config.json` by hand.
 - **One window, one visible workspace.** No multi-window, no detachable panes.
-- **No mouse reporting to the PTY.** Wheel scrolling is local; a program that
-  enables mouse tracking does not receive clicks or wheel events.
 - **No IME preedit.** Committed text works; composition windows do not.
-- **No search, links or graphics protocols** (sixel/kitty/iTerm images).
-- **No tab drag-reorder, no workspace drag-reorder, no sidebar scrolling.** Rows
-  past the bottom are clipped.
-- **No divider cursor change**; the grab band is 7 px and the pointer stays an
-  arrow.
-- **Linux/X11 is the only manually scripted path.** Windows and Wayland are
-  compile coverage; macOS runs the same code path and is the development host.
-- **Spike, not packaged.** No installer or menu bar. A second launch refuses to
-  start when the endpoint is live, but it does not hand off to the first window.
+- **No search, no tab reorder or rename, and no graphics protocols**
+  (sixel/kitty/iTerm images).
+- **No accessibility tree.** The window is one painted buffer.
+- **Detection is process-name only**, and a Windows notification is not raised.
+- **Linux/X11 is the only scripted path.** Windows and Wayland are compile
+  coverage; macOS runs the same code path and is the development host.
+- **Not packaged.** No installer or menu bar. A second launch refuses to start
+  when the endpoint is live, but it does not hand off to the first window.
 
 ## Next
 
-1. Settings window, the last overlay on an existing chord.
-2. Mouse reporting, IME preedit, link open.
-3. Workspace drag-reorder and sidebar scrolling.
-4. Packaging: single instance, Linux/Windows installers, CI window smoke.
+1. Search, IME preedit and tab reorder, the remaining daily-use gaps.
+2. OS notifications on Windows; dock/taskbar badges and mute.
+3. Packaging: installers, single-instance handoff, notarization.

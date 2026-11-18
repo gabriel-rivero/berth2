@@ -16,21 +16,26 @@ use std::time::{Duration, Instant};
 
 use berth_core::model::Orientation;
 use berth_core::{AppState, CoreError, Request, Response, SurfaceOps, paths};
-use berth_headless::{PtyHost, restore_session, save_session};
+use berth_headless::{MouseEncoding, MouseMode, PtyHost, restore_session, save_session};
 use berth_server::{Server, ServerConfig, ServerHandle, SocketMode, auth};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalSize};
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
-use winit::window::{Window, WindowId};
+use winit::window::{CursorIcon, Window, WindowId};
 
 mod config;
+mod desktop;
 mod font;
 mod keys;
 mod layout;
+mod links;
+mod log;
+mod mouse;
 mod paint;
 mod panel;
+mod settings;
 mod theme;
 mod ui;
 
@@ -165,6 +170,7 @@ fn main() {
     if let Some(warning) = warning {
         eprintln!("berth-gui: config skipped: {warning}");
     }
+    log::init();
     let socket = args.socket.clone().unwrap_or_else(paths::socket_path);
     let mode = args
         .mode
@@ -234,6 +240,7 @@ fn main() {
                 server = Some(handle);
             }
             Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+                log::line(&format!("endpoint busy: {error}"));
                 eprintln!("berth-gui: {error}");
                 eprintln!("berth-gui: close the other instance, or pass --socket with a new path");
                 std::process::exit(1);
@@ -275,6 +282,7 @@ fn main() {
         scale: 1.0,
         sidebar_visible: true,
         sidebar_width: 0.0,
+        sidebar_scroll: 0,
         drag: Drag::None,
         selection: HashMap::new(),
         scroll: HashMap::new(),
@@ -284,6 +292,8 @@ fn main() {
         exit_announced: HashMap::new(),
         window_focused: true,
         overlay: None,
+        mouse_down: None,
+        cursor_icon: CursorIcon::Default,
         last_detect: Instant::now(),
         last_sweep: Instant::now(),
         save_due: None,
@@ -303,22 +313,40 @@ fn main() {
 
 /// A modal panel over the window. Both variants are lists driven by the core.
 enum Overlay {
-    Palette { query: String, selected: usize },
-    Attention { selected: usize },
+    Palette {
+        query: String,
+        selected: usize,
+    },
+    Attention {
+        selected: usize,
+    },
+    Settings {
+        selected: usize,
+        /// The action whose next chord is being captured.
+        recording: Option<config::Action>,
+    },
+    /// Multi-line paste preview. The text is sent only on confirmation.
+    Confirm {
+        text: String,
+    },
 }
 
 impl Overlay {
     fn selected(&self) -> usize {
         match self {
-            Overlay::Palette { selected, .. } | Overlay::Attention { selected } => *selected,
+            Overlay::Palette { selected, .. }
+            | Overlay::Attention { selected }
+            | Overlay::Settings { selected, .. } => *selected,
+            Overlay::Confirm { .. } => 0,
         }
     }
 
     fn select(&mut self, index: usize) {
         match self {
-            Overlay::Palette { selected, .. } | Overlay::Attention { selected } => {
-                *selected = index;
-            }
+            Overlay::Palette { selected, .. }
+            | Overlay::Attention { selected }
+            | Overlay::Settings { selected, .. } => *selected = index,
+            Overlay::Confirm { .. } => {}
         }
     }
 }
@@ -327,7 +355,15 @@ impl Overlay {
 enum Drag {
     None,
     Divider(Divider),
-    SidebarWidth { start_x: f64, start_width: f64 },
+    /// A workspace row being dragged to a new position.
+    Workspace {
+        id: String,
+        last_target: Option<String>,
+    },
+    SidebarWidth {
+        start_x: f64,
+        start_width: f64,
+    },
 }
 
 struct Click {
@@ -377,6 +413,7 @@ struct Gui {
     scale: f64,
     sidebar_visible: bool,
     sidebar_width: f64,
+    sidebar_scroll: usize,
     drag: Drag,
     selection: HashMap<String, Selection>,
     scroll: HashMap<String, usize>,
@@ -388,6 +425,9 @@ struct Gui {
     overlay: Option<Overlay>,
     last_detect: Instant,
     last_sweep: Instant,
+    /// Button currently held, for drag reports and local selection.
+    mouse_down: Option<MouseButton>,
+    cursor_icon: CursorIcon,
     save_due: Option<Instant>,
     save_seq: u64,
     /// Set when a one-frame run (PNG smoke) has written its frame.
@@ -476,7 +516,11 @@ impl ApplicationHandler for Gui {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.pointer = (position.x, position.y);
+                if self.mouse_down.is_some() && self.report_motion() {
+                    return;
+                }
                 self.drag_to_pointer();
+                self.update_cursor_icon();
             }
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
@@ -485,9 +529,19 @@ impl ApplicationHandler for Gui {
             } => self.mouse_pressed(button),
             WindowEvent::MouseInput {
                 state: ElementState::Released,
-                button: MouseButton::Left,
+                button,
                 ..
             } => {
+                if self.report_button(button, true) {
+                    self.mouse_down = None;
+                    self.request_redraw();
+                    return;
+                }
+                self.mouse_down = None;
+                if button != MouseButton::Left {
+                    self.request_redraw();
+                    return;
+                }
                 self.drag = Drag::None;
                 if let Some(surface_id) = self.active_surface()
                     && let Some(selection) = self.selection.get_mut(&surface_id)
@@ -592,6 +646,7 @@ impl Gui {
         {
             self.save_due = None;
             if let Err(error) = save_session(&self.state) {
+                log::line(&format!("autosave failed: {error}"));
                 eprintln!("berth-gui: autosave: {error}");
             }
         }
@@ -794,6 +849,9 @@ impl Gui {
                 if let Err(error) = self.dispatch("notification.create", params) {
                     eprintln!("berth-gui: notification.create: {error}");
                 }
+                if let Err(error) = desktop::notify("Berth", &body) {
+                    log::line(&format!("desktop notification failed: {error}"));
+                }
             }
         }
     }
@@ -919,7 +977,9 @@ impl Gui {
                 Rect::new(0, 0, area.x, height),
                 self.workspace_row_height(),
                 &theme,
+                self.sidebar_scroll,
             )
+            .rows
         } else {
             Vec::new()
         };
@@ -989,19 +1049,27 @@ impl Gui {
                 painter.screen(font, &screen, pane.content, &options);
             }
 
-            if let Some((title, query, rows, selected)) = self.panel_data() {
-                let geometry =
-                    panel::geometry(Rect::new(0, 0, width, height), self.scale, query.is_some());
+            if let Some(content) = self.panel_data() {
+                let geometry = panel::geometry(
+                    Rect::new(0, 0, width, height),
+                    self.scale,
+                    content.query.is_some(),
+                );
                 let font = self.chrome_font();
+                let row_height = font.cell().height + 8;
+                let visible = panel::visible_rows(geometry.rows, row_height);
+                let first = panel::first_visible(content.selected, content.rows.len(), visible);
                 painter.panel(
                     font,
                     &paint::PanelStyle {
                         theme: &theme,
                         geometry: &geometry,
-                        title: &title,
-                        query: query.as_deref(),
-                        rows: &rows,
-                        selected,
+                        title: &content.title,
+                        query: content.query.as_deref(),
+                        rows: &content.rows,
+                        selected: content.selected,
+                        first,
+                        hint: &content.hint,
                     },
                 );
             }
@@ -1054,9 +1122,13 @@ impl Gui {
             theme.text_tertiary,
             area.w.saturating_sub(24),
         );
+        let button = ui::new_workspace_button(area);
         painter.text(
             font,
-            (area.w.saturating_sub(cell.width + 12), 8),
+            (
+                button.x + button.w.saturating_sub(cell.width) / 2,
+                button.y + button.h.saturating_sub(cell.height) / 2,
+            ),
             "+",
             font::TextStyle::NORMAL,
             theme.text_secondary,
@@ -1073,6 +1145,222 @@ impl Gui {
 
     // ---- mouse -------------------------------------------------------
 
+    /// The pane and grid cell under a point, with its mouse-tracking settings.
+    fn mouse_target(&mut self, point: (usize, usize)) -> Option<MouseTarget> {
+        let nav = self.nav();
+        let (panes, _) = {
+            let state = lock(&self.state);
+            ui::build_panes(&state, nav.area, nav.cell.height, nav.tab_height, None)
+        };
+        let pane = ui::pane_at(&panes, point.0, point.1)?;
+        let surface_id = pane.surface.clone()?;
+        if !pane.content.contains(point.0, point.1) {
+            return None;
+        }
+        let view = self.host.screen_view(&surface_id).ok()?;
+        Some(MouseTarget {
+            surface_id,
+            col: ((point.0.saturating_sub(pane.content.x)) / nav.cell.width.max(1)) as u16,
+            row: ((point.1.saturating_sub(pane.content.y)) / nav.cell.height.max(1)) as u16,
+            mode: view.mouse_mode,
+            encoding: view.mouse_encoding,
+        })
+    }
+
+    fn send_mouse(&self, target: &MouseTarget, report: mouse::Report) {
+        if let Some(bytes) = mouse::encode(report, target.encoding)
+            && let Err(error) = self.host.send_bytes(&target.surface_id, &bytes)
+        {
+            eprintln!("berth-gui: mouse: {error}");
+        }
+    }
+
+    fn modifiers_bits(&self) -> mouse::Modifiers {
+        mouse::Modifiers {
+            shift: self.modifiers.shift_key(),
+            alt: self.modifiers.alt_key(),
+            ctrl: self.modifiers.control_key(),
+        }
+    }
+
+    fn report_button(&mut self, button: MouseButton, released: bool) -> bool {
+        let Some(button) = mouse_button(button) else {
+            return false;
+        };
+        let point = (
+            self.pointer.0.max(0.0) as usize,
+            self.pointer.1.max(0.0) as usize,
+        );
+        let Some(target) = self.mouse_target(point) else {
+            return false;
+        };
+        if !target.mode.is_on() || self.modifiers.shift_key() {
+            return false;
+        }
+        if !mouse::should_report(target.mode, !released) {
+            return false;
+        }
+        self.send_mouse(
+            &target,
+            mouse::Report {
+                col: target.col,
+                row: target.row,
+                button,
+                release: released,
+                motion: false,
+                modifiers: self.modifiers_bits(),
+            },
+        );
+        true
+    }
+
+    fn report_wheel(&mut self, up: bool) -> bool {
+        let point = (
+            self.pointer.0.max(0.0) as usize,
+            self.pointer.1.max(0.0) as usize,
+        );
+        let Some(target) = self.mouse_target(point) else {
+            return false;
+        };
+        if !target.mode.is_on() || self.modifiers.shift_key() {
+            return false;
+        }
+        self.send_mouse(
+            &target,
+            mouse::Report {
+                col: target.col,
+                row: target.row,
+                button: if up {
+                    mouse::Button::WheelUp
+                } else {
+                    mouse::Button::WheelDown
+                },
+                release: false,
+                motion: false,
+                modifiers: self.modifiers_bits(),
+            },
+        );
+        true
+    }
+
+    /// The link under the pointer, if any, with the surface and cell it lives in.
+    fn link_under_pointer(&mut self) -> Option<String> {
+        if self.overlay.is_some() {
+            return None;
+        }
+        let point = (
+            self.pointer.0.max(0.0) as usize,
+            self.pointer.1.max(0.0) as usize,
+        );
+        let target = self.mouse_target(point)?;
+        let row = self.host.line_text(&target.surface_id, target.row).ok()?;
+        links::link_at(&row, target.col as usize).map(|(_, _, link)| link)
+    }
+
+    fn open_link_under_pointer(&mut self) {
+        if let Some(link) = self.link_under_pointer()
+            && let Err(error) = links::open(&link)
+        {
+            eprintln!("berth-gui: open {link}: {error}");
+        }
+    }
+
+    /// Pointer shape for the element under it.
+    fn update_cursor_icon(&mut self) {
+        let Some(window) = self.window.clone() else {
+            return;
+        };
+        let point = (
+            self.pointer.0.max(0.0) as usize,
+            self.pointer.1.max(0.0) as usize,
+        );
+        let icon = self.cursor_icon_at(point);
+        if icon != self.cursor_icon {
+            self.cursor_icon = icon;
+            window.set_cursor(icon);
+        }
+    }
+
+    fn cursor_icon_at(&mut self, point: (usize, usize)) -> CursorIcon {
+        if self.overlay.is_some() {
+            return CursorIcon::Default;
+        }
+        let nav = self.nav();
+        let (panes, dividers) = {
+            let state = lock(&self.state);
+            ui::build_panes(&state, nav.area, nav.cell.height, nav.tab_height, None)
+        };
+        if let Some(divider) = dividers
+            .iter()
+            .find(|divider| divider.grab.contains(point.0, point.1))
+        {
+            return match divider.orientation {
+                Orientation::Horizontal => CursorIcon::ColResize,
+                Orientation::Vertical => CursorIcon::RowResize,
+            };
+        }
+        if self.sidebar_visible
+            && point.0 < nav.area.x
+            && (point.0 as f64 - self.sidebar_pixels() as f64).abs() <= DIVIDER_EDGE as f64
+        {
+            return CursorIcon::ColResize;
+        }
+        let Some(pane) = ui::pane_at(&panes, point.0, point.1) else {
+            return CursorIcon::Default;
+        };
+        if pane.tab_bar.contains(point.0, point.1) {
+            return CursorIcon::Pointer;
+        }
+        if pane.content.contains(point.0, point.1) {
+            if self.reporting_to_pty(point) {
+                return CursorIcon::Default;
+            }
+            if self.link_under_pointer().is_some() {
+                return CursorIcon::Pointer;
+            }
+            return CursorIcon::Text;
+        }
+        CursorIcon::Default
+    }
+
+    fn reporting_to_pty(&mut self, point: (usize, usize)) -> bool {
+        self.mouse_target(point)
+            .map(|target| target.mode.is_on())
+            .unwrap_or(false)
+    }
+
+    fn report_motion(&mut self) -> bool {
+        let Some(held) = self.mouse_down else {
+            return false;
+        };
+        let Some(button) = mouse_button(held) else {
+            return false;
+        };
+        let point = (
+            self.pointer.0.max(0.0) as usize,
+            self.pointer.1.max(0.0) as usize,
+        );
+        let Some(target) = self.mouse_target(point) else {
+            return false;
+        };
+        let mode = target.mode;
+        if !matches!(mode, MouseMode::Drag | MouseMode::Motion) {
+            return false;
+        }
+        self.send_mouse(
+            &target,
+            mouse::Report {
+                col: target.col,
+                row: target.row,
+                button,
+                release: false,
+                motion: true,
+                modifiers: self.modifiers_bits(),
+            },
+        );
+        true
+    }
+
     fn mouse_pressed(&mut self, button: MouseButton) {
         let point = (
             self.pointer.0.max(0.0) as usize,
@@ -1083,6 +1371,16 @@ impl Gui {
                 self.overlay_click(point);
             }
             self.request_redraw();
+            return;
+        }
+        let primary = self.modifiers.super_key()
+            || (!cfg!(target_os = "macos") && self.modifiers.control_key());
+        if button == MouseButton::Left && primary {
+            self.open_link_under_pointer();
+            return;
+        }
+        if self.report_button(button, false) {
+            self.mouse_down = Some(button);
             return;
         }
         match button {
@@ -1101,7 +1399,9 @@ impl Gui {
             Rect::new(0, 0, nav.area.x, nav.height),
             self.workspace_row_height(),
             &self.theme,
-        );
+            self.sidebar_scroll,
+        )
+        .rows;
         drop(state);
         if let Some(row) = rows.iter().find(|row| row.rect.contains(point.0, point.1))
             && let ui::RowKind::Workspace(workspace) = &row.kind
@@ -1242,7 +1542,9 @@ impl Gui {
                 Rect::new(0, 0, nav.area.x, nav.height),
                 self.workspace_row_height(),
                 &self.theme,
+                self.sidebar_scroll,
             )
+            .rows
         };
         let Some(row) = rows.iter().find(|row| row.rect.contains(point.0, point.1)) else {
             if self.same_click(point, ClickTarget::SidebarEmpty) {
@@ -1264,6 +1566,10 @@ impl Gui {
             }
             ui::RowKind::Workspace(workspace) => {
                 self.select_workspace(&workspace.id);
+                self.drag = Drag::Workspace {
+                    id: workspace.id.clone(),
+                    last_target: None,
+                };
             }
         }
     }
@@ -1283,6 +1589,92 @@ impl Gui {
             point,
             target,
         });
+    }
+
+    /// Wheel scrolling for the sidebar, clamped so the last row can be reached.
+    fn scroll_sidebar(&mut self, lines: i32) {
+        let (width, height) = self
+            .window
+            .as_ref()
+            .map(|window| {
+                let size = window.inner_size();
+                (size.width as usize, size.height as usize)
+            })
+            .unwrap_or((0, 0));
+        let area = Rect::new(0, 0, self.sidebar_pixels(), height);
+        let row_height = self.workspace_row_height() as usize;
+        let capacity = area
+            .h
+            .saturating_sub(ui::SIDEBAR_HEADER)
+            .checked_div(row_height.max(1))
+            .unwrap_or(1)
+            .max(1);
+        let total = {
+            let state = lock(&self.state);
+            ui::build_sidebar(&state, area, self.workspace_row_height(), &self.theme, 0).total
+        };
+        let max = total.saturating_sub(capacity);
+        let current = self.sidebar_scroll as i32;
+        let _ = width;
+        self.sidebar_scroll = (current + lines).clamp(0, max as i32) as usize;
+        self.request_redraw();
+    }
+
+    /// Live workspace reorder while a sidebar row is dragged.
+    fn drag_workspace(&mut self, point: (usize, usize)) {
+        let (id, previous) = match &self.drag {
+            Drag::Workspace { id, last_target } => (id.clone(), last_target.clone()),
+            _ => return,
+        };
+        let nav = self.nav();
+        if nav.area.x == 0 {
+            return;
+        }
+        let rows = {
+            let state = lock(&self.state);
+            ui::build_sidebar(
+                &state,
+                Rect::new(0, 0, nav.area.x, nav.height),
+                self.workspace_row_height(),
+                &self.theme,
+                self.sidebar_scroll,
+            )
+            .rows
+        };
+        let Some(target) = rows.iter().find_map(|row| match &row.kind {
+            ui::RowKind::Workspace(workspace)
+                if row.rect.contains(point.0, point.1) && workspace.id != id =>
+            {
+                Some(workspace.id.clone())
+            }
+            _ => None,
+        }) else {
+            return;
+        };
+        if previous.as_deref() == Some(target.as_str()) {
+            return;
+        }
+        let index = {
+            let state = lock(&self.state);
+            state
+                .workspaces
+                .iter()
+                .position(|workspace| workspace.id == target)
+        };
+        let Some(index) = index else {
+            return;
+        };
+        if let Drag::Workspace { last_target, .. } = &mut self.drag {
+            *last_target = Some(target);
+        }
+        let params = serde_json::json!({
+            "workspace_id": id,
+            "index": index,
+        });
+        if let Err(error) = self.dispatch("workspace.move", params) {
+            eprintln!("berth-gui: workspace.move: {error}");
+        }
+        self.request_redraw();
     }
 
     fn drag_to_pointer(&mut self) {
@@ -1337,6 +1729,7 @@ impl Gui {
                 }
                 self.request_redraw();
             }
+            Drag::Workspace { .. } => self.drag_workspace(point),
             Drag::SidebarWidth {
                 start_x,
                 start_width,
@@ -1350,6 +1743,23 @@ impl Gui {
     }
 
     fn wheel(&mut self, delta: MouseScrollDelta) {
+        let up = match delta {
+            MouseScrollDelta::LineDelta(_, y) => Some(y > 0.0),
+            MouseScrollDelta::PixelDelta(position) => {
+                if position.y > 0.0 {
+                    Some(true)
+                } else if position.y < 0.0 {
+                    Some(false)
+                } else {
+                    None
+                }
+            }
+        };
+        if let Some(up) = up
+            && self.report_wheel(up)
+        {
+            return;
+        }
         let cell = self.cell();
         let lines = match delta {
             MouseScrollDelta::LineDelta(_, y) => (y * keys::SCROLL_STEP as f32).round() as i32,
@@ -1377,6 +1787,10 @@ impl Gui {
             self.pointer.1.max(0.0) as usize,
         );
         let nav = self.nav();
+        if nav.area.x > 0 && point.0 < nav.area.x {
+            self.scroll_sidebar(lines);
+            return;
+        }
         let (panes, _) = {
             let state = lock(&self.state);
             ui::build_panes(&state, nav.area, cell.height, nav.tab_height, None)
@@ -1608,9 +2022,9 @@ impl Gui {
     }
 
     fn paste(&mut self) {
-        let Some(surface_id) = self.active_surface() else {
+        if self.active_surface().is_none() {
             return;
-        };
+        }
         let Some(clipboard) = self.clipboard.as_mut() else {
             eprintln!("berth-gui: paste: no clipboard available");
             return;
@@ -1625,6 +2039,19 @@ impl Gui {
         if text.is_empty() {
             return;
         }
+        if text.lines().count() > 1 {
+            self.overlay = Some(Overlay::Confirm { text });
+            return;
+        }
+        self.send_paste(&text);
+    }
+
+    /// Send pasted text to the active surface, wrapped when the program asked
+    /// for bracketed paste.
+    fn send_paste(&mut self, text: &str) {
+        let Some(surface_id) = self.active_surface() else {
+            return;
+        };
         let bracketed = self
             .host
             .screen_view(&surface_id)
@@ -1633,7 +2060,7 @@ impl Gui {
         let payload = if bracketed {
             format!("\x1b[200~{text}\x1b[201~")
         } else {
-            text
+            text.to_string()
         };
         if let Err(error) = self.host.send_text(&surface_id, &payload) {
             eprintln!("berth-gui: paste: {error}");
@@ -1728,7 +2155,10 @@ impl Gui {
             }
             Command::ShowAttention => self.overlay = Some(Overlay::Attention { selected: 0 }),
             Command::Settings => {
-                eprintln!("berth-gui: settings has no window yet (parity work in progress)");
+                self.overlay = Some(Overlay::Settings {
+                    selected: 0,
+                    recording: None,
+                });
             }
         }
         self.request_redraw();
@@ -1800,73 +2230,242 @@ impl Gui {
         match &self.overlay {
             Some(Overlay::Palette { query, .. }) => Self::palette_entries(query).len(),
             Some(Overlay::Attention { .. }) => self.attention_entries().len(),
+            Some(Overlay::Settings { recording, .. }) => {
+                settings::rows(&self.config, *recording).len()
+            }
+            Some(Overlay::Confirm { text }) => confirm_lines(text).len(),
             None => 0,
         }
     }
 
     fn overlay_key(&mut self, event: &KeyEvent) {
-        let len = self.overlay_len();
+        let Some(mut overlay) = self.overlay.take() else {
+            return;
+        };
+        let current = overlay.selected();
+        let mut next_selected: Option<usize> = None;
         let mut close = false;
         let mut activate = false;
-        if let Some(overlay) = self.overlay.as_mut() {
-            match &event.logical_key {
+        match &mut overlay {
+            Overlay::Palette { query, .. } => match &event.logical_key {
                 Key::Named(NamedKey::Escape) => close = true,
                 Key::Named(NamedKey::Enter) => activate = true,
                 Key::Named(NamedKey::ArrowDown) => {
-                    overlay.select(panel::move_selection(overlay.selected(), 1, len));
+                    next_selected = Some(panel::move_selection(
+                        current,
+                        1,
+                        Self::palette_entries(query).len(),
+                    ));
                 }
                 Key::Named(NamedKey::ArrowUp) => {
-                    overlay.select(panel::move_selection(overlay.selected(), -1, len));
+                    next_selected = Some(panel::move_selection(
+                        current,
+                        -1,
+                        Self::palette_entries(query).len(),
+                    ));
                 }
                 Key::Named(NamedKey::Backspace) => {
-                    if let Overlay::Palette { query, .. } = overlay {
-                        query.pop();
-                        overlay.select(0);
-                    }
+                    query.pop();
+                    next_selected = Some(0);
                 }
                 Key::Character(text)
                     if !self.modifiers.control_key()
                         && !self.modifiers.super_key()
                         && !self.modifiers.alt_key() =>
                 {
-                    if let Overlay::Palette { query, .. } = overlay {
-                        query.push_str(text);
-                        overlay.select(0);
-                    }
+                    query.push_str(text);
+                    next_selected = Some(0);
                 }
                 _ => {}
+            },
+            Overlay::Attention { .. } => match &event.logical_key {
+                Key::Named(NamedKey::Escape) => close = true,
+                Key::Named(NamedKey::Enter) => activate = true,
+                Key::Named(NamedKey::ArrowDown) => {
+                    next_selected = Some(panel::move_selection(
+                        current,
+                        1,
+                        self.attention_entries().len(),
+                    ));
+                }
+                Key::Named(NamedKey::ArrowUp) => {
+                    next_selected = Some(panel::move_selection(
+                        current,
+                        -1,
+                        self.attention_entries().len(),
+                    ));
+                }
+                _ => {}
+            },
+            Overlay::Settings {
+                selected,
+                recording,
+            } => {
+                self.settings_key(event, &mut close, &mut activate, selected, recording);
             }
-            let selected = panel::clamp_selection(overlay.selected(), len);
-            overlay.select(selected);
+            Overlay::Confirm { .. } => match &event.logical_key {
+                Key::Named(NamedKey::Escape) => close = true,
+                Key::Named(NamedKey::Enter) => activate = true,
+                _ => close = true,
+            },
         }
+        if let Some(index) = next_selected {
+            overlay.select(index);
+        }
+        let clamped = panel::clamp_selection(overlay.selected(), self.overlay_len());
+        overlay.select(clamped);
         if close {
-            self.overlay = None;
-            self.request_redraw();
-        } else if activate {
+            return;
+        }
+        self.overlay = Some(overlay);
+        if activate {
             self.overlay_activate();
         } else {
             self.request_redraw();
         }
     }
 
-    /// Title, optional query, rows and selection for the open panel.
-    fn panel_data(&self) -> Option<(String, Option<String>, Vec<panel::PanelRow>, usize)> {
+    /// Settings keys: arrows adjust, Enter toggles or records a chord. Recording
+    /// swallows the next key so a chord that is already a shortcut still works.
+    fn settings_key(
+        &mut self,
+        event: &KeyEvent,
+        close: &mut bool,
+        activate: &mut bool,
+        selected: &mut usize,
+        recording: &mut Option<config::Action>,
+    ) {
+        let rows = settings::rows(&self.config, *recording);
+        let len = rows.len();
+        match &event.logical_key {
+            Key::Named(NamedKey::Escape) => {
+                if recording.is_some() {
+                    *recording = None;
+                } else {
+                    *close = true;
+                }
+            }
+            Key::Named(NamedKey::ArrowUp) => {
+                *selected = panel::move_selection(*selected, -1, len);
+            }
+            Key::Named(NamedKey::ArrowDown) => {
+                *selected = panel::move_selection(*selected, 1, len);
+            }
+            Key::Named(NamedKey::ArrowLeft) | Key::Named(NamedKey::ArrowRight) => {
+                if recording.is_some() {
+                    return;
+                }
+                let delta = if matches!(event.logical_key, Key::Named(NamedKey::ArrowLeft)) {
+                    -1
+                } else {
+                    1
+                };
+                if let Some(row) = rows.get(*selected) {
+                    let change = settings::adjust(&mut self.config, row.field, delta);
+                    self.apply_setting(change);
+                }
+            }
+            Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Space) => {
+                if let Some(row) = rows.get(*selected) {
+                    match row.field {
+                        settings::Field::Shortcut(action) => *recording = Some(action),
+                        field => {
+                            let change = settings::toggle(&mut self.config, field);
+                            self.apply_setting(change);
+                        }
+                    }
+                }
+            }
+            Key::Named(NamedKey::Backspace) => {
+                if let Some(row) = rows.get(*selected)
+                    && let settings::Field::Shortcut(action) = row.field
+                {
+                    let change = settings::set_shortcut(&mut self.config, action, "");
+                    self.apply_setting(change);
+                    *recording = None;
+                }
+            }
+            _ => {
+                if let Some(action) = *recording
+                    && let Some(chord) = keys::chord_for(&event.logical_key, self.modifiers)
+                {
+                    let change = settings::set_shortcut(&mut self.config, action, &chord);
+                    self.apply_setting(change);
+                    *recording = None;
+                }
+            }
+        }
+        let _ = activate;
+    }
+
+    fn apply_setting(&mut self, change: settings::Change) {
+        if change == settings::Change::None {
+            return;
+        }
+        if change == settings::Change::Font {
+            self.font = None;
+            self.chrome_font = None;
+            self.sized.clear();
+        }
+        if let Err(error) = settings::save(&self.config) {
+            log::line(&format!("settings save failed: {error}"));
+            eprintln!("berth-gui: settings: {error}");
+        }
+        self.request_redraw();
+    }
+
+    /// Title, optional query, rows, selection and footer hint for the panel.
+    fn panel_data(&self) -> Option<PanelContent> {
         match self.overlay.as_ref()? {
-            Overlay::Palette { query, selected } => Some((
-                "Command Palette".to_string(),
-                Some(query.clone()),
-                Self::palette_rows(query, &self.config.shortcuts),
-                *selected,
-            )),
-            Overlay::Attention { selected } => Some((
-                "Attention".to_string(),
-                None,
-                self.attention_entries()
+            Overlay::Palette { query, selected } => Some(PanelContent {
+                title: "Command Palette".to_string(),
+                query: Some(query.clone()),
+                rows: Self::palette_rows(query, &self.config.shortcuts),
+                selected: *selected,
+                hint: "↑↓ move · enter run · esc close".to_string(),
+            }),
+            Overlay::Attention { selected } => Some(PanelContent {
+                title: "Attention".to_string(),
+                query: None,
+                rows: self
+                    .attention_entries()
                     .into_iter()
                     .map(|(_, _, _, row)| row)
                     .collect(),
-                *selected,
-            )),
+                selected: *selected,
+                hint: "↑↓ move · enter jump and acknowledge · esc close".to_string(),
+            }),
+            Overlay::Confirm { text } => Some(PanelContent {
+                title: format!("Paste {} lines?", confirm_lines(text).len()),
+                query: None,
+                rows: confirm_lines(text)
+                    .into_iter()
+                    .map(|line| panel::PanelRow {
+                        label: line,
+                        detail: String::new(),
+                        color: None,
+                    })
+                    .collect(),
+                selected: 0,
+                hint: "enter paste · esc cancel".to_string(),
+            }),
+            Overlay::Settings {
+                selected,
+                recording,
+            } => Some(PanelContent {
+                title: "Settings".to_string(),
+                query: None,
+                rows: settings::rows(&self.config, *recording)
+                    .into_iter()
+                    .map(|row| panel::PanelRow {
+                        label: row.label,
+                        detail: row.value,
+                        color: None,
+                    })
+                    .collect(),
+                selected: *selected,
+                hint: "↑↓ move · ←→ adjust · enter toggle or record · esc close".to_string(),
+            }),
         }
     }
 
@@ -1892,13 +2491,18 @@ impl Gui {
         }
         let cell = self.chrome_font().cell();
         let len = self.overlay_len();
-        let rects = panel::row_rects(geometry.rows, len, cell.height + 8);
+        let row_height = cell.height + 8;
+        let visible = panel::visible_rows(geometry.rows, row_height);
+        let selected = self.overlay.as_ref().map(Overlay::selected).unwrap_or(0);
+        let first = panel::first_visible(selected, len, visible);
+        let rects = panel::row_rects(geometry.rows, len, row_height);
         let Some(index) = rects
             .iter()
             .position(|rect| rect.contains(point.0, point.1))
         else {
             return;
         };
+        let index = first + index;
         if let Some(overlay) = self.overlay.as_mut() {
             overlay.select(index);
         }
@@ -1927,6 +2531,33 @@ impl Gui {
                         self.activate(surface_id);
                     }
                 }
+            }
+            Some(Overlay::Confirm { text }) => {
+                self.send_paste(&text);
+            }
+            Some(Overlay::Settings {
+                selected,
+                recording,
+            }) => {
+                let rows = settings::rows(&self.config, recording);
+                let mut next = Overlay::Settings {
+                    selected,
+                    recording,
+                };
+                if let Some(row) = rows.get(selected) {
+                    match row.field {
+                        settings::Field::Shortcut(action) => {
+                            if let Overlay::Settings { recording, .. } = &mut next {
+                                *recording = Some(action);
+                            }
+                        }
+                        field => {
+                            let change = settings::toggle(&mut self.config, field);
+                            self.apply_setting(change);
+                        }
+                    }
+                }
+                self.overlay = Some(next);
             }
             None => {}
         }
@@ -1999,6 +2630,24 @@ impl Gui {
     }
 }
 
+/// The pane under the pointer and its mouse-tracking settings.
+struct MouseTarget {
+    surface_id: String,
+    col: u16,
+    row: u16,
+    mode: MouseMode,
+    encoding: MouseEncoding,
+}
+
+/// Everything one panel needs to paint.
+struct PanelContent {
+    title: String,
+    query: Option<String>,
+    rows: Vec<panel::PanelRow>,
+    selected: usize,
+    hint: String,
+}
+
 /// Geometry for one input event.
 struct Nav {
     cell: CellSize,
@@ -2029,6 +2678,35 @@ fn write_png(
     let mut writer = encoder.write_header()?;
     writer.write_image_data(&rgba)?;
     Ok(())
+}
+
+/// The lines a paste preview shows, capped so the panel stays readable.
+fn confirm_lines(text: &str) -> Vec<String> {
+    const PREVIEW_LINES: usize = 12;
+    let mut lines: Vec<String> = text
+        .lines()
+        .take(PREVIEW_LINES)
+        .map(|line| {
+            let mut line = line.to_string();
+            if line.chars().count() > 96 {
+                line = line.chars().take(95).collect::<String>() + "…";
+            }
+            line
+        })
+        .collect();
+    if text.lines().count() > PREVIEW_LINES {
+        lines.push("…".to_string());
+    }
+    lines
+}
+
+fn mouse_button(button: MouseButton) -> Option<mouse::Button> {
+    Some(match button {
+        MouseButton::Left => mouse::Button::Left,
+        MouseButton::Middle => mouse::Button::Middle,
+        MouseButton::Right => mouse::Button::Right,
+        _ => return None,
+    })
 }
 
 fn named_key(named: NamedKey) -> Option<&'static str> {

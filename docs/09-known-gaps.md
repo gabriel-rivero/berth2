@@ -1,8 +1,9 @@
 # Known gaps and missing behavior
 
-Last audited: 2026-11-18, code at the portable-window slice that added real text,
-scrollback, selection, clipboard, OSC events, divider dragging and the command
-palette and attention panels. This is the
+Last audited: 2026-11-18, code at the 0.10.0 release: real text, scrollback,
+selection, clipboard, mouse reporting, links, OSC events, divider and sidebar
+dragging, the palette, attention and settings panels, agent detection, autosave
+and the log. This is the
 honest inventory of what is **not** in the tree. It separates missing UI, missing
 platform work, and deliberate non-goals so the three do not get confused.
 
@@ -22,21 +23,17 @@ app itself has the gaps listed in
   underline colour, hyperlinks or per-cell font changes.
 - **No scrollbar.** Wheel and Shift+Page keys scroll, but nothing shows how far
   into the scrollback the view is.
-- **No bell or notification presentation.** Bells and OSC 9/777 notifications
-  reach the core; the window shows only an unread dot and a 1.2 s pane ring.
-- **No search**, link detection, URL opening, or graphics protocols
-  (sixel/kitty/iTerm images).
+- **No audible bell, dock badge or per-provider mute.** Bells flash a pane ring;
+  OSC 9/777 notifications also reach the desktop on macOS and Linux.
+- **No search**, no graphics protocols (sixel/kitty/iTerm images) and no
+  hyperlink (`OSC 8`) handling.
 - **No IME preedit.** Committed text works; there is no composition window, and
   dead keys depend on the platform.
 
 ### Input and clipboard
 
-- **No mouse reporting to the PTY.** Wheel scrolls the local view; a program
-  that enables mouse tracking receives nothing.
-- **No paste confirmation.** A multi-line paste goes straight to the shell, where
-  the macOS app shows a preview dialog.
 - **No selection auto-scroll.** Dragging past the top or bottom of a pane does
-  not extend the view.
+  not extend the view, and words cannot be dragged over.
 - **No accessibility.** The window is one painted buffer: no accessibility tree,
   screen-reader labels, high-contrast mode or keyboard traversal of the sidebar
   and tabs.
@@ -49,9 +46,8 @@ app itself has the gaps listed in
 
 - **One window, one visible workspace.** No multiple windows, detachable
   surfaces or overview.
-- **Sidebar does not scroll and cannot be reordered.** Rows past the bottom are
-  clipped; drag-reorder (`workspace.move`), colours, icons and a filter are
-  absent. Groups can only be collapsed, not created, renamed or coloured.
+- **Sidebar has no colours, icons or filter.** Groups can only be collapsed, not
+  created, renamed or coloured from the window.
 - **Tabs cannot be renamed or reordered.** No overflow menu; a very large number
   of tabs squeezes every label.
 - **No pane maximize/zoom, swap or move.** Splits and closes are created by
@@ -80,15 +76,11 @@ app itself has the gaps listed in
 - **No crash journal.** `journal.ndjson` remains a macOS-store behavior.
 - **No single-instance handoff.** A second launch detects the live endpoint and
   exits instead of rebinding it, but it cannot bring the first window forward.
-- **No logs.** The window writes nothing to `paths::log_dir`; diagnostics are
-  stdout/stderr.
 
 ### Platform and distribution
 
 - **Linux/X11 is the only scripted path.** Wayland, Windows and macOS are compile
   and test coverage; punch-through to a real desktop is manual.
-- **CI does not run the window.** The core matrix runs fmt, clippy and tests; the
-  GUI's unit tests run, but no window or PNG is created in CI.
 - **No packaging.** No `.deb`/AppImage/Flatpak, Windows installer, `.app`
   wrapper, signing, auto-update or single-instance handoff.
 - **HiDPI and multi-monitor** are exercised through winit's scale factor and the
@@ -179,7 +171,7 @@ notarized distribution, and the final decision between this renderer and GTK4 +
 | `berth-core`, `berth-transport`, `berth-server` | Unit + integration tests | Linux local; Ubuntu/macOS/Windows CI |
 | `berth-cli` | Integration round-trip | Linux local; CI |
 | `berth-headless` | PTY integration test + OSC/meta unit tests | Linux local; CI |
-| `berth-gui` | Geometry, view-model, font, config, keymap tests | PNG frames on macOS; Xvfb smoke on Linux; **no CI window** |
+| `berth-gui` | Geometry, view-model, font, config, keymap, mouse, link and panel tests | PNG frames on macOS; Xvfb smoke + artifact on Linux CI |
 | macOS app | Swift tests + build in CI | manual daily use |
 
 ## 7. Recommended order

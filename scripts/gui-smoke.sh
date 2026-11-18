@@ -1,6 +1,6 @@
 #!/bin/sh
-# Render the minimal window under Xvfb for a headless smoke check.
-# Usage: scripts/gui-smoke.sh [path-to-berth-gui]
+# Render the portable window under Xvfb and capture one frame.
+# Usage: scripts/gui-smoke.sh [path-to-berth-gui] [png-out]
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -18,7 +18,15 @@ fi
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/berth-gui-smoke.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
+png=${2:-"$tmp/frame.png"}
 echo "gui-smoke: $bin"
 xvfb-run -a --server-args="-screen 0 1280x800x24" \
     env BERTH_DATA_DIR="$tmp" BERTH_SOCKET_PATH="$tmp/berth.sock" \
-    "$bin" --mode trusted --no-restore --smoke-ms 1200
+        BERTH_CONFIG="$tmp/config.json" \
+    "$bin" --mode trusted --no-restore --smoke-ms 1500 --smoke-png "$png"
+
+if [ ! -s "$png" ]; then
+    echo "gui-smoke: no frame written to $png" >&2
+    exit 1
+fi
+echo "gui-smoke: frame $png"

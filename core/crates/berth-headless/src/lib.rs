@@ -60,7 +60,40 @@ pub struct ScreenView {
     /// How many of those rows the view is scrolled up by.
     pub scrollback: usize,
     pub bracketed_paste: bool,
+    /// Mouse tracking mode the program asked for.
+    pub mouse_mode: MouseMode,
+    /// Wire encoding for mouse reports.
+    pub mouse_encoding: MouseEncoding,
     pub cells: Vec<CellView>,
+}
+
+/// How much pointer traffic the program wants. Mirrors `vt100`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MouseMode {
+    #[default]
+    Off,
+    /// Report presses only, X10 style.
+    Click,
+    /// Report presses and releases.
+    PressRelease,
+    /// Report presses, releases and drags while a button is held.
+    Drag,
+    /// Report every pointer movement.
+    Motion,
+}
+
+impl MouseMode {
+    pub fn is_on(self) -> bool {
+        self != Self::Off
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MouseEncoding {
+    #[default]
+    X10,
+    Utf8,
+    Sgr,
 }
 
 /// Terminal events that do not change the grid: title, cwd, bell, progress,
@@ -310,6 +343,18 @@ impl PtyHost {
             scrollback_len: screen.scrollback_len(),
             scrollback: screen.scrollback(),
             bracketed_paste: screen.bracketed_paste(),
+            mouse_mode: match screen.mouse_protocol_mode() {
+                vt100::MouseProtocolMode::None => MouseMode::Off,
+                vt100::MouseProtocolMode::Press => MouseMode::Click,
+                vt100::MouseProtocolMode::PressRelease => MouseMode::PressRelease,
+                vt100::MouseProtocolMode::ButtonMotion => MouseMode::Drag,
+                vt100::MouseProtocolMode::AnyMotion => MouseMode::Motion,
+            },
+            mouse_encoding: match screen.mouse_protocol_encoding() {
+                vt100::MouseProtocolEncoding::Default => MouseEncoding::X10,
+                vt100::MouseProtocolEncoding::Utf8 => MouseEncoding::Utf8,
+                vt100::MouseProtocolEncoding::Sgr => MouseEncoding::Sgr,
+            },
             cells,
         })
     }
@@ -628,6 +673,12 @@ impl SurfaceOps for PtyHost {
 }
 
 impl PtyHost {
+    /// Write raw bytes to a surface, for input the key encoder does not model
+    /// (mouse reports).
+    pub fn send_bytes(&self, surface_id: &str, bytes: &[u8]) -> Result<(), CoreError> {
+        self.write_bytes(surface_id, bytes)
+    }
+
     fn write_bytes(&self, surface_id: &str, bytes: &[u8]) -> Result<(), CoreError> {
         let surface = self.surface(surface_id)?;
         let mut writer = lock(&surface.writer);

@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.10.0
+
+Berth now ships a portable window. `berth-gui` runs on Linux, Windows and macOS
+from one Rust core, speaks the same protocol as the macOS app, and has closed the
+daily-use gaps against it: real text, scrollback, selection, clipboard, mouse
+reporting, links, panels and session safety. The macOS app is unchanged apart
+from the shared core and its version.
 
 ### Portable window: real text and daily terminal basics
 
@@ -56,6 +62,26 @@
   dividers, config parsing, shortcut resolution, selection and paint blending.
 - The workspace MSRV moves to 1.89 for `cosmic-text`, and the lints that
   MSRV-aware clippy now raises in existing crates were collapsed to let-chains.
+
+### Portable window: settings, mouse, links and release hardening
+
+- Settings panel (`⌘,` / `Ctrl+,`): font size, display scale, compact sidebar,
+  socket mode and all 14 shortcuts. Arrows adjust or cycle, Enter toggles or
+  records a chord, Backspace unbinds; changes apply live and are written back to
+  `config.json` with unknown keys preserved.
+- Mouse reporting to the PTY in X10, UTF-8 and SGR encodings, with modifier
+  bits, drags and wheel events. Shift-click keeps local selection inside a TUI.
+- `Super`/`Ctrl`-click opens URLs and absolute paths under the pointer; the
+  pointer changes over links, dividers, the sidebar edge and terminal text.
+- Multi-line paste opens a preview and sends only on Enter.
+- Panes show a scrollbar while scrolled; the sidebar scrolls with the wheel and
+  rows drag-reorder live through `workspace.move`.
+- Agent rows show token counts and cost when the hooks report them; OSC 9/777
+  notifications also raise a desktop notification on macOS and Linux.
+- Breadcrumbs go to `berth.log` beside the macOS app's log, rotating at 1 MiB.
+- CI renders a window frame under Xvfb on Linux and uploads it as an artifact.
+- The workspace version now matches the release (`0.10.0`), so `berth-gui
+  --version` reports the shipped version.
 
 ### Portable foundation: Linux and Windows
 

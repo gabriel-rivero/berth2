@@ -280,6 +280,18 @@ impl<'a> Painter<'a> {
                 }
             }
         }
+        if view.scrollback > 0 && view.scrollback_len > 0 {
+            let track = Rect::new(area.right().saturating_sub(4), area.y, 3, area.h);
+            self.fill(track, 0x001c_1c24);
+            let total = view.scrollback_len + rows;
+            let thumb = (area.h * rows / total.max(1)).max(16).min(area.h);
+            let travel = area.h.saturating_sub(thumb);
+            let offset = (view.scrollback_len - view.scrollback) * travel / view.scrollback_len;
+            self.fill(
+                Rect::new(track.x, area.y + offset, 3, thumb),
+                options.theme.text_tertiary,
+            );
+        }
         if options.exited {
             self.paint_exited_banner(font, area, *options.theme);
         }
@@ -515,6 +527,9 @@ pub struct PanelStyle<'a> {
     pub query: Option<&'a str>,
     pub rows: &'a [crate::panel::PanelRow],
     pub selected: usize,
+    /// First row to paint, so a long list follows the selection.
+    pub first: usize,
+    pub hint: &'a str,
 }
 
 impl Painter<'_> {
@@ -557,8 +572,11 @@ impl Painter<'_> {
         }
         let row_height = cell.height + 8;
         let rects = crate::panel::row_rects(geometry.rows, style.rows.len(), row_height);
-        for (index, (row, rect)) in style.rows.iter().zip(rects.iter()).enumerate() {
-            if index == style.selected {
+        for (index, rect) in rects.iter().enumerate() {
+            let Some(row) = style.rows.get(style.first + index) else {
+                break;
+            };
+            if style.first + index == style.selected {
                 self.fill(*rect, theme.sidebar_active);
                 self.fill(Rect::new(rect.x, rect.y, 3, rect.h), theme.accent);
             }
@@ -586,7 +604,7 @@ impl Painter<'_> {
         self.text_elided(
             font,
             (geometry.footer.x + 12, geometry.footer.y + 4),
-            "↑↓ move · enter select · esc close",
+            style.hint,
             TextStyle::NORMAL,
             theme.text_tertiary,
             geometry.footer.w.saturating_sub(24),

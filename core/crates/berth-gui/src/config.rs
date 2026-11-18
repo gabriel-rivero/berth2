@@ -183,31 +183,12 @@ impl Binding {
     }
 }
 
-impl Binding {
-    /// Human-readable form, used by the palette and the settings list.
-    pub fn label(&self) -> String {
-        let mut parts = Vec::new();
-        if self.cmd {
-            parts.push("cmd".to_string());
-        }
-        if self.ctrl {
-            parts.push("ctrl".to_string());
-        }
-        if self.alt {
-            parts.push("alt".to_string());
-        }
-        if self.shift {
-            parts.push("shift".to_string());
-        }
-        parts.push(self.key.clone());
-        parts.join("+")
-    }
-}
-
-/// Shortcut table with config overrides applied.
+/// Shortcut table with config overrides applied. The raw strings are kept so
+/// the settings window can rewrite the file without inventing values.
 #[derive(Clone, Debug)]
 pub struct Shortcuts {
     bindings: HashMap<Action, Option<Binding>>,
+    raw: HashMap<Action, String>,
 }
 
 impl Shortcuts {
@@ -216,6 +197,7 @@ impl Shortcuts {
     pub fn build(overrides: &HashMap<String, String>) -> Self {
         let portable = cfg!(not(target_os = "macos"));
         let mut bindings = HashMap::new();
+        let mut raw = HashMap::new();
         for action in Action::ALL {
             let default = if portable {
                 action.default_portable()
@@ -228,8 +210,30 @@ impl Shortcuts {
                 .map(|(_, value)| value.as_str())
                 .unwrap_or(default);
             bindings.insert(action, Binding::parse(text));
+            raw.insert(action, text.to_string());
         }
-        Self { bindings }
+        Self { bindings, raw }
+    }
+
+    /// Replace one action's chord. An empty string unbinds it.
+    pub fn set(&mut self, action: Action, text: &str) {
+        self.bindings.insert(action, Binding::parse(text));
+        self.raw.insert(action, text.to_string());
+    }
+
+    /// Every action as `(config key, chord)`, in palette order.
+    pub fn entries(&self) -> Vec<(String, String)> {
+        Action::ALL
+            .iter()
+            .map(|action| (action.key().to_string(), self.raw_text(*action)))
+            .collect()
+    }
+
+    fn raw_text(&self, action: Action) -> String {
+        self.raw
+            .get(&action)
+            .cloned()
+            .unwrap_or_else(|| "unbound".to_string())
     }
 
     pub fn binding(&self, action: Action) -> Option<&Binding> {
@@ -237,9 +241,7 @@ impl Shortcuts {
     }
 
     pub fn label(&self, action: Action) -> String {
-        self.binding(action)
-            .map(Binding::label)
-            .unwrap_or_else(|| "unbound".to_string())
+        self.raw_text(action)
     }
 }
 
@@ -347,6 +349,49 @@ impl Config {
     pub fn socket_mode(&self) -> Option<&str> {
         self.socket.as_deref()
     }
+
+    /// Write the keys this window owns, preserving anything else in the file.
+    /// The macOS shell reads the same document, so unknown keys must survive.
+    pub fn save(&self) -> std::io::Result<()> {
+        self.save_to(&berth_core::paths::config_path())
+    }
+
+    /// Save to an explicit path. Kept separate so the merge can be tested
+    /// without touching the user's real config.
+    pub fn save_to(&self, path: &std::path::Path) -> std::io::Result<()> {
+        let mut document = std::fs::read_to_string(path)
+            .ok()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        let object = document.as_object_mut().ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "config is not an object")
+        })?;
+        object.insert("fontSize".into(), serde_json::json!(self.font_size));
+        object.insert("fontScale".into(), serde_json::json!(self.font_scale));
+        object.insert(
+            "compactSidebar".into(),
+            serde_json::json!(self.compact_sidebar),
+        );
+        object.insert("sidebarWidth".into(), serde_json::json!(self.sidebar_width));
+        if let Some(socket) = &self.socket {
+            object.insert("socket".into(), serde_json::json!(socket));
+        }
+        let shortcuts: serde_json::Map<String, serde_json::Value> = self
+            .shortcuts
+            .entries()
+            .into_iter()
+            .map(|(key, value)| (key, serde_json::json!(value)))
+            .collect();
+        object.insert("shortcuts".into(), serde_json::Value::Object(shortcuts));
+        let text = serde_json::to_string_pretty(&document)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let temp = path.with_extension("json.tmp");
+        std::fs::write(&temp, text.as_bytes())?;
+        std::fs::rename(&temp, path)
+    }
 }
 
 #[cfg(test)]
@@ -407,7 +452,6 @@ mod tests {
         assert!(binding.cmd && binding.shift);
         assert!(!binding.ctrl && !binding.alt);
         assert_eq!(binding.key, "d");
-        assert_eq!(binding.label(), "cmd+shift+d");
     }
 
     #[test]
@@ -455,6 +499,30 @@ mod tests {
                 action
             );
         }
+    }
+
+    #[test]
+    fn given_a_file_with_unknown_keys_when_saved_then_they_survive() {
+        let path = std::env::temp_dir().join(format!(
+            "berth-config-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&path, r#"{"fontSize": 10, "futureKey": {"a": 1}}"#).unwrap();
+        let mut config = Config::parse(r#"{"fontSize": 10}"#).unwrap();
+        config.font_size = 18.0;
+        config.shortcuts.set(Action::NewTab, "ctrl+alt+t");
+        config.save_to(&path).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved["fontSize"], 18.0);
+        assert_eq!(saved["futureKey"]["a"], 1);
+        assert_eq!(saved["shortcuts"]["newTab"], "ctrl+alt+t");
+        assert!(saved["shortcuts"]["splitRight"].is_string());
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

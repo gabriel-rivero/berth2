@@ -65,9 +65,14 @@ capture, so the window ships a Ctrl-based default table instead:
 | `toggleSidebar` | `cmd+opt+s` | `ctrl+alt+s` |
 | `settings` | `cmd+,` | `ctrl+,` |
 
-A value overrides the default for that action; an empty string unbinds it. Fixed
+A value overrides the default for that action; an empty string unbinds it. The
+settings panel (`⌘,` / `Ctrl+,`) edits this table, the font size, the display
+scale, the sidebar density and the socket mode, and writes the same file. Fixed
 bindings that do not appear in the table: `Super+1…9` selects a workspace, and
 `Super+C`/`Ctrl+Shift+C` copy and `Super+V`/`Ctrl+Shift+V` paste.
+
+The portable window also stores `sidebarWidth` when the sidebar edge is dragged;
+the macOS shell ignores that key.
 
 
 ## Sidebar

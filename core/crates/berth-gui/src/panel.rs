@@ -87,6 +87,21 @@ pub struct PanelRow {
     pub color: Option<u32>,
 }
 
+/// How many rows fit in the rows area.
+pub fn visible_rows(rows: Rect, row_height: usize) -> usize {
+    (rows.h / row_height.max(1)).max(1)
+}
+
+/// First row to paint so `selected` stays in view.
+pub fn first_visible(selected: usize, len: usize, visible: usize) -> usize {
+    let len = len.max(1);
+    let visible = visible.max(1);
+    selected
+        .saturating_add(1)
+        .saturating_sub(visible)
+        .min(len.saturating_sub(1))
+}
+
 /// Row rectangles for `count` entries, clipped to the rows area.
 pub fn row_rects(rows: Rect, count: usize, row_height: usize) -> Vec<Rect> {
     let height = row_height.max(1);
@@ -176,6 +191,17 @@ mod tests {
         assert!(fuzzy_match("jumpatt", "Jump to Attention"));
         assert!(!fuzzy_match("zz", "Split Right"));
         assert!(!fuzzy_match("rigsp", "Split Right"));
+    }
+
+    #[test]
+    fn given_more_rows_than_fit_when_the_selection_moves_then_the_window_follows() {
+        let rows = Rect::new(0, 0, 100, 100);
+        assert_eq!(visible_rows(rows, 25), 4);
+        assert_eq!(first_visible(0, 10, 4), 0);
+        assert_eq!(first_visible(3, 10, 4), 0);
+        assert_eq!(first_visible(4, 10, 4), 1);
+        assert_eq!(first_visible(9, 10, 4), 6);
+        assert_eq!(first_visible(0, 1, 4), 0);
     }
 
     #[test]

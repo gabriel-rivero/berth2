@@ -91,6 +91,26 @@ pub fn chord_key(key: &Key) -> Option<String> {
     })
 }
 
+/// The chord string a key press would be recorded as, in config spelling.
+pub fn chord_for(key: &Key, modifiers: ModifiersState) -> Option<String> {
+    let key = chord_key(key)?;
+    let mut parts = Vec::new();
+    if modifiers.super_key() {
+        parts.push("cmd".to_string());
+    }
+    if modifiers.control_key() {
+        parts.push("ctrl".to_string());
+    }
+    if modifiers.alt_key() {
+        parts.push("alt".to_string());
+    }
+    if modifiers.shift_key() {
+        parts.push("shift".to_string());
+    }
+    parts.push(key);
+    Some(parts.join("+"))
+}
+
 /// Does this chord match the key and modifier state exactly?
 pub fn matches(binding: &Binding, key: &Key, modifiers: ModifiersState) -> bool {
     let Some(chord) = chord_key(key) else {
@@ -246,6 +266,18 @@ mod tests {
             resolve(&Key::Character("t".into()), modifiers, true, &shortcuts),
             None
         );
+    }
+
+    #[test]
+    fn given_a_pressed_chord_when_recorded_then_it_round_trips_through_parse() {
+        let chord = chord_for(
+            &Key::Character("D".into()),
+            ModifiersState::CONTROL | ModifiersState::SHIFT,
+        )
+        .unwrap();
+        assert_eq!(chord, "ctrl+shift+d");
+        assert!(Binding::parse(&chord).is_some());
+        assert!(chord_for(&Key::Named(NamedKey::Shift), ModifiersState::SHIFT).is_none());
     }
 
     #[test]
