@@ -30,6 +30,12 @@
   workspace, group chevrons (`group.update`), pinned-first and attention-ranked
   ordering, agent rows with state, detail and OSC progress, and `⌘⇧U` jump to
   the newest attention.
+- The command palette (`⌘⇧P`/`Ctrl+Shift+P`) lists all 14 configurable actions
+  with their chord and a fuzzy filter; the attention panel (`⌘I`) lists
+  unacknowledged notifications newest first and jumps to the workspace and
+  surface that raised one on Enter. Both share one panel geometry, keyboard
+  handling and hit testing; clicking outside or focusing another window closes
+  them.
 - `config.json` is now read by the portable window: `fontSize`, `fontScale`,
   `compactSidebar`, `socket` and all 14 `shortcuts`, with a Ctrl-based default
   table outside macOS. `BERTH_CONFIG` overrides the path.

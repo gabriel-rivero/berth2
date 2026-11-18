@@ -508,6 +508,92 @@ impl<'a> Painter<'a> {
     }
 }
 
+pub struct PanelStyle<'a> {
+    pub theme: &'a Theme,
+    pub geometry: &'a crate::panel::PanelGeometry,
+    pub title: &'a str,
+    pub query: Option<&'a str>,
+    pub rows: &'a [crate::panel::PanelRow],
+    pub selected: usize,
+}
+
+impl Painter<'_> {
+    /// Dim the window and draw one modal panel.
+    pub fn panel(&mut self, font: &mut FontRenderer, style: &PanelStyle<'_>) {
+        let theme = *style.theme;
+        let geometry = style.geometry;
+        self.blend(self.bounds(), 0x0000_0000, 150);
+        let cell = font.cell();
+        self.fill(geometry.panel, 0x0020_2028);
+        self.stroke(geometry.panel, theme.accent);
+        self.fill(geometry.title, 0x0029_2934);
+        self.text_elided(
+            font,
+            (geometry.title.x + 12, geometry.title.y + 6),
+            style.title,
+            TextStyle::BOLD,
+            theme.text_primary,
+            geometry.title.w.saturating_sub(24),
+        );
+        if let (Some(query), Some(rect)) = (style.query, geometry.query) {
+            let text = if query.is_empty() {
+                "type to filter"
+            } else {
+                query
+            };
+            let color = if query.is_empty() {
+                theme.text_tertiary
+            } else {
+                theme.text_primary
+            };
+            self.text_elided(
+                font,
+                (rect.x + 12, rect.y + 4),
+                text,
+                TextStyle::NORMAL,
+                color,
+                rect.w.saturating_sub(24),
+            );
+        }
+        let row_height = cell.height + 8;
+        let rects = crate::panel::row_rects(geometry.rows, style.rows.len(), row_height);
+        for (index, (row, rect)) in style.rows.iter().zip(rects.iter()).enumerate() {
+            if index == style.selected {
+                self.fill(*rect, theme.sidebar_active);
+                self.fill(Rect::new(rect.x, rect.y, 3, rect.h), theme.accent);
+            }
+            let y = rect.y + (rect.h.saturating_sub(cell.height) / 2);
+            let detail_width = (rect.w / 2).max(cell.width * 6);
+            self.text_elided(
+                font,
+                (rect.x + 12, y),
+                &row.label,
+                TextStyle::NORMAL,
+                theme.text_primary,
+                rect.w.saturating_sub(detail_width + 24),
+            );
+            if !row.detail.is_empty() {
+                self.text_elided(
+                    font,
+                    (rect.right().saturating_sub(detail_width), y),
+                    &row.detail,
+                    TextStyle::NORMAL,
+                    row.color.unwrap_or(theme.text_tertiary),
+                    detail_width.saturating_sub(12),
+                );
+            }
+        }
+        self.text_elided(
+            font,
+            (geometry.footer.x + 12, geometry.footer.y + 4),
+            "↑↓ move · enter select · esc close",
+            TextStyle::NORMAL,
+            theme.text_tertiary,
+            geometry.footer.w.saturating_sub(24),
+        );
+    }
+}
+
 pub struct ScreenOptions<'a> {
     pub theme: &'a Theme,
     pub focused: bool,

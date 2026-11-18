@@ -39,7 +39,7 @@ pub enum Command {
 }
 
 impl Command {
-    fn from_action(action: Action) -> Self {
+    pub fn for_action(action: Action) -> Self {
         match action {
             Action::SplitRight => Command::SplitRight,
             Action::SplitDown => Command::SplitDown,
@@ -117,7 +117,7 @@ pub fn resolve(
             && !repeat
             && matches(binding, key, modifiers)
         {
-            return Some(Command::from_action(action));
+            return Some(Command::for_action(action));
         }
     }
 

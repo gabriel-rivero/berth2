@@ -52,6 +52,26 @@ impl Action {
         Action::Settings,
     ];
 
+    /// How the palette spells the action.
+    pub fn label(self) -> &'static str {
+        match self {
+            Action::SplitRight => "Split Right",
+            Action::SplitDown => "Split Down",
+            Action::NewTab => "New Tab",
+            Action::CloseTab => "Close Tab",
+            Action::NextTab => "Next Tab",
+            Action::PreviousTab => "Previous Tab",
+            Action::NextPane => "Next Pane",
+            Action::PreviousPane => "Previous Pane",
+            Action::NewWorkspace => "New Workspace",
+            Action::Palette => "Command Palette",
+            Action::JumpAttention => "Jump to Attention",
+            Action::ShowAttention => "Attention List",
+            Action::ToggleSidebar => "Toggle Sidebar",
+            Action::Settings => "Settings",
+        }
+    }
+
     /// The `shortcuts` key this action is stored under.
     pub fn key(self) -> &'static str {
         match self {
@@ -163,6 +183,27 @@ impl Binding {
     }
 }
 
+impl Binding {
+    /// Human-readable form, used by the palette and the settings list.
+    pub fn label(&self) -> String {
+        let mut parts = Vec::new();
+        if self.cmd {
+            parts.push("cmd".to_string());
+        }
+        if self.ctrl {
+            parts.push("ctrl".to_string());
+        }
+        if self.alt {
+            parts.push("alt".to_string());
+        }
+        if self.shift {
+            parts.push("shift".to_string());
+        }
+        parts.push(self.key.clone());
+        parts.join("+")
+    }
+}
+
 /// Shortcut table with config overrides applied.
 #[derive(Clone, Debug)]
 pub struct Shortcuts {
@@ -193,6 +234,12 @@ impl Shortcuts {
 
     pub fn binding(&self, action: Action) -> Option<&Binding> {
         self.bindings.get(&action).and_then(Option::as_ref)
+    }
+
+    pub fn label(&self, action: Action) -> String {
+        self.binding(action)
+            .map(Binding::label)
+            .unwrap_or_else(|| "unbound".to_string())
     }
 }
 
@@ -360,6 +407,15 @@ mod tests {
         assert!(binding.cmd && binding.shift);
         assert!(!binding.ctrl && !binding.alt);
         assert_eq!(binding.key, "d");
+        assert_eq!(binding.label(), "cmd+shift+d");
+    }
+
+    #[test]
+    fn given_every_action_when_labelled_then_the_palette_has_a_name() {
+        for action in Action::ALL {
+            assert!(!action.label().is_empty());
+        }
+        assert_eq!(Action::JumpAttention.label(), "Jump to Attention");
     }
 
     #[test]

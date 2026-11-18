@@ -30,6 +30,7 @@ mod font;
 mod keys;
 mod layout;
 mod paint;
+mod panel;
 mod theme;
 mod ui;
 
@@ -277,6 +278,7 @@ fn main() {
         last_click: None,
         exit_announced: HashMap::new(),
         window_focused: true,
+        overlay: None,
         quit: false,
         captured: false,
     };
@@ -287,6 +289,28 @@ fn main() {
     }
     if app.exit_code != 0 {
         std::process::exit(app.exit_code);
+    }
+}
+
+/// A modal panel over the window. Both variants are lists driven by the core.
+enum Overlay {
+    Palette { query: String, selected: usize },
+    Attention { selected: usize },
+}
+
+impl Overlay {
+    fn selected(&self) -> usize {
+        match self {
+            Overlay::Palette { selected, .. } | Overlay::Attention { selected } => *selected,
+        }
+    }
+
+    fn select(&mut self, index: usize) {
+        match self {
+            Overlay::Palette { selected, .. } | Overlay::Attention { selected } => {
+                *selected = index;
+            }
+        }
     }
 }
 
@@ -352,6 +376,7 @@ struct Gui {
     last_click: Option<Click>,
     exit_announced: HashMap<String, bool>,
     window_focused: bool,
+    overlay: Option<Overlay>,
     /// Set when a one-frame run (PNG smoke) has written its frame.
     quit: bool,
     captured: bool,
@@ -425,6 +450,9 @@ impl ApplicationHandler for Gui {
             }
             WindowEvent::Focused(focused) => {
                 self.window_focused = focused;
+                if !focused {
+                    self.overlay = None;
+                }
                 if focused && let Some(surface_id) = self.active_surface() {
                     let _ = self.host.focus(&surface_id);
                 }
@@ -885,6 +913,23 @@ impl Gui {
                 let font = self.font();
                 painter.screen(font, &screen, pane.content, &options);
             }
+
+            if let Some((title, query, rows, selected)) = self.panel_data() {
+                let geometry =
+                    panel::geometry(Rect::new(0, 0, width, height), self.scale, query.is_some());
+                let font = self.chrome_font();
+                painter.panel(
+                    font,
+                    &paint::PanelStyle {
+                        theme: &theme,
+                        geometry: &geometry,
+                        title: &title,
+                        query: query.as_deref(),
+                        rows: &rows,
+                        selected,
+                    },
+                );
+            }
         }
 
         let capture_at = self.smoke.unwrap_or(PNG_DELAY);
@@ -958,6 +1003,13 @@ impl Gui {
             self.pointer.0.max(0.0) as usize,
             self.pointer.1.max(0.0) as usize,
         );
+        if self.overlay.is_some() {
+            if button == MouseButton::Left {
+                self.overlay_click(point);
+            }
+            self.request_redraw();
+            return;
+        }
         match button {
             MouseButton::Left => self.left_pressed(point),
             MouseButton::Middle => self.middle_pressed(point),
@@ -1593,9 +1645,215 @@ impl Gui {
                     self.reset_scroll(&surface_id);
                 }
             }
-            Command::Palette | Command::ShowAttention | Command::Settings => {
-                eprintln!("berth-gui: {command:?} has no window yet (parity work in progress)");
+            Command::Palette => {
+                self.overlay = Some(Overlay::Palette {
+                    query: String::new(),
+                    selected: 0,
+                })
             }
+            Command::ShowAttention => self.overlay = Some(Overlay::Attention { selected: 0 }),
+            Command::Settings => {
+                eprintln!("berth-gui: settings has no window yet (parity work in progress)");
+            }
+        }
+        self.request_redraw();
+    }
+
+    // ---- panels ------------------------------------------------------
+
+    fn palette_entries(query: &str) -> Vec<config::Action> {
+        config::Action::ALL
+            .iter()
+            .copied()
+            .filter(|action| panel::fuzzy_match(query, action.label()))
+            .collect()
+    }
+
+    fn palette_rows(query: &str, shortcuts: &config::Shortcuts) -> Vec<panel::PanelRow> {
+        Self::palette_entries(query)
+            .into_iter()
+            .map(|action| panel::PanelRow {
+                label: action.label().to_string(),
+                detail: shortcuts.label(action),
+                color: None,
+            })
+            .collect()
+    }
+
+    /// Unacknowledged notifications, newest first, with the workspace they came
+    /// from so the panel can jump there.
+    fn attention_entries(&self) -> Vec<(String, Option<String>, Option<String>, panel::PanelRow)> {
+        let state = lock(&self.state);
+        state
+            .notifications
+            .iter()
+            .rev()
+            .filter(|notification| !notification.acked)
+            .map(|notification| {
+                let workspace = notification
+                    .workspace_id
+                    .as_deref()
+                    .and_then(|id| state.workspace(id))
+                    .map(|workspace| workspace.name.clone());
+                let mut detail = workspace.clone().unwrap_or_default();
+                if !notification.body.is_empty() {
+                    if !detail.is_empty() {
+                        detail.push_str("  ");
+                    }
+                    detail.push_str(&notification.body);
+                }
+                let color = match notification.level {
+                    berth_core::model::NotifLevel::Error => Some(self.theme.attention_error),
+                    berth_core::model::NotifLevel::NeedsInput => Some(self.theme.attention_input),
+                    berth_core::model::NotifLevel::Info => None,
+                };
+                (
+                    notification.id.clone(),
+                    notification.workspace_id.clone(),
+                    notification.surface_id.clone(),
+                    panel::PanelRow {
+                        label: notification.title.clone(),
+                        detail,
+                        color,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    fn overlay_len(&self) -> usize {
+        match &self.overlay {
+            Some(Overlay::Palette { query, .. }) => Self::palette_entries(query).len(),
+            Some(Overlay::Attention { .. }) => self.attention_entries().len(),
+            None => 0,
+        }
+    }
+
+    fn overlay_key(&mut self, event: &KeyEvent) {
+        let len = self.overlay_len();
+        let mut close = false;
+        let mut activate = false;
+        if let Some(overlay) = self.overlay.as_mut() {
+            match &event.logical_key {
+                Key::Named(NamedKey::Escape) => close = true,
+                Key::Named(NamedKey::Enter) => activate = true,
+                Key::Named(NamedKey::ArrowDown) => {
+                    overlay.select(panel::move_selection(overlay.selected(), 1, len));
+                }
+                Key::Named(NamedKey::ArrowUp) => {
+                    overlay.select(panel::move_selection(overlay.selected(), -1, len));
+                }
+                Key::Named(NamedKey::Backspace) => {
+                    if let Overlay::Palette { query, .. } = overlay {
+                        query.pop();
+                        overlay.select(0);
+                    }
+                }
+                Key::Character(text)
+                    if !self.modifiers.control_key()
+                        && !self.modifiers.super_key()
+                        && !self.modifiers.alt_key() =>
+                {
+                    if let Overlay::Palette { query, .. } = overlay {
+                        query.push_str(text);
+                        overlay.select(0);
+                    }
+                }
+                _ => {}
+            }
+            let selected = panel::clamp_selection(overlay.selected(), len);
+            overlay.select(selected);
+        }
+        if close {
+            self.overlay = None;
+            self.request_redraw();
+        } else if activate {
+            self.overlay_activate();
+        } else {
+            self.request_redraw();
+        }
+    }
+
+    /// Title, optional query, rows and selection for the open panel.
+    fn panel_data(&self) -> Option<(String, Option<String>, Vec<panel::PanelRow>, usize)> {
+        match self.overlay.as_ref()? {
+            Overlay::Palette { query, selected } => Some((
+                "Command Palette".to_string(),
+                Some(query.clone()),
+                Self::palette_rows(query, &self.config.shortcuts),
+                *selected,
+            )),
+            Overlay::Attention { selected } => Some((
+                "Attention".to_string(),
+                None,
+                self.attention_entries()
+                    .into_iter()
+                    .map(|(_, _, _, row)| row)
+                    .collect(),
+                *selected,
+            )),
+        }
+    }
+
+    fn overlay_geometry(&mut self) -> panel::PanelGeometry {
+        let (width, height) = self
+            .window
+            .as_ref()
+            .map(|window| {
+                let size = window.inner_size();
+                (size.width as usize, size.height as usize)
+            })
+            .unwrap_or((0, 0));
+        let has_query = matches!(self.overlay, Some(Overlay::Palette { .. }));
+        panel::geometry(Rect::new(0, 0, width, height), self.scale, has_query)
+    }
+
+    fn overlay_click(&mut self, point: (usize, usize)) {
+        let geometry = self.overlay_geometry();
+        if !geometry.panel.contains(point.0, point.1) {
+            self.overlay = None;
+            self.request_redraw();
+            return;
+        }
+        let cell = self.chrome_font().cell();
+        let len = self.overlay_len();
+        let rects = panel::row_rects(geometry.rows, len, cell.height + 8);
+        let Some(index) = rects
+            .iter()
+            .position(|rect| rect.contains(point.0, point.1))
+        else {
+            return;
+        };
+        if let Some(overlay) = self.overlay.as_mut() {
+            overlay.select(index);
+        }
+        self.overlay_activate();
+    }
+
+    fn overlay_activate(&mut self) {
+        match self.overlay.take() {
+            Some(Overlay::Palette { query, selected }) => {
+                let entries = Self::palette_entries(&query);
+                if let Some(action) = entries.get(selected).copied() {
+                    self.run_command(Command::for_action(action));
+                }
+            }
+            Some(Overlay::Attention { selected }) => {
+                let entries = self.attention_entries();
+                if let Some((id, workspace_id, surface_id, _)) = entries.get(selected) {
+                    let params = serde_json::json!({"notification_id": id});
+                    if let Err(error) = self.dispatch("notification.ack", params) {
+                        eprintln!("berth-gui: notification.ack: {error}");
+                    }
+                    if let Some(workspace_id) = workspace_id {
+                        self.select_workspace(workspace_id);
+                    }
+                    if let Some(surface_id) = surface_id {
+                        self.activate(surface_id);
+                    }
+                }
+            }
+            None => {}
         }
         self.request_redraw();
     }
@@ -1603,6 +1861,10 @@ impl Gui {
     // ---- keyboard ----------------------------------------------------
 
     fn key(&mut self, event: KeyEvent) {
+        if self.overlay.is_some() {
+            self.overlay_key(&event);
+            return;
+        }
         if let Some(command) = keys::resolve(
             &event.logical_key,
             self.modifiers,

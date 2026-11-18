@@ -1,7 +1,8 @@
 # Known gaps and missing behavior
 
 Last audited: 2026-11-18, code at the portable-window slice that added real text,
-scrollback, selection, clipboard, OSC events and divider dragging. This is the
+scrollback, selection, clipboard, OSC events, divider dragging and the command
+palette and attention panels. This is the
 honest inventory of what is **not** in the tree. It separates missing UI, missing
 platform work, and deliberate non-goals so the three do not get confused.
 
@@ -39,9 +40,10 @@ app itself has the gaps listed in
 - **No accessibility.** The window is one painted buffer: no accessibility tree,
   screen-reader labels, high-contrast mode or keyboard traversal of the sidebar
   and tabs.
-- **No command palette, attention panel or settings window.** Their chords are
-  bound and print "no window yet". Shortcuts are editable only by hand in
-  `config.json`.
+- **No settings window.** `⌘,` prints "no window yet"; font size, font scale,
+  sidebar density and shortcuts are edited by hand in `config.json`.
+- **The palette lists actions only.** It has no workspace or session commands
+  beyond the 14 bound actions, and it does not remember recent choices.
 
 ### Layout, workspaces and tabs
 
@@ -63,8 +65,9 @@ app itself has the gaps listed in
 - **No agent detection loop.** The protocol and `pid_info` support passive
   detection; the window never calls `agent.detect`, so a Claude/Codex/opencode
   process started by hand is not picked up.
-- **No attention panel or notification list.** `⌘⇧U` jumps to the newest agent
-  that needs attention and acknowledges it; there is no list to browse.
+- **Notifications are only in the attention list.** `⌘I` lists unacknowledged
+  notifications (Enter jumps and acknowledges); there is no filter, grouping or
+  bulk acknowledge, and the list is not reachable from the sidebar.
 - **No OS banners, sounds or dock/taskbar badges.** `notify_os` still prints to
   stderr.
 - **No mute, token or cost display.**
@@ -179,8 +182,7 @@ notarized distribution, and the final decision between this renderer and GTK4 +
 
 ## 7. Recommended order
 
-1. **Overlay UI:** command palette, attention panel, settings window, on the
-   chords that already exist.
+1. **Settings window**, the last overlay on the existing chord.
 2. **Protocol parity for input:** mouse reporting, IME preedit, link open.
 3. **Sidebar completion:** scrolling, drag-reorder, groups UI, workspace rename.
 4. **Lifecycle:** agent detection loop, autosave debounce, single-instance guard,

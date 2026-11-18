@@ -69,6 +69,16 @@ the macOS window's 12pt labels.
   combinations, Enter, Tab, Esc, Backspace, Delete, Insert, arrows, Home/End,
   Page keys and F1–F12.
 
+**Panels**
+
+- `⌘⇧P` opens the command palette: a fuzzy-matched list of all 14 configurable
+  actions with their current chord, arrow keys to move, Enter to run, Escape to
+  close. `Ctrl+Shift+P` outside macOS.
+- `⌘I` opens the attention list: unacknowledged notifications newest first, with
+  the level colour, body and workspace. Enter acknowledges the notification,
+  selects its workspace and focuses the surface that raised it.
+- Clicking outside a panel or focusing another window closes it.
+
 **Window actions**
 
 Defaults come from the macOS table on macOS and from a Ctrl+Shift table on
@@ -108,9 +118,9 @@ when Xvfb is absent.
 These are the window's limits; [docs/09-known-gaps.md](09-known-gaps.md) has the
 full audited inventory.
 
-- **No overlay UI yet.** The command palette, the attention list and the settings
-  window are bound but print "no window yet"; their chords are wired so the
-  panel can land without touching input routing.
+- **No settings window.** `⌘,` is bound and prints "no window yet"; the palette
+  and attention list are the only panels, and settings are edited in
+  `config.json` by hand.
 - **One window, one visible workspace.** No multi-window, no detachable panes.
 - **No mouse reporting to the PTY.** Wheel scrolling is local; a program that
   enables mouse tracking does not receive clicks or wheel events.
@@ -126,7 +136,7 @@ full audited inventory.
 
 ## Next
 
-1. Command palette, attention panel and settings window (one overlay surface).
+1. Settings window, the last overlay on an existing chord.
 2. Mouse reporting, IME preedit, link open.
 3. Workspace drag-reorder and sidebar scrolling.
 4. Packaging: single instance, Linux/Windows installers, CI window smoke.
