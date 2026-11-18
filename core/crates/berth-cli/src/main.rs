@@ -20,10 +20,10 @@ fn token_path() -> PathBuf {
 }
 
 fn token() -> Option<String> {
-    if let Ok(value) = std::env::var("BERTH_TOKEN") {
-        if !value.is_empty() {
-            return Some(value);
-        }
+    if let Ok(value) = std::env::var("BERTH_TOKEN")
+        && !value.is_empty()
+    {
+        return Some(value);
     }
     std::fs::read_to_string(token_path())
         .ok()
@@ -245,10 +245,10 @@ fn agent_for_surface(c: &mut Client, surface_id: &str) -> Result<String, String>
 /// The agent id comes from the wrapper's environment. Passive agents can be
 /// resolved from the surface id instead.
 fn hook_agent(c: &mut Client) -> Result<String, String> {
-    if let Ok(id) = std::env::var("BERTH_AGENT_ID") {
-        if !id.is_empty() {
-            return Ok(id);
-        }
+    if let Ok(id) = std::env::var("BERTH_AGENT_ID")
+        && !id.is_empty()
+    {
+        return Ok(id);
     }
     let surface = std::env::var("BERTH_SURFACE_ID")
         .map_err(|_| "neither BERTH_AGENT_ID nor BERTH_SURFACE_ID is set".to_string())?;
@@ -291,10 +291,10 @@ fn run_claude_hook(c: &mut Client) -> Result<(), String> {
     let agent_id = hook_agent(c)?;
     let detail = if detail.is_empty() { fallback } else { detail };
     let mut params = json!({"agent_id": agent_id.clone(), "state": state, "detail": detail});
-    if event == "SessionStart" {
-        if let Some(session) = payload["session_id"].as_str() {
-            params["session_ref"] = json!(session);
-        }
+    if event == "SessionStart"
+        && let Some(session) = payload["session_id"].as_str()
+    {
+        params["session_ref"] = json!(session);
     }
     // A hook can arrive out of order (for example PreToolUse before the prompt
     // event). Pass through thinking once instead of losing the update.
@@ -760,10 +760,10 @@ fn run() -> Result<(), String> {
         "agent-set" => {
             let pos = positional(rest);
             let mut aid = pos.first().cloned();
-            if aid.is_none() {
-                if let Some(surface) = arg_after(rest, "--surface") {
-                    aid = Some(agent_for_surface(&mut c, &surface)?);
-                }
+            if aid.is_none()
+                && let Some(surface) = arg_after(rest, "--surface")
+            {
+                aid = Some(agent_for_surface(&mut c, &surface)?);
             }
             if aid.is_none() {
                 aid = std::env::var("BERTH_AGENT_ID")

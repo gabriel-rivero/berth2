@@ -9,6 +9,7 @@
 //! | socket | `<data>/berth.sock` | `$XDG_RUNTIME_DIR/berth/berth.sock` or `<data>/berth.sock` | `\\.\pipe\berth-<user>` |
 //! | token | `<data>/token` | `<data>/token` | `<data>\\token` |
 //! | logs | `~/Library/Logs/Berth` | `$XDG_STATE_HOME/berth/logs` | `%LOCALAPPDATA%\\Berth\\Logs` |
+//! | config | `~/.config/berth/config.json` | `$XDG_CONFIG_HOME/berth/config.json` | `%USERPROFILE%\\.config\\berth\\config.json` |
 //!
 //! `BERTH_SOCKET_PATH` overrides the socket; `BERTH_TOKEN_FILE` overrides the
 //! token file. The macOS layout is unchanged so existing installs keep working.
@@ -121,6 +122,25 @@ pub fn token_path() -> PathBuf {
     data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("token")
+}
+
+/// User configuration file. `BERTH_CONFIG` overrides it for tests and
+/// throwaway instances.
+pub fn config_path() -> PathBuf {
+    if let Some(path) = env_path("BERTH_CONFIG") {
+        return path;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        if let Some(config) = env_path("XDG_CONFIG_HOME") {
+            return config.join("berth").join("config.json");
+        }
+    }
+    home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".config")
+        .join("berth")
+        .join("config.json")
 }
 
 /// Documented default for the session snapshot. The shell may supply its own.

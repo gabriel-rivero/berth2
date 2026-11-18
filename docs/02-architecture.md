@@ -128,9 +128,11 @@ shell can host:
   implementation backed by `portable-pty` and a `vt100` screen. It proves the
   seam end-to-end (spawn, type, read back, resize, restore) on Linux, macOS and
   Windows before a GUI renderer exists. See docs/07-headless-shell.md.
-- `berth-gui` is the first visible Linux/Windows window: the same engine plus
-  `winit` + `softbuffer` + an 8×16 bitmap grid, with key routing and resize. It
-  is a slice, not the split-tree shell yet. See docs/08-minimal-window.md.
+- `berth-gui` is the portable window: the same engine plus `winit` +
+  `softbuffer` + `cosmic-text` for real system fonts, with the split tree, tabs,
+  a sidebar, scrollback, selection, clipboard and OSC events. It runs on Linux,
+  Windows and macOS; parity with the AppKit shell is tracked in
+  docs/09-known-gaps.md. See docs/08-minimal-window.md.
 
 On Unix the socket is `0600`; on Windows the named pipe inherits the user's
 `%APPDATA%` ACL, and the token file is user-scoped.

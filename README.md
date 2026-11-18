@@ -4,7 +4,7 @@ A native macOS terminal workspace for running coding agents side by side — bui
 
 Status: 0.8.4, M4 code complete; 0.9 closes the milestone with the focus-ownership fix and the Instruments trace ([docs/06-0.9.md](docs/06-0.9.md)). The daily-driver work is in: `berth hooks install` wires Claude Code hooks and an opencode plugin so agent state, tool detail, and the provider session id feed the M3 agent layer (hooks also make `claude --resume <id>` work across relaunch). M3 remains the agent layer: `AgentSurface` state machine with attention/notification dedupe, one-second passive foreground-process detection, process-exit → `errored` within the same tick, `berth run` registration with resume payloads, sidebar agent badges and attention-first ordering, pane attention rings, acknowledging `⌘⇧U` jump, `⌘I` attention panel, and agent-aware session restore. M4 hardening frees PTYs before Ghostty shuts down, validates session snapshots before restoring, rotates the crash journal, and records rolling breadcrumbs plus a main-thread stall watchdog under `~/Library/Logs/Berth/`. Real use surfaced three defects, all fixed: a split-resize feedback loop that crashed ⌘D (0.8.2), a detection deadlock that froze the app a second or two after launch (0.8.3), and a 1× display scale mismatch that drew the grid at half size (0.8.4). The only open M4 criterion is the two-week personal-use observation. M0–M2 remain the shell and authenticated NDJSON protocol spine, now with generated JSON Schema.
 
-Download: [latest release](https://github.com/gabriel-rivero/berth2/releases) (macOS 14+, Apple Silicon, ad-hoc signed).
+Download: [latest release](https://github.com/gabriel-rivero/berth2/releases) (macOS 14+, Apple Silicon, ad-hoc signed). The portable window runs from the Rust workspace on Linux, Windows and macOS; see [docs/08-minimal-window.md](docs/08-minimal-window.md).
 
 ```sh
 make test-core    # rust core + transport + server, any platform (Linux/macOS/Windows)
@@ -13,7 +13,7 @@ make fetch-engine # macOS, Command Line Tools only: download the CI-built Ghostt
 make run          # macOS: bundle + launch
 ```
 
-The Rust half — `berth-core`, `berth-transport`, `berth-server`, `berth-headless`, `berth-gui` and the `berth` CLI — builds and tests on Linux, macOS and Windows. `berth-headless` is the portable PTY/protocol shell; `berth-gui` is the first visible Linux/Windows window (winit + softbuffer, no GPU), with the split tree, per-pane tabs and a workspace sidebar. See [docs/07-headless-shell.md](docs/07-headless-shell.md) and [docs/08-minimal-window.md](docs/08-minimal-window.md). The Swift/AppKit shell remains the macOS shell; Linux and Windows get their GUI shell on the same protocol (see [docs/05-build.md](docs/05-build.md#portable-core-linux-and-windows)).
+The Rust half — `berth-core`, `berth-transport`, `berth-server`, `berth-headless`, `berth-gui` and the `berth` CLI — builds and tests on Linux, macOS and Windows. `berth-headless` is the portable PTY/protocol shell; `berth-gui` is the visible window (winit + softbuffer + cosmic-text, no GPU): real system fonts with Unicode and emoji, scrollback, selection, clipboard, OSC title/cwd/bell/progress, draggable dividers, per-pane tabs and a workspace sidebar with groups, agent rows and progress. See [docs/07-headless-shell.md](docs/07-headless-shell.md) and [docs/08-minimal-window.md](docs/08-minimal-window.md). Feature parity with the Swift/AppKit shell is tracked in [docs/09-known-gaps.md](docs/09-known-gaps.md); the Swift shell remains the macOS default, and both shells speak the same protocol.
 
 
 ## The idea in one paragraph
@@ -32,7 +32,7 @@ cmux proved the shape (sidebar of workspaces next to a split grid of terminals) 
 | [docs/05-build.md](docs/05-build.md) | Toolchain, bootstrap, smoke checklist, known gaps, Ghostty upgrades |
 | [docs/06-0.9.md](docs/06-0.9.md) | 0.9 scope: focus ownership fix, Instruments trace, filed-bug queue |
 | [docs/07-headless-shell.md](docs/07-headless-shell.md) | Linux/Windows shell spike: portable PTY host, VT readback, protocol acceptance |
-| [docs/08-minimal-window.md](docs/08-minimal-window.md) | First visible Linux/Windows window: winit + softbuffer, split tree, tabs, sidebar |
+| [docs/08-minimal-window.md](docs/08-minimal-window.md) | Portable window: real text, scrollback, selection, clipboard, dividers, tabs, sidebar |
 | [docs/09-known-gaps.md](docs/09-known-gaps.md) | Audited inventory: portable GUI, headless shell, core/server/CLI, macOS gaps, non-goals |
 | [docs/config.md](docs/config.md) | `config.json`, font/display scale, sidebar density, socket and env vars, logs |
 | [CHANGELOG.md](CHANGELOG.md) | Release notes, including 0.8.4 |
@@ -41,7 +41,7 @@ cmux proved the shape (sidebar of workspaces next to a split grid of terminals) 
 
 ```
 app/            Swift 6 + AppKit shell, hosts GhosttyKit (Package.swift + Sources/Berth)
-core/           cargo workspace: berth-core (portable domain) · berth-transport (sockets/pipes) · berth-server (NDJSON server) · berth-headless (PTY/VT shell) · berth-gui (minimal window) · berth-cli (`berth`)
+core/           cargo workspace: berth-core (portable domain) · berth-transport (sockets/pipes) · berth-server (NDJSON server) · berth-headless (PTY/VT shell) · berth-gui (portable window) · berth-cli (`berth`)
 vendor/ghostty  git submodule, pinned to v1.4.0
 scripts/        bootstrap.sh (engine) · fetch-engine.sh (CI-built engine) · bundle.sh (.app)
 docs/           00 teardown · 01 vision · 02 architecture · 03 protocol · 04 roadmap · 05 build · 07 headless shell · 08 minimal window · 09 known gaps

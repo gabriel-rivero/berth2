@@ -1,125 +1,104 @@
 # Known gaps and missing behavior
 
-Last audited: 2026-11-17, code at commit `76577c7` (split tree, tabs,
-sidebar). This is the honest inventory of what is **not** in the tree. It
-separates missing UI, missing platform work, and deliberate non-goals so the
-three do not get confused.
+Last audited: 2026-11-18, code at the portable-window slice that added real text,
+scrollback, selection, clipboard, OSC events and divider dragging. This is the
+honest inventory of what is **not** in the tree. It separates missing UI, missing
+platform work, and deliberate non-goals so the three do not get confused.
 
-The portable shell is a spike that has become usable; it is not feature parity
-with the macOS app, and the macOS app itself still has the gaps listed in
-[docs/05-build.md](05-build.md#known-gaps) and
-[docs/04-roadmap.md](04-roadmap.md).
+The portable window is no longer a spike: it renders real text and is usable as a
+daily terminal. It is still not feature parity with the macOS app, and the macOS
+app itself has the gaps listed in
+[docs/05-build.md](05-build.md#known-gaps) and [docs/04-roadmap.md](04-roadmap.md).
 
-## 1. `berth-gui` (Linux/Windows window)
+## 1. `berth-gui` (portable window)
 
 ### Terminal rendering
 
-- **ASCII bitmap font only.** `font8x8` renders an 8×16 cell; Unicode without a
-  glyph becomes `?`. No wide characters, combining marks, emoji, grapheme
-  clusters or script shaping.
-- **No font stack, sizing or zoom.** Cell size is fixed at `8×16 × scale
-  factor`; `config.json` font/display settings are ignored.
-- **Limited attributes.** Bold is a double-draw; there is no italic, underline,
-  strikethrough, dim, blink, underline color or hyperlink handling.
-- **No scrollback view.** `vt100` keeps 10,000 lines and
-  `surface.read_text --scrollback` can read them, but the window always paints
-  the live screen. No wheel, page keys or scrollbar scroll the view.
-- **No bell or notification presentation.** OSC bell counts, OSC 9;4 progress
-  and desktop notifications are not shown; only the core records them.
-- **No OSC title/cwd updates.** Tab labels and the window title never learn a
-  shell's title or cwd; labels fall back to the cwd basename.
-- **No search**, link detection, URL opening, text selection, shell-integration
-  prompt marks or graphics protocols (sixel/kitty/iTerm images).
+- **One font, no configuration.** The system monospace face at `fontSize` ×
+  `fontScale`; there is no family, weight, line-height or zoom control, and no
+  per-font metric tuning.
+- **No text effects beyond bold/italic/dim/underline.** No strikethrough, blink,
+  underline colour, hyperlinks or per-cell font changes.
+- **No scrollbar.** Wheel and Shift+Page keys scroll, but nothing shows how far
+  into the scrollback the view is.
+- **No bell or notification presentation.** Bells and OSC 9/777 notifications
+  reach the core; the window shows only an unread dot and a 1.2 s pane ring.
+- **No search**, link detection, URL opening, or graphics protocols
+  (sixel/kitty/iTerm images).
+- **No IME preedit.** Committed text works; there is no composition window, and
+  dead keys depend on the platform.
 
 ### Input and clipboard
 
-- **No copy/paste or selection.** Ctrl+C is sent to the PTY as SIGINT; there is
-  no clipboard read/write path, bracketed paste or paste confirmation. `Ctrl+V`
-  is not special.
-- **No mouse reporting to the PTY**, wheel scrolling, drag selection,
-  right/middle click, double-click word selection or drag-and-drop.
-- **No IME preedit.** Committed `event.text` works, but there is no composition
-  window or preedit display; dead keys depend on the platform.
-- **No configurable keybindings.** The only window shortcuts are
-  `Ctrl+Shift+T` (new tab), `Ctrl+Shift+W` (close tab) and
-  `Ctrl+PageUp/PageDown` (cycle tabs). New workspace, split, close pane and focus
-  movement have no UI shortcut.
+- **No mouse reporting to the PTY.** Wheel scrolls the local view; a program
+  that enables mouse tracking receives nothing.
+- **No paste confirmation.** A multi-line paste goes straight to the shell, where
+  the macOS app shows a preview dialog.
+- **No selection auto-scroll.** Dragging past the top or bottom of a pane does
+  not extend the view.
 - **No accessibility.** The window is one painted buffer: no accessibility tree,
   screen-reader labels, high-contrast mode or keyboard traversal of the sidebar
   and tabs.
+- **No command palette, attention panel or settings window.** Their chords are
+  bound and print "no window yet". Shortcuts are editable only by hand in
+  `config.json`.
 
 ### Layout, workspaces and tabs
 
 - **One window, one visible workspace.** No multiple windows, detachable
   surfaces or overview.
-- **Sidebar is read-only and flat.** It lists workspaces in core order, with no
-  group headers, collapse, colors, icons, pinning, drag reorder or scrolling;
-  rows that do not fit are clipped. Creating, renaming, grouping, reordering and
-  closing workspaces still requires the CLI/protocol.
-- **Tabs are minimal.** A tab strip appears only when a pane has more than one
-  surface. There is no overflow/scroll, close button, context menu, rename,
-  drag-reorder or tab-creation button; shortcuts and clicks are the only
-  controls.
-- **No divider dragging.** `pane.resize` and `split.resize` exist in the core;
-  the window does not hit-test or drag dividers.
-- **No split/pane controls.** Splits and closes are created through
-  `berth split`/the protocol; there are no split keybindings, pane close button,
-  maximize/zoom, or swap/move pane operations.
-- **No spatial focus navigation.** Focus is click- and tab-driven; there is no
-  arrow-key movement between rectangles.
-- **No command palette, menus, settings UI, status bar or onboarding.**
+- **Sidebar does not scroll and cannot be reordered.** Rows past the bottom are
+  clipped; drag-reorder (`workspace.move`), colours, icons and a filter are
+  absent. Groups can only be collapsed, not created, renamed or coloured.
+- **Tabs cannot be renamed or reordered.** No overflow menu; a very large number
+  of tabs squeezes every label.
+- **No pane maximize/zoom, swap or move.** Splits and closes are created by
+  chords or the protocol; there is no context menu.
+- **No divider cursor change.** The grab band is 7 px and the pointer stays an
+  arrow.
+- **No menus or status bar.**
 
 ### Agents, attention and notifications
 
-- **No agent UI.** Agent state, attention, progress, token counts and
-  notifications exist in the core but are not rendered. The sidebar only shows a
-  workspace unread dot.
-- **No notification path.** `notify_os` writes `berth: notification …` to stderr;
-  there are no OS banners, sounds, or a notification list/popover.
-- **No agent detection loop in the GUI.** Passive detection is available through
-  the protocol and `pid_info`; the window does not call it or surface results.
-- **No bell/progress badges.**
+- **No agent detection loop.** The protocol and `pid_info` support passive
+  detection; the window never calls `agent.detect`, so a Claude/Codex/opencode
+  process started by hand is not picked up.
+- **No attention panel or notification list.** `⌘⇧U` jumps to the newest agent
+  that needs attention and acknowledges it; there is no list to browse.
+- **No OS banners, sounds or dock/taskbar badges.** `notify_os` still prints to
+  stderr.
+- **No mute, token or cost display.**
 
 ### Session and lifecycle
 
-- **No autosave/debounce.** The snapshot is written on window close,
-  `session.save`, and the smoke exit. A crash or SIGTERM loses changes since the
-  last explicit save.
-- **The portable shells do not write `journal.ndjson`.** `berth-headless`'s
-  `save_session` writes only `session.json`; the crash-tail journal is a
-  macOS-store behavior, not a portable-shell behavior.
-- **Scrollback is not restored** (intentional, matching the macOS app). Restore
-  respawns PTYs with cwd and rebuilds the split/tab tree.
-- **No PTY exit callback.** `SurfaceOps` has no child-exit method. When a shell
-  exits, the screen freezes and the core is not told, so `surface.exited` and
-  `agent.errored` do not fire from this shell.
-- **Hidden tabs keep stale sizes** until activated and resized on the next
-  frame.
-- **No single-instance guard.** On Unix, a second `berth-gui` can unlink the
-  existing socket and bind the same path; it does not detect or hand off to the
-  first instance. Windows named pipes have the same collision risk.
-- **No logs/diagnostics** from the window beyond stdout/stderr; `paths::log_dir`
-  is unused by the portable shells.
+- **No autosave.** The snapshot is written on close, `session.save` and the smoke
+  exit; a crash or SIGTERM loses changes.
+- **No crash journal.** `journal.ndjson` remains a macOS-store behavior.
+- **No single-instance guard.** A second window unlinks and rebinds the socket
+  path; the first instance keeps running with a dead endpoint.
+- **No logs.** The window writes nothing to `paths::log_dir`; diagnostics are
+  stdout/stderr.
 
 ### Platform and distribution
 
-- **Linux/X11 is the only manually tested path.** Wayland builds but has not
-  been run. Windows and macOS are compile/CI coverage for the Rust crates, not
-  GUI smoke tests.
-- **CI does not run `make gui-smoke`.** The core matrix runs fmt, clippy and
-  tests; the GUI's geometry/label unit tests run, but no window is created in CI.
-- **No Linux/Windows packaging.** No `.deb`/AppImage/Flatpak, Windows installer,
-  `.app` wrapper, code signing/notarization, auto-update, taskbar/dock
-  integration, or single-instance handoff.
-- **HiDPI and multi-monitor** are only lightly exercised through winit's scale
-  factor; no mixed-DPI or monitor-hotplug validation.
-- **No desktop notifications, tray icon, menu bar or system theme integration.**
+- **Linux/X11 is the only scripted path.** Wayland, Windows and macOS are compile
+  and test coverage; punch-through to a real desktop is manual.
+- **CI does not run the window.** The core matrix runs fmt, clippy and tests; the
+  GUI's unit tests run, but no window or PNG is created in CI.
+- **No packaging.** No `.deb`/AppImage/Flatpak, Windows installer, `.app`
+  wrapper, signing, auto-update or single-instance handoff.
+- **HiDPI and multi-monitor** are exercised through winit's scale factor and the
+  font rebuild on scale change; mixed-DPI hotplug is untested.
 
 ## 2. `berth-headless` (portable shell)
 
 - Spike binary, not a packaged service; no GUI, tray or window.
 - Fixed 10,000-line scrollback; no scrollback restore.
-- No child-exit callback (same `SurfaceOps` gap), no bell/OSC title/cwd.
+- **Exited children are polled, not pushed.** `PtyHost::is_alive` reports it and
+  `berth-gui` dispatches `surface.exited`, but `SurfaceOps` still has no
+  `surface_exited` callback, so a different shell must poll the same way.
+- Bell, OSC title/cwd, progress, clipboard and notification requests are exposed
+  through `screen_meta`; a shell must poll it.
 - `notify_os` prints to stderr; no desktop notification.
 - No graceful SIGINT/SIGTERM snapshot; `session.save` is explicit.
 - Linux/Unix PTYs are manually tested; Windows ConPTY and macOS PTYs are
@@ -182,13 +161,11 @@ From [docs/01-vision.md](01-vision.md#4-non-goals-for-v1):
 - SSH workspaces, remote tmux mirroring, cloud VMs.
 - iOS companion, push notifications, teams/multiplayer.
 - Plugin marketplace, TUI mode, custom command DSLs.
-- Windows/Linux GUI parity as a v1 commitment (the portable shell is a spike;
-  production packaging is undecided).
 - Feature parity with cmux.
 
 Deferred until after v1: webview panes, cloud, plugins, telemetry, auto-update,
-notarized distribution, and a production Linux/Windows renderer choice
-(winit+`vt100` vs GTK4+`libghostty-vt`).
+notarized distribution, and the final decision between this renderer and GTK4 +
+`libghostty-vt`.
 
 ## 6. Coverage summary
 
@@ -196,18 +173,17 @@ notarized distribution, and a production Linux/Windows renderer choice
 | --- | --- | --- |
 | `berth-core`, `berth-transport`, `berth-server` | Unit + integration tests | Linux local; Ubuntu/macOS/Windows CI |
 | `berth-cli` | Integration round-trip | Linux local; CI |
-| `berth-headless` | PTY integration test (spawn/type/read/resize/close) | Linux local; CI |
-| `berth-gui` | Geometry + tab-label unit tests | Xvfb smoke + xdotool clicks/keys locally; **no CI window** |
+| `berth-headless` | PTY integration test + OSC/meta unit tests | Linux local; CI |
+| `berth-gui` | Geometry, view-model, font, config, keymap tests | PNG frames on macOS; Xvfb smoke on Linux; **no CI window** |
 | macOS app | Swift tests + build in CI | manual daily use |
 
 ## 7. Recommended order
 
-1. **Correctness/lifecycle first:** child-exit callback, OSC title/cwd, snapshot
-   debounce, single-instance guard.
-2. **Daily terminal basics:** scrollback view, selection/clipboard, mouse
-   reporting and wheel, real font rasterizer.
-3. **Layout controls:** divider dragging, split/close/focus shortcuts, tab
-   overflow/close buttons, sidebar groups and workspace operations.
-4. **Attention UI:** agent rows, notifications, bell/progress badges.
-5. **Packaging and CI:** run `gui-smoke` on Linux CI, add Wayland/Windows smoke,
-   decide the production renderer, then package.
+1. **Overlay UI:** command palette, attention panel, settings window, on the
+   chords that already exist.
+2. **Protocol parity for input:** mouse reporting, IME preedit, link open.
+3. **Sidebar completion:** scrolling, drag-reorder, groups UI, workspace rename.
+4. **Lifecycle:** agent detection loop, autosave debounce, single-instance guard,
+   log file.
+5. **Packaging and CI:** window smoke on Linux CI, Windows/Wayland runs,
+   installers.

@@ -146,10 +146,10 @@ impl AppState {
     /// still alive, otherwise the active tab of the first pane.
     pub fn active_surface_of_workspace(&self, workspace_id: &str) -> Option<String> {
         let ws = self.workspace(workspace_id)?;
-        if let Some(id) = &ws.active_surface {
-            if self.surfaces.contains_key(id) {
-                return Some(id.clone());
-            }
+        if let Some(id) = &ws.active_surface
+            && self.surfaces.contains_key(id)
+        {
+            return Some(id.clone());
         }
         ws.root
             .leaves()
@@ -320,22 +320,22 @@ impl AppState {
         ops: &dyn SurfaceOps,
     ) -> Result<Surface, CoreError> {
         let surface = self.require_surface(surface_id)?.clone();
-        if let Some(pane) = self.panes.get_mut(&surface.pane_id) {
-            if let Some(idx) = pane.surfaces.iter().position(|s| s == surface_id) {
-                pane.active = idx;
-            }
+        if let Some(pane) = self.panes.get_mut(&surface.pane_id)
+            && let Some(idx) = pane.surfaces.iter().position(|s| s == surface_id)
+        {
+            pane.active = idx;
         }
         ops.focus(surface_id)?;
         self.selected_workspace = Some(surface.workspace_id.clone());
         self.selected_surface = Some(surface.id.clone());
 
         let mut changed = None;
-        if let Some(w) = self.workspace_mut(&surface.workspace_id) {
-            if w.active_surface.as_deref() != Some(surface_id) || w.unread != 0 {
-                w.active_surface = Some(surface.id.clone());
-                w.unread = 0;
-                changed = Some(w.clone());
-            }
+        if let Some(w) = self.workspace_mut(&surface.workspace_id)
+            && (w.active_surface.as_deref() != Some(surface_id) || w.unread != 0)
+        {
+            w.active_surface = Some(surface.id.clone());
+            w.unread = 0;
+            changed = Some(w.clone());
         }
         self.emit(
             names::PANE_FOCUS_CHANGED,
@@ -502,17 +502,17 @@ impl AppState {
 
         // A surviving workspace must point at a live tab after the close.
         let active = self.active_surface_of_workspace(&ws_id);
-        if let Some(ws) = self.workspace_mut(&ws_id) {
-            if ws.active_surface != active {
-                ws.active_surface = active.clone();
-                let snapshot = ws.clone();
-                self.emit(names::WORKSPACE_CHANGED, serde_json::json!(snapshot));
-            }
+        if let Some(ws) = self.workspace_mut(&ws_id)
+            && ws.active_surface != active
+        {
+            ws.active_surface = active.clone();
+            let snapshot = ws.clone();
+            self.emit(names::WORKSPACE_CHANGED, serde_json::json!(snapshot));
         }
-        if self.selected_workspace.as_deref() == Some(ws_id.as_str()) {
-            if let Some(s) = active {
-                self.selected_surface = Some(s);
-            }
+        if self.selected_workspace.as_deref() == Some(ws_id.as_str())
+            && let Some(s) = active
+        {
+            self.selected_surface = Some(s);
         }
 
         if self.selected_surface.as_deref() == Some(surface_id) {

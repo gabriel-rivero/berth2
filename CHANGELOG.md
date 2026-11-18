@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+### Portable window: real text and daily terminal basics
+
+- `berth-gui` now renders real system fonts through `cosmic-text` instead of the
+  8×16 bitmap face: font discovery with fallback, so Cyrillic, CJK and colour
+  emoji draw; real bold, italic, dim and underline; per-cell glyph cache; a
+  smaller chrome font for tabs and the sidebar. Cell metrics follow the same
+  `fontSize` × `fontScale` rule as the macOS shell, including the automatic
+  `2 / backing` scale.
+- The window became a terminal: wheel and `Shift+PageUp`/`Shift+PageDown` scroll
+  the 10,000-line scrollback, drag/shift-drag/double-click select, and
+  `Super+C`/`Ctrl+Shift+C` copy while `Super+V`/`Ctrl+Shift+V` paste with
+  bracketed paste when the program asks for it.
+- Terminal events now reach the core: OSC 0/2 titles become tab labels and the
+  window title, OSC 7 sets the cwd, BEL counts and flashes the pane, OSC 9;4
+  reports progress, OSC 52 writes the clipboard, and OSC 9/777 create
+  notifications. A child exit is reported once as `surface.exited` and leaves a
+  "process exited" banner instead of a frozen screen.
+- `berth-headless` grew the plumbing: `ScreenMeta` callbacks for title, cwd,
+  bell, progress, clipboard and notifications; `ScreenView` now carries cursor
+  visibility, scrollback offset, bracketed paste and per-cell dim/italic/
+  underline/wide flags; plus `screen_meta`, `take_screen_meta_requests`,
+  `set_scrollback`, `is_alive`, `contents_between` and `line_text`.
+- Layout parity: draggable split dividers (`split.resize`), a resizable sidebar,
+  tab strips that share width and truncate labels with a close cross, a `+`
+  button and double-click to create a workspace, middle-click to close a tab or
+  workspace, group chevrons (`group.update`), pinned-first and attention-ranked
+  ordering, agent rows with state, detail and OSC progress, and `⌘⇧U` jump to
+  the newest attention.
+- `config.json` is now read by the portable window: `fontSize`, `fontScale`,
+  `compactSidebar`, `socket` and all 14 `shortcuts`, with a Ctrl-based default
+  table outside macOS. `BERTH_CONFIG` overrides the path.
+- `--smoke-png` renders a frame to PNG and exits, which is how the visual work
+  was checked on macOS; `--smoke-ms` keeps its headless Xvfb role. New tests
+  cover font metrics and caching, sidebar ordering and groups, geometry and
+  dividers, config parsing, shortcut resolution, selection and paint blending.
+- The workspace MSRV moves to 1.89 for `cosmic-text`, and the lints that
+  MSRV-aware clippy now raises in existing crates were collapsed to let-chains.
+
 ### Portable foundation: Linux and Windows
 
 - `berth-core` now owns every platform path decision (`berth_core::paths`):

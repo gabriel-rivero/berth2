@@ -13,7 +13,7 @@ members = [
 [workspace.package]
 version = "0.8.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.89"
 license = "MIT"
 repository = "https://github.com/gabriel-rivero/berth2"
 
@@ -31,6 +31,11 @@ libc = "0.2"
 winit = "0.30"
 softbuffer = "0.4"
 font8x8 = "0.3"
+# Real text: system font discovery, shaping and glyph rasterisation in-process.
+# No fontconfig: fontdb scans the platform font directories itself.
+cosmic-text = { version = "0.19", default-features = false, features = ["std", "swash"] }
+# System clipboard, text only.
+arboard = "3"
 
 [profile.release]
 opt-level = 3

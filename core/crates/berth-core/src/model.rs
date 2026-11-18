@@ -227,12 +227,13 @@ impl PaneNode {
             } => {
                 for (i, child) in children.iter_mut().enumerate() {
                     if child.contains(pane_id) {
-                        if let Self::Leaf { pane_id: p } = child {
-                            if p == pane_id && i < weights.len() {
-                                weights[i] = weight.clamp(0.05, 0.95);
-                                self.normalize();
-                                return true;
-                            }
+                        if let Self::Leaf { pane_id: p } = child
+                            && p == pane_id
+                            && i < weights.len()
+                        {
+                            weights[i] = weight.clamp(0.05, 0.95);
+                            self.normalize();
+                            return true;
                         }
                         return child.set_weight(pane_id, weight);
                     }

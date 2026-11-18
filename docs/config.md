@@ -1,8 +1,9 @@
 # Configuration reference
 
-Berth reads one JSON file at `~/.config/berth/config.json`. Missing keys use
-the defaults below. Changes to shortcuts, font, and sidebar density apply
-without reinstalling; the socket mode is read at launch.
+Berth reads one JSON file at `~/.config/berth/config.json` (on Linux,
+`$XDG_CONFIG_HOME/berth/config.json`). Missing keys use the defaults below.
+Changes to shortcuts, font, and sidebar density apply without reinstalling; the
+socket mode is read at launch.
 
 ```json
 {
@@ -36,6 +37,39 @@ without reinstalling; the socket mode is read at launch.
   surfaces immediately (`ghostty_surface_update_config`), so no relaunch is
   needed. Each surface re-evaluates when it moves between screens.
 
+The portable window reads `fontSize` and `fontScale` with the same rule, rasterises
+the system monospace face with cosmic-text, and redraws with the new metrics when
+the window moves to a display with a different scale factor. It does not read the
+Ghostty config, so `font-family`, opacity and padding do not apply there.
+
+## Portable window shortcuts
+
+`berth-gui` reads the same `shortcuts` object. Chord strings use the macOS
+spelling; outside macOS `cmd` means the Super/Windows key, which desktops usually
+capture, so the window ships a Ctrl-based default table instead:
+
+| Action | macOS | Linux / Windows |
+| --- | --- | --- |
+| `splitRight` | `cmd+d` | `ctrl+shift+d` |
+| `splitDown` | `cmd+shift+d` | `ctrl+shift+e` |
+| `newTab` | `cmd+t` | `ctrl+shift+t` |
+| `closeSurface` | `cmd+w` | `ctrl+shift+w` |
+| `nextTab` | `cmd+shift+]` | `ctrl+shift+]` |
+| `previousTab` | `cmd+shift+[` | `ctrl+shift+[` |
+| `nextPane` | `cmd+]` | `ctrl+alt+]` |
+| `previousPane` | `cmd+[` | `ctrl+alt+[` |
+| `newWorkspace` | `cmd+n` | `ctrl+shift+n` |
+| `palette` | `cmd+shift+p` | `ctrl+shift+p` |
+| `jumpAttention` | `cmd+shift+u` | `ctrl+shift+u` |
+| `showAttention` | `cmd+i` | `ctrl+shift+i` |
+| `toggleSidebar` | `cmd+opt+s` | `ctrl+alt+s` |
+| `settings` | `cmd+,` | `ctrl+,` |
+
+A value overrides the default for that action; an empty string unbinds it. Fixed
+bindings that do not appear in the table: `Super+1…9` selects a workspace, and
+`Super+C`/`Ctrl+Shift+C` copy and `Super+V`/`Ctrl+Shift+V` paste.
+
+
 ## Sidebar
 
 - `compactSidebar: true` reduces row height from 62 to 52 points and hides the
@@ -60,6 +94,7 @@ Environment overrides for clients and children:
 | `BERTH_SOCKET_PATH` | socket path override (Unix path or `\\.\pipe\name`) |
 | `BERTH_DATA_DIR` | data directory override (token, session snapshot) |
 | `BERTH_TOKEN_FILE` | token file override |
+| `BERTH_CONFIG` | `config.json` override (portable window and tests) |
 | `BERTH_TOKEN` | token injected into every child; used by `berth` |
 | `BERTH_SURFACE_ID` / `BERTH_WORKSPACE_ID` | injected into spawned terminals |
 | `BERTH_AGENT_ID` | injected by `berth run` and agent restore |

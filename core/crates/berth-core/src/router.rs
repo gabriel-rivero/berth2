@@ -401,14 +401,13 @@ fn handle(
                 }
             }
             let id = p.surface_id;
-            if let Some(ws_id) = bell_workspace {
-                if state.selected_workspace.as_deref() != Some(ws_id.as_str()) {
-                    if let Some(ws) = state.workspace_mut(&ws_id) {
-                        ws.unread = ws.unread.saturating_add(1);
-                        let snapshot = ws.clone();
-                        state.emit(names::WORKSPACE_CHANGED, json!(snapshot));
-                    }
-                }
+            if let Some(ws_id) = bell_workspace
+                && state.selected_workspace.as_deref() != Some(ws_id.as_str())
+                && let Some(ws) = state.workspace_mut(&ws_id)
+            {
+                ws.unread = ws.unread.saturating_add(1);
+                let snapshot = ws.clone();
+                state.emit(names::WORKSPACE_CHANGED, json!(snapshot));
             }
             if let Some(t) = title {
                 state.emit(

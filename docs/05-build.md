@@ -325,7 +325,7 @@ The non-UI half is supported on all three platforms and tested in a CI matrix:
 | `berth-transport` | NDJSON framing; Unix socket vs named pipe | ✓ | ✓ | ✓ |
 | `berth-server` | auth, subscriptions, replay, backpressure; hosts the core | ✓ | ✓ | ✓ |
 | `berth-headless` | PTY + VT screen shell, no window | ✓ | ✓ | ✓ |
-| `berth-gui` | minimal window: winit + softbuffer grid | ✓ | ✓ | ✓ |
+| `berth-gui` | portable window: winit + softbuffer + cosmic-text | ✓ | ✓ | ✓ |
 | `berth` CLI | `ls/send/read/events/run/hooks` client | ✓ | ✓ | ✓ |
 | Swift/AppKit shell | Ghostty-rendered workspace UI | — | ✓ | — |
 

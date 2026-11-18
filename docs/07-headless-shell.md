@@ -1,7 +1,7 @@
 # Headless shell (Linux/Windows spike)
 
 Status: first slice landed. Real PTYs, a VT screen and the full protocol run
-without a window. The minimal window is the second slice — see
+without a window, and the same host backs the portable window — see
 [docs/08-minimal-window.md](08-minimal-window.md).
 
 This is the "Linux shell spike" from [docs/04-roadmap.md](04-roadmap.md), split
@@ -109,16 +109,14 @@ This page lists the portable shell's current limits. The full audited inventory
 across the GUI, headless shell, core/server/CLI and macOS app is
 [docs/09-known-gaps.md](09-known-gaps.md).
 
-- **No renderer, window, splits, sidebar, or input routing.** The core tree is
-  correct; there is no view of it.
-- **No child-exit callback.** `SurfaceOps` has no `surface_exited`; the macOS
-  shell gets this from Ghostty. The headless host marks the PTY dead and
-  `pid_info` goes empty, but the core is not told, so `surface.exited` and
-  `agent.errored` do not fire. Add a callback to the trait (and both shells)
-  before agent support is called complete.
-- **No bell/OSC title/cwd reporting.** The core surface title and cwd stay as
-  spawned; vt100 exposes neither through the current host path.
-- **No clipboard, mouse, selection, IME or scroll gestures.**
+- **Exited children are polled.** `SurfaceOps` still has no `surface_exited`;
+  the host exposes `is_alive` and `berth-gui` dispatches `surface.exited`, but a
+  different shell must poll the same way.
+- **Terminal events are polled, not pushed.** `screen_meta` carries OSC title,
+  cwd, bell count, progress, clipboard and notification requests; a shell reads
+  it after processing output.
+- **No mouse reporting or IME.** The host encodes keys only; a GUI must send
+  mouse escapes itself.
 - **Windows/macOS PTY paths are compile-tested and CI-tested, not manually
   smoke-tested.** ConPTY output and key encoding deserve a real Windows run.
 - **No graceful shutdown hook.** `session.save` is explicit; SIGTERM does not
@@ -135,6 +133,8 @@ across the GUI, headless shell, core/server/CLI and macOS app is
 3. ~~Add a tab strip and workspace sidebar.~~ Landed in `berth-gui`: per-pane
    tabs with click/shortcut switching and a clickable workspace list. Divider
    dragging remains.
-4. Add divider dragging, scrollback, mouse selection and clipboard.
+4. ~~Add divider dragging, scrollback, selection and clipboard.~~ Landed in
+   `berth-gui`, along with OSC events and the exit banner.
 5. Decide `vt100` vs `libghostty-vt` from measured input latency and packaging.
-6. Add the child-exit callback to `SurfaceOps`, then wire agent exit states.
+6. Add the child-exit callback to `SurfaceOps`, then wire agent exit states
+   without polling.

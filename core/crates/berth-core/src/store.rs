@@ -616,10 +616,10 @@ mod tests {
             match choice {
                 0 => {
                     // Drop a random top-level field.
-                    if let Some(object) = candidate.as_object_mut() {
-                        if let Some(key) = object.keys().next().cloned() {
-                            object.remove(&key);
-                        }
+                    if let Some(object) = candidate.as_object_mut()
+                        && let Some(key) = object.keys().next().cloned()
+                    {
+                        object.remove(&key);
                     }
                 }
                 1 => {
