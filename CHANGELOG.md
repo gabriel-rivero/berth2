@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.10.1
+
+### Fixes
+
+- Windows and Linux build again. `default_socket_path` returned from a
+  `cfg(windows)` block and left unreachable code that `-D warnings` rejects, and
+  the macOS-only AppleScript helper was dead code elsewhere; both are fixed and
+  the workspace now checks and lints for all three targets.
+- The terminal answers cursor-position (`CSI 6n`, `CSI 5n`) and device-attribute
+  queries. Without the reply a shell can stall before its first prompt, which is
+  what Windows CI exposed: the child's first bytes were a cursor query and the
+  screen stayed empty.
+- The PTY acceptance test re-sends its command on a cold console, waits longer
+  and reports the surface's state on failure.
+- CI pins the core macOS matrix entry to `macos-15`. GitHub cancelled the
+  `macos-latest` job twice with "not acquired by a runner" while the app job on
+  `macos-15` ran; on capacity-constrained days that job may still be skipped by
+  GitHub, but the pin removes the label ambiguity.
+
 ## 0.10.0
 
 Berth now ships a portable window. `berth-gui` runs on Linux, Windows and macOS
