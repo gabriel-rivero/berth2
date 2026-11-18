@@ -533,6 +533,11 @@ impl SurfaceOps for PtyHost {
         )));
         let alive = Arc::new(AtomicBool::new(true));
 
+        #[cfg(windows)]
+        eprintln!(
+            "pty-trace: spawned pid={pid} tty={tty:?} size={cols}x{rows} prog={:?}",
+            req.argv
+        );
         spawn_reader(reader, Arc::clone(&screen), Arc::clone(&alive));
         spawn_waiter(child, Arc::clone(&alive));
 
@@ -698,14 +703,31 @@ fn spawn_reader(
         .name("berth-pty-reader".into())
         .spawn(move || {
             let mut buffer = [0u8; 16 * 1024];
+            let mut first = true;
             loop {
                 match reader.read(&mut buffer) {
-                    Ok(0) => break,
+                    Ok(0) => {
+                        #[cfg(windows)]
+                        eprintln!("pty-trace: reader EOF");
+                        break;
+                    }
                     Ok(n) => {
+                        #[cfg(windows)]
+                        if first {
+                            eprintln!(
+                                "pty-trace: first read {n} bytes: {:?}",
+                                String::from_utf8_lossy(&buffer[..n.min(120)])
+                            );
+                            first = false;
+                        }
                         lock(&screen).process(&buffer[..n]);
                     }
                     Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                    Err(_) => break,
+                    Err(error) => {
+                        #[cfg(windows)]
+                        eprintln!("pty-trace: reader error {error}");
+                        break;
+                    }
                 }
             }
             alive.store(false, Ordering::Relaxed);
