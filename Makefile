@@ -7,7 +7,7 @@ CONFIG ?= release
 ZIG_FLAGS := -Doptimize=ReleaseFast -Dapp-runtime=none -Demit-xcframework=true \
              -Demit-macos-app=false -Dxcframework-target=native
 
-.PHONY: help bootstrap fetch-engine core-lib bindings build app run cli headless gui gui-smoke acceptance m3 schema test test-core fmt fmt-check clean engine-clean
+.PHONY: help bootstrap fetch-engine core-lib bindings build app run cli headless gui gui-app gui-smoke acceptance m3 schema test test-core fmt fmt-check clean engine-clean
 
 help:
 	@echo "make bootstrap   fetch pinned Ghostty submodule + build GhosttyKit (macOS)"
@@ -19,7 +19,8 @@ help:
 	@echo "make run         launch the app"
 	@echo "make cli         build the berth CLI at core/target/release/berth"
 	@echo "make headless    build the headless shell at core/target/release/berth-headless"
-	@echo "make gui         build the minimal window at core/target/release/berth-gui"
+	@echo "make gui         build the portable window at core/target/release/berth-gui"
+	@echo "make gui-app     wrap it in build/BerthGui.app (macOS)"
 	@echo "make gui-smoke   render the window under Xvfb and exit (headless check)"
 	@echo "make acceptance  run the M2 protocol check against the running app"
 	@echo "make m3          run the M3 agent check against the running app"
@@ -61,6 +62,9 @@ headless:
 
 gui:
 	cd core && cargo build --release -p berth-gui
+
+gui-app: gui
+	./scripts/bundle-gui.sh release
 
 gui-smoke: gui
 	./scripts/gui-smoke.sh

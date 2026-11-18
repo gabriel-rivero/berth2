@@ -105,6 +105,11 @@ jobs:
             cp core/target/release/berth-gui dist/
             tar -czf "berth-gui-${version}-${{ matrix.target }}.tar.gz" -C dist berth-gui
           fi
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            ./scripts/bundle-gui.sh release
+            ditto -c -k --keepParent build/BerthGui.app \
+              "berth-gui-${version}-${{ matrix.target }}.app.zip"
+          fi
           ls -la berth-gui-*
       - uses: actions/upload-artifact@v4
         with:

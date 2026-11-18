@@ -141,7 +141,18 @@ Options: `--socket`, `--mode off|local|trusted`, `--token`, `--no-restore`,
 
 Releases also ship the portable window as `berth-gui-<version>-<platform>`
 archives (Linux x86_64, Windows x86_64, macOS arm64): single unsigned binaries,
-run from a terminal.
+run from a terminal. macOS also gets `…-macos-aarch64.app.zip`, the same binary
+in an ad-hoc signed `Berth Portable.app` you can double-click.
+
+Running it next to the macOS app needs a separate endpoint, because both want
+the same socket path and a second server refuses to steal it:
+
+```sh
+BERTH_DATA_DIR=/tmp/berth-rust BERTH_SOCKET_PATH=/tmp/berth-rust/berth.sock \
+  build/BerthGui.app/Contents/MacOS/berth-gui --mode trusted
+```
+
+`make gui-app` builds the bundle locally.
 
 A one-frame check, isolated from any running Berth:
 
