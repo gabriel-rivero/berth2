@@ -1495,6 +1495,27 @@ mod meta_tests {
     }
 
     #[test]
+    fn given_text_before_a_split_escape_then_the_text_is_not_held_back() {
+        let meta = Arc::new(Mutex::new(ScreenMeta::default()));
+        let images = Arc::new(Mutex::new(Vec::new()));
+        let events = ScreenEvents::new(Arc::clone(&meta), images, true, DEFAULT_SCROLLBACK);
+        let screen = Arc::new(Mutex::new(Parser::new_with_callbacks(
+            std::num::NonZeroU16::new(24).unwrap(),
+            std::num::NonZeroU16::new(80).unwrap(),
+            DEFAULT_SCROLLBACK,
+            events,
+        )));
+        let kitty = Arc::new(Mutex::new(HashMap::new()));
+        let mut scanner = GraphicsScanner::default();
+        scanner.feed(b"before\x1b", &screen, &meta, &kitty, true);
+        let text = lock(&screen).screen().contents();
+        assert!(text.starts_with("before"), "held back: {text}");
+        scanner.feed(b"[31mafter", &screen, &meta, &kitty, true);
+        let text = lock(&screen).screen().contents();
+        assert!(text.starts_with("beforeafter"), "{text}");
+    }
+
+    #[test]
     fn given_a_kitty_capability_query_then_it_is_answered_ok() {
         let meta = Arc::new(Mutex::new(ScreenMeta::default()));
         let images = Arc::new(Mutex::new(Vec::new()));
@@ -1802,7 +1823,7 @@ impl GraphicsScanner {
                 self.normal.push(byte);
             }
         }
-        if self.apc.is_none() && !self.esc && !self.normal.is_empty() {
+        if self.apc.is_none() && !self.normal.is_empty() {
             lock(screen).process(&self.normal);
             self.normal.clear();
         }

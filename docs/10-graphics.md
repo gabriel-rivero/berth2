@@ -55,7 +55,7 @@ pass.
 | --- | --- | --- | --- |
 | 1 | iTerm2 OSC 1337 `File=` | base64 + PNG (landed) | `imgcat`, `viu`, `chafa`, `timg` |
 | 2 | Sixel (DCS) | sixel decoder, palette registers | `chafa`, `viu`, `timg`, `lsix`, `img2sixel` |
-| 3 | Kitty graphics (APC `G`) | PNG / RGB / RGBA, chunks, ids, Unicode placeholders, `a=q`, `a=T`, `a=d`; no shared memory or z-index | yazi, `kitten icat`, `viu`, `chafa`, Ghostty-native tools |
+| 3 | Kitty graphics (APC `G`) | PNG / RGB / RGBA, chunks, ids, Unicode placeholders, `a=q`, `a=T`, `a=d`; no shared memory, z-index or direct placements | yazi, `kitten icat`, `viu`, `chafa`, Ghostty-native tools |
 
 Phase 1 is the smallest complete path and covers the widest set of CLI tools; it
 also validates the scanner, anchor and paint plumbing. Phase 2 is the
