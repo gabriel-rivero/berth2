@@ -69,6 +69,15 @@ pub struct ImageView {
     pub pixels: Arc<Vec<u8>>,
 }
 
+/// A kitty image placed with Unicode placeholders (U+10EEEE cells).
+#[derive(Clone, Debug)]
+pub struct KittyImage {
+    pub id: u32,
+    pub width: u32,
+    pub height: u32,
+    pub pixels: Arc<Vec<u8>>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ScreenView {
     pub cols: u16,
@@ -87,6 +96,7 @@ pub struct ScreenView {
     pub mouse_encoding: MouseEncoding,
     pub cells: Vec<CellView>,
     pub images: Vec<ImageView>,
+    pub placeholders: Vec<KittyImage>,
 }
 
 /// How much pointer traffic the program wants. Mirrors `vt100`.
@@ -433,6 +443,7 @@ struct Surface {
     screen: Arc<Mutex<Parser>>,
     meta: Arc<Mutex<ScreenMeta>>,
     images: Arc<Mutex<Vec<ImageView>>>,
+    kitty: Arc<Mutex<HashMap<u32, KittyImage>>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     pid: u32,
     tty: String,
@@ -551,6 +562,7 @@ impl PtyHost {
             }
         }
         let images = lock(&surface.images).clone();
+        let placeholders = lock(&surface.kitty).values().cloned().collect();
         Ok(ScreenView {
             cols,
             rows,
@@ -573,6 +585,7 @@ impl PtyHost {
             },
             cells,
             images,
+            placeholders,
         })
     }
 
@@ -775,6 +788,7 @@ impl SurfaceOps for PtyHost {
 
         let meta = Arc::new(Mutex::new(ScreenMeta::default()));
         let images = Arc::new(Mutex::new(Vec::new()));
+        let kitty = Arc::new(Mutex::new(HashMap::new()));
         let events = ScreenEvents::new(
             Arc::clone(&meta),
             Arc::clone(&images),
@@ -795,6 +809,7 @@ impl SurfaceOps for PtyHost {
             Arc::clone(&alive),
             Arc::clone(&writer),
             Arc::clone(&meta),
+            Arc::clone(&kitty),
             Arc::clone(&self.waker),
         );
         spawn_waiter(child, Arc::clone(&alive), Arc::clone(&self.waker));
@@ -805,6 +820,7 @@ impl SurfaceOps for PtyHost {
             screen,
             meta,
             images,
+            kitty,
             killer: Mutex::new(killer),
             pid,
             tty: tty.clone(),
@@ -968,17 +984,19 @@ fn spawn_reader(
     alive: Arc<AtomicBool>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     meta: Arc<Mutex<ScreenMeta>>,
+    kitty: Arc<Mutex<HashMap<u32, KittyImage>>>,
     waker: SharedWaker,
 ) {
     let _ = thread::Builder::new()
         .name("berth-pty-reader".into())
         .spawn(move || {
             let mut buffer = [0u8; 16 * 1024];
+            let mut scanner = GraphicsScanner::default();
             loop {
                 match reader.read(&mut buffer) {
                     Ok(0) => break,
                     Ok(n) => {
-                        lock(&screen).process(&buffer[..n]);
+                        scanner.feed(&buffer[..n], &screen, &kitty);
                         answer_queries(&meta, &writer);
                         notify(&waker);
                     }
@@ -1393,6 +1411,28 @@ mod meta_tests {
     }
 
     #[test]
+    fn given_a_kitty_apc_split_across_reads_then_the_image_is_stored() {
+        let meta = Arc::new(Mutex::new(ScreenMeta::default()));
+        let images = Arc::new(Mutex::new(Vec::new()));
+        let events = ScreenEvents::new(Arc::clone(&meta), images, true, DEFAULT_SCROLLBACK);
+        let screen = Arc::new(Mutex::new(Parser::new_with_callbacks(
+            std::num::NonZeroU16::new(24).unwrap(),
+            std::num::NonZeroU16::new(80).unwrap(),
+            DEFAULT_SCROLLBACK,
+            events,
+        )));
+        let kitty = Arc::new(Mutex::new(HashMap::new()));
+        let data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+        let mut scanner = GraphicsScanner::default();
+        scanner.feed(b"\x1b_Gq=2,a=T,U=1,f=100,i=7;", &screen, &kitty);
+        scanner.feed(format!("{data}\x1b\\").as_bytes(), &screen, &kitty);
+        let store = kitty.lock().unwrap();
+        let image = store.get(&7).expect("image 7");
+        assert_eq!((image.width, image.height), (1, 1));
+        assert_eq!(image.pixels.len(), 4);
+    }
+
+    #[test]
     fn given_an_iterm2_inline_png_then_the_image_is_stored_at_the_cursor() {
         // 1x1 PNG, base64.
         let data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -1562,5 +1602,178 @@ mod journal_tests {
         fs::write(&path, text).unwrap();
         assert!(newest_journal_snapshot_in(&dir).unwrap().is_some());
         let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+/// Splits a PTY read into text (fed to vt100) and kitty APC sequences (fed to
+/// the image store). The state survives chunk boundaries.
+#[derive(Default)]
+struct GraphicsScanner {
+    normal: Vec<u8>,
+    apc: Option<Vec<u8>>,
+    esc: bool,
+    apc_esc: bool,
+    control: Option<String>,
+    data: Vec<u8>,
+}
+
+impl GraphicsScanner {
+    fn feed(
+        &mut self,
+        chunk: &[u8],
+        screen: &Arc<Mutex<Parser>>,
+        kitty: &Arc<Mutex<HashMap<u32, KittyImage>>>,
+    ) {
+        for &byte in chunk {
+            if let Some(apc) = self.apc.as_mut() {
+                if self.apc_esc {
+                    self.apc_esc = false;
+                    if byte == b'\\' {
+                        let payload = std::mem::take(apc);
+                        self.apc = None;
+                        handle_kitty(&payload, kitty, &mut self.control, &mut self.data);
+                    } else {
+                        apc.push(0x1b);
+                        apc.push(byte);
+                    }
+                } else if byte == 0x1b {
+                    self.apc_esc = true;
+                } else {
+                    apc.push(byte);
+                }
+                continue;
+            }
+            if self.esc {
+                self.esc = false;
+                if byte == b'_' {
+                    if !self.normal.is_empty() {
+                        lock(screen).process(&self.normal);
+                        self.normal.clear();
+                    }
+                    self.apc = Some(Vec::new());
+                } else {
+                    self.normal.push(0x1b);
+                    self.normal.push(byte);
+                }
+                continue;
+            }
+            if byte == 0x1b {
+                self.esc = true;
+            } else {
+                self.normal.push(byte);
+            }
+        }
+        if self.apc.is_none() && !self.esc && !self.normal.is_empty() {
+            lock(screen).process(&self.normal);
+            self.normal.clear();
+        }
+    }
+}
+
+fn handle_kitty(
+    payload: &[u8],
+    kitty: &Arc<Mutex<HashMap<u32, KittyImage>>>,
+    pending_control: &mut Option<String>,
+    pending_data: &mut Vec<u8>,
+) {
+    let Some(rest) = payload.strip_prefix(b"G") else {
+        return;
+    };
+    let text = String::from_utf8_lossy(rest);
+    let (control, data) = text.split_once(';').unwrap_or((&text, ""));
+    let mut more = false;
+    for pair in control.split(',').filter(|pair| !pair.is_empty()) {
+        if let Some(value) = pair.strip_prefix("m=") {
+            more = value != "0";
+        }
+    }
+    if more {
+        if pending_control.is_none() {
+            *pending_control = Some(control.to_string());
+        }
+        pending_data.extend_from_slice(data.as_bytes());
+        return;
+    }
+    let control = pending_control
+        .take()
+        .unwrap_or_else(|| control.to_string());
+    let mut bytes = data.as_bytes().to_vec();
+    if !pending_data.is_empty() {
+        bytes.splice(0..0, std::mem::take(pending_data));
+    }
+    let mut map = std::collections::HashMap::new();
+    for pair in control.split(',').filter(|pair| !pair.is_empty()) {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        map.insert(key, value);
+    }
+    let action = map.get("a").copied().unwrap_or("t");
+    let id: u32 = map
+        .get("i")
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
+    let mut store = lock(kitty);
+    if action == "d" {
+        match map.get("d").copied() {
+            Some("A") => store.clear(),
+            _ => {
+                if id != 0 {
+                    store.remove(&id);
+                }
+            }
+        }
+        return;
+    }
+    if action == "q" || id == 0 {
+        return;
+    }
+    if action == "p" {
+        return;
+    }
+    let Some(raw) = decode_base64_bytes(&bytes) else {
+        return;
+    };
+    let format = map.get("f").copied().unwrap_or("32");
+    let (width, height, pixels) = match format {
+        "100" => match decode_png(&raw) {
+            Some(value) => value,
+            None => return,
+        },
+        "24" | "32" => {
+            let width: u32 = map.get("s").and_then(|v| v.parse().ok()).unwrap_or(0);
+            let height: u32 = map.get("v").and_then(|v| v.parse().ok()).unwrap_or(0);
+            if width == 0 || height == 0 || width > MAX_IMAGE_AXIS || height > MAX_IMAGE_AXIS {
+                return;
+            }
+            if format == "24" {
+                if raw.len() != width as usize * height as usize * 3 {
+                    return;
+                }
+                let pixels = raw
+                    .chunks(3)
+                    .flat_map(|pixel| [pixel[0], pixel[1], pixel[2], 255])
+                    .collect();
+                (width, height, pixels)
+            } else {
+                if raw.len() != width as usize * height as usize * 4 {
+                    return;
+                }
+                (width, height, raw)
+            }
+        }
+        _ => return,
+    };
+    store.insert(
+        id,
+        KittyImage {
+            id,
+            width,
+            height,
+            pixels: Arc::new(pixels),
+        },
+    );
+    while store.len() > MAX_IMAGES {
+        if let Some(oldest) = store.keys().next().copied() {
+            store.remove(&oldest);
+        }
     }
 }

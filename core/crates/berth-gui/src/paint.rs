@@ -250,6 +250,67 @@ impl<'a> Painter<'a> {
         }
     }
 
+    /// Draw one source rectangle of an RGBA image into a box, clipped.
+    #[allow(clippy::too_many_arguments)]
+    fn image_region(
+        &mut self,
+        origin: (usize, usize),
+        width: usize,
+        height: usize,
+        pixels: &[u8],
+        source_width: u32,
+        source_height: u32,
+        sx: usize,
+        sy: usize,
+        sw: usize,
+        sh: usize,
+        clip: Rect,
+    ) {
+        if width == 0
+            || height == 0
+            || source_width == 0
+            || source_height == 0
+            || sw == 0
+            || sh == 0
+        {
+            return;
+        }
+        if pixels.len() < source_width as usize * source_height as usize * 4 {
+            return;
+        }
+        let Some(clip) = Rect::new(origin.0, origin.1, width, height)
+            .intersect(clip)
+            .and_then(|rect| rect.intersect(self.bounds()))
+        else {
+            return;
+        };
+        let sx = sx.min(source_width as usize - 1);
+        let sy = sy.min(source_height as usize - 1);
+        let sw = sw.min(source_width as usize - sx);
+        let sh = sh.min(source_height as usize - sy);
+        for gy in clip.y..clip.bottom() {
+            let sy_pix = sy + (gy - origin.1) * sh / height;
+            for gx in clip.x..clip.right() {
+                let sx_pix = sx + (gx - origin.0) * sw / width;
+                let index = (sy_pix.min(source_height as usize - 1) * source_width as usize
+                    + sx_pix.min(source_width as usize - 1))
+                    * 4;
+                let alpha = pixels[index + 3];
+                if alpha == 0 {
+                    continue;
+                }
+                self.blend_pixel(
+                    gx,
+                    gy,
+                    pixels[index],
+                    pixels[index + 1],
+                    pixels[index + 2],
+                    alpha,
+                );
+            }
+        }
+    }
+
     /// Draw a single line of text, clipped to `max_width` pixels. Returns the
     /// width used.
     pub fn text(
@@ -314,6 +375,8 @@ impl<'a> Painter<'a> {
         let cols = usize::from(view.cols).min(area.w / cell.width.max(1));
         let rows = usize::from(view.rows).min(area.h / cell.height.max(1));
         let cursor_visible = options.cursor_visible && !view.cursor_hidden && view.scrollback == 0;
+        let mut placeholder_counts: std::collections::HashMap<u32, usize> =
+            std::collections::HashMap::new();
         for row in 0..rows {
             let base = row * usize::from(view.cols);
             let runs = rtl_runs(&view.cells, base, cols);
@@ -364,6 +427,35 @@ impl<'a> Painter<'a> {
                     );
                 }
                 let text = cell_view.contents.as_str();
+                if text.starts_with('\u{10EEEE}')
+                    && let Some(fg) = cell_view.fg
+                {
+                    let id = (u32::from(fg[0]) << 16) | (u32::from(fg[1]) << 8) | u32::from(fg[2]);
+                    if let Some(image) = view.placeholders.iter().find(|image| image.id == id) {
+                        let cols = (image.width as usize).div_ceil(cell.width).max(1);
+                        let rows = (image.height as usize).div_ceil(cell.height).max(1);
+                        let n = placeholder_counts.entry(id).or_insert(0);
+                        let row_index = *n / cols;
+                        let col_index = *n % cols;
+                        *n += 1;
+                        let sw = (image.width as usize / cols).max(1);
+                        let sh = (image.height as usize / rows).max(1);
+                        self.image_region(
+                            origin,
+                            cell.width,
+                            cell.height,
+                            &image.pixels,
+                            image.width,
+                            image.height,
+                            col_index * sw,
+                            row_index * sh,
+                            sw,
+                            sh,
+                            area,
+                        );
+                        continue;
+                    }
+                }
                 let style = TextStyle {
                     bold: cell_view.bold,
                     italic: cell_view.italic,
