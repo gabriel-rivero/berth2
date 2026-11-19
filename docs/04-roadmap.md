@@ -167,10 +167,11 @@ Swift gaps list, because several items are new to both shells.
 3. **Session search** — find the workspace where that `pnpm test` failed, from screen text we already can read.
 4. **Editor integration** — `berth` LSP-ish shim so an agent in Neovim/Zed can report state without hooks.
 5. **Portable window** — shipped as 0.10/0.11 (see the section above). Both
-   halves run on Linux/macOS/Windows CI, including a real window smoke on
-   Linux. The renderer decision (winit + `vt100` + `cosmic-text` vs GTK4 +
-   `libghostty-vt`) is still open and is now bounded by one concrete question:
-   do we need terminal graphics? See [docs/08-minimal-window.md](08-minimal-window.md).
+   halves run on Linux/macOS/Windows CI, including real window smokes under X11
+   and Wayland on Linux. The renderer decision is settled: winit + `vt100` +
+   cosmic-text with a side-channel scanner for graphics. Terminal graphics were
+   the only open question, and iTerm2, kitty and sixel all render without a
+   renderer migration. See [docs/10-graphics.md](10-graphics.md).
 6. **Browser pane**, **SSH workspaces**, **remote tmux mirror** — only if the above is boring and stable.
 
 The complete audited gap list (GUI, headless shell, core/server/CLI and the

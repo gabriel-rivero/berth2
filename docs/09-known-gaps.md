@@ -22,10 +22,8 @@ app itself has the gaps listed in
   Ligatures cannot render: each cell is shaped and cached on its own.
 - **No text effects beyond bold/italic/dim/underline.** No strikethrough, blink,
   underline colour, hyperlinks or per-cell font changes.
-- **No scrollbar.** Wheel and Shift+Page keys scroll, but nothing shows how far
-  into the scrollback the view is.
-- **No audible bell, dock badge or per-provider mute.** Bells flash a pane ring;
-  OSC 9/777 notifications also reach the desktop on macOS and Linux.
+- **No audible bell or dock badge.** Bells flash a pane ring; OSC 9/777
+  notifications also reach the desktop on macOS and Linux.
 - **Partial graphics protocols.** iTerm2 inline images, kitty graphics and
   sixel render. Kitty shared memory, z-index and direct placements are not
   supported, so clients fall back to base64 or text. Sixel covers the raster
@@ -36,13 +34,12 @@ app itself has the gaps listed in
 
 ### Input and clipboard
 
-- **No selection auto-scroll.** Dragging past the top or bottom of a pane does
-  not extend the view, and words cannot be dragged over.
 - **Accessibility covers the terminal only.** The focused pane is a `Terminal`
   node with its text; the sidebar, tabs and panels are not in the tree, and there
   is no high-contrast mode.
-- **No settings window.** `⌘,` prints "no window yet"; font size, font scale,
-  sidebar density and shortcuts are edited by hand in `config.json`.
+- **Settings covers appearance, not shortcuts.** The `⌘,` panel edits font size,
+  display scale, sidebar density, exit/restore behaviour and the agent hooks;
+  key bindings still come from `config.json`.
 - **Right-to-left text is shaped in terminal panes only.** Sidebar rows, tab
   labels and panel text still draw one character at a time, so an RTL workspace
   name or OSC title is not reordered there.
@@ -179,9 +176,10 @@ From [docs/01-vision.md](01-vision.md#4-non-goals-for-v1):
 - Plugin marketplace, TUI mode, custom command DSLs.
 - Feature parity with cmux.
 
-Deferred until after v1: webview panes, cloud, plugins, telemetry, auto-update,
-notarized distribution, and the final decision between this renderer and GTK4 +
-`libghostty-vt`.
+Deferred until after v1: webview panes, cloud, plugins, telemetry, auto-update
+and notarized distribution. The renderer decision is settled: winit + `vt100` +
+cosmic-text, with a side-channel scanner for graphics, so there is no planned
+move to GTK4 + `libghostty-vt`.
 
 ## 6. Coverage summary
 
