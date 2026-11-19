@@ -38,6 +38,23 @@ struct Client {
     token: Option<String>,
 }
 
+fn check_hello(line: &str) -> Result<(), String> {
+    let value: Value = serde_json::from_str(line).map_err(|e| format!("handshake: {e}"))?;
+    if value["event"] != "hello" {
+        return Ok(());
+    }
+    // Older shells may omit the field; only a stated mismatch is fatal.
+    if let Some(server) = value["data"]["protocol"].as_u64()
+        && server != u64::from(berth_core::protocol::PROTOCOL_VERSION)
+    {
+        return Err(format!(
+            "server speaks protocol {server}, this client speaks {}; upgrade both together",
+            berth_core::protocol::PROTOCOL_VERSION
+        ));
+    }
+    Ok(())
+}
+
 impl Client {
     fn connect() -> Result<Self, String> {
         let path = socket_path();
@@ -48,8 +65,14 @@ impl Client {
             )
         })?;
         let writer = berth_transport::try_clone(&stream).map_err(|e| e.to_string())?;
+        let mut stream = BufReader::new(stream);
+        let mut hello = String::new();
+        stream
+            .read_line(&mut hello)
+            .map_err(|e| format!("handshake: {e}"))?;
+        check_hello(&hello)?;
         Ok(Self {
-            stream: BufReader::new(stream),
+            stream,
             writer,
             next_id: 1,
             token: token(),
@@ -699,7 +722,12 @@ usage:
   berth close-workspace [WORKSPACE_ID]
   berth new-tab [--pane PANE_ID] [--cwd DIR]
   berth split SURFACE_ID [--direction right|left|up|down]
+  berth rename-workspace WORKSPACE_ID NAME
   berth select-workspace WORKSPACE_ID
+  berth group-create NAME [--color C]
+  berth group-rename GROUP_ID NAME
+  berth group-color GROUP_ID COLOR|clear
+  berth group-delete GROUP_ID
   berth focus-pane PANE_ID
   berth close-pane PANE_ID
   berth close-surface SURFACE_ID
@@ -841,6 +869,54 @@ fn run() -> Result<(), String> {
                 .as_str()
                 .ok_or("surface.split returned no surface id")?;
             println!("{new_id}");
+        }
+
+        "rename-workspace" => {
+            let pos = positional(rest);
+            let wid = pos
+                .first()
+                .ok_or("rename-workspace: missing WORKSPACE_ID")?;
+            let name = pos.get(1..).map(|t| t.join(" ")).unwrap_or_default();
+            c.call(
+                "workspace.update",
+                json!({"workspace_id": wid, "name": name}),
+            )?;
+        }
+
+        "group-create" => {
+            let pos = positional(rest);
+            let name = pos.join(" ");
+            let mut params = json!({"name": name});
+            if let Some(color) = arg_after(rest, "--color") {
+                params["color"] = json!(color);
+            }
+            let v = c.call("group.create", params)?;
+            println!("{}", v["group"]["id"].as_str().unwrap_or(""));
+        }
+
+        "group-rename" => {
+            let pos = positional(rest);
+            let gid = pos.first().ok_or("group-rename: missing GROUP_ID")?;
+            let name = pos.get(1..).map(|t| t.join(" ")).unwrap_or_default();
+            c.call("group.update", json!({"group_id": gid, "name": name}))?;
+        }
+
+        "group-color" => {
+            let pos = positional(rest);
+            let gid = pos.first().ok_or("group-color: missing GROUP_ID")?;
+            let color = pos.get(1).ok_or("group-color: missing COLOR or 'clear'")?;
+            let params = if color == "clear" {
+                json!({"group_id": gid, "clear_color": true})
+            } else {
+                json!({"group_id": gid, "color": color})
+            };
+            c.call("group.update", params)?;
+        }
+
+        "group-delete" => {
+            let pos = positional(rest);
+            let gid = pos.first().ok_or("group-delete: missing GROUP_ID")?;
+            c.call("group.delete", json!({"group_id": gid}))?;
         }
 
         "new-tab" | "tab" => {
@@ -1195,6 +1271,16 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hello_protocol_mismatch_is_refused() {
+        assert!(check_hello(r#"{"event":"hello","data":{"protocol":1}}"#).is_ok());
+        let bad = format!(
+            r#"{{"event":"hello","data":{{"protocol":{}}}}}"#,
+            berth_core::protocol::PROTOCOL_VERSION + 1
+        );
+        assert!(check_hello(&bad).is_err());
+    }
 
     #[test]
     fn claude_hooks_map_to_agent_states() {

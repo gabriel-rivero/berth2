@@ -53,6 +53,31 @@ pub fn connect(path: &Path) -> io::Result<LocalStream> {
     LocalStream::connect(name_for(path)?)
 }
 
+/// The uid of the process on the other end of a local connection, when the
+/// platform exposes it. Windows named pipes have no equivalent here, so they
+/// return `None` and the server keeps its token check.
+#[cfg(unix)]
+pub fn peer_uid(stream: &LocalStream) -> io::Result<Option<u32>> {
+    use interprocess::local_socket::traits::StreamCommon as _;
+    let creds = stream.peer_creds()?;
+    Ok(creds.euid())
+}
+
+#[cfg(not(unix))]
+pub fn peer_uid(_stream: &LocalStream) -> io::Result<Option<u32>> {
+    Ok(None)
+}
+
+/// The effective uid of this process, used to compare with [`peer_uid`].
+pub fn current_uid() -> u32 {
+    #[cfg(unix)]
+    unsafe {
+        libc::geteuid()
+    }
+    #[cfg(not(unix))]
+    0
+}
+
 /// Clone a stream so one task can read while another writes.
 pub fn try_clone(stream: &LocalStream) -> io::Result<LocalStream> {
     use interprocess::TryClone as _;
@@ -218,5 +243,21 @@ mod tests {
         let framed = f.append(b"\xff\xfe\n");
         assert_eq!(framed.lines.len(), 1);
         assert!(!framed.oversized);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn given_a_local_connection_then_the_peer_is_this_process() {
+        let dir = std::env::temp_dir().join(format!(
+            "berth-peer-{}-{}",
+            std::process::id(),
+            crate::MAX_LINE_BYTES
+        ));
+        let _ = std::fs::remove_file(&dir);
+        let listener = bind(&dir).unwrap();
+        let _client = connect(&dir).unwrap();
+        let server = listener.accept().unwrap();
+        assert_eq!(peer_uid(&server).unwrap(), Some(current_uid()));
+        let _ = std::fs::remove_file(&dir);
     }
 }

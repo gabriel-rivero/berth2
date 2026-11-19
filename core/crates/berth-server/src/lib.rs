@@ -518,6 +518,19 @@ fn accept_loop(listener: berth_transport::Listener, shared: Arc<Shared>) {
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(_) => break,
         };
+        // A local socket is reachable by every process of every user on the
+        // machine; the token is the second gate, the uid is the first.
+        match berth_transport::peer_uid(&stream) {
+            Ok(Some(uid)) if uid != berth_transport::current_uid() => {
+                eprintln!("berth-server: rejected a client from uid {uid}");
+                continue;
+            }
+            Ok(_) => {}
+            Err(error) => {
+                eprintln!("berth-server: peer credentials: {error}");
+                continue;
+            }
+        }
         if !shared.running.load(Ordering::SeqCst) {
             break;
         }

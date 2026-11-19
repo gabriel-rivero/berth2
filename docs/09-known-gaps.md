@@ -131,13 +131,13 @@ app itself has the gaps listed in
   refuses with `AddrInUse` when a live instance answers, and only the handle that
   bound the endpoint unlinks it. Two starts that race inside the probe window can
   still clash; there is no lockfile.
-- **CLI is nearly complete.** Tabs, pane focus/close, surface rename/close,
-  session save, workspace select and tab move now exist. Workspace rename and
-  group commands are still protocol-only, and `berth schema` is documentation,
-  not a typed client.
+- **CLI is complete for the documented methods.** Tabs, pane focus/close,
+  surface rename/close, session save, workspace rename/select, tab move and the
+  group commands exist; `berth schema` is still documentation, not a typed
+  client.
 - **No client library** beyond the Rust crates and the generated Swift bindings.
-- **No protocol version negotiation beyond `protocol: 1`** in hello; mismatches
-  are not rejected with a dedicated error path.
+- **Protocol negotiation is client-side only.** The client rejects a stated
+  `hello.protocol` mismatch; the server does not negotiate or downgrade.
 - **Windows named-pipe path is per-user but still one global name**; multiple
   profiles/instances share the collision risk.
 - **No Windows service, Linux systemd unit, macOS launch agent or autostart.**

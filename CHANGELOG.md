@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Security
+
+- On Unix the socket server rejects a client whose effective uid differs from
+  its own, before the token check. The token is no longer exported into child
+  environments; clients read the 0600 token file. `trusted` mode still bypasses
+  auth by design and now warns at launch.
+- The CLI rejects a `hello` whose protocol version is stated and differs from
+  its own.
+
+### Features
+
+- CLI: `rename-workspace`, `group-create`, `group-rename`, `group-color` and
+  `group-delete` complete the documented commands.
+
 ## 0.13.0
 
 ### Features

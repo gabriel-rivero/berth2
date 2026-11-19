@@ -459,7 +459,6 @@ pub struct PtyHost {
 
 #[derive(Default)]
 struct Transport {
-    token: Option<String>,
     socket_path: Option<String>,
 }
 
@@ -496,9 +495,8 @@ impl PtyHost {
 
     /// Inject connection details into every child so CLI and hooks can
     /// authenticate. Called once after the server picks its token.
-    pub fn set_transport(&self, token: Option<String>, socket_path: Option<String>) {
+    pub fn set_transport(&self, _token: Option<String>, socket_path: Option<String>) {
         let mut transport = lock(&self.transport);
-        transport.token = token;
         transport.socket_path = socket_path;
     }
 
@@ -747,9 +745,6 @@ impl SurfaceOps for PtyHost {
         }
         {
             let transport = lock(&self.transport);
-            if let Some(token) = &transport.token {
-                command.env("BERTH_TOKEN", token);
-            }
             if let Some(path) = &transport.socket_path {
                 command.env("BERTH_SOCKET_PATH", path);
             }

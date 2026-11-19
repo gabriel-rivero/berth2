@@ -297,7 +297,12 @@ The wrapper is the recommended default: it makes Tier 2 (and therefore correct r
 berth ls [--json]                     # workspaces, groups, panes, surfaces, agents
 berth new-tab [--pane PANE_ID] [--cwd DIR]
 berth split SURFACE_ID right|left|up|down
+berth rename-workspace WORKSPACE_ID NAME
 berth select-workspace WORKSPACE_ID
+berth group-create NAME [--color C]
+berth group-rename GROUP_ID NAME
+berth group-color GROUP_ID COLOR|clear
+berth group-delete GROUP_ID
 berth focus-pane PANE_ID
 berth close-pane PANE_ID
 berth close-surface SURFACE_ID
