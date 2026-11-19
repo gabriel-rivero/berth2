@@ -130,8 +130,10 @@ the macOS window's 12pt labels.
 - Keys go through the headless encoder: printable text, Ctrl/Alt/Shift
   combinations, Enter, Tab, Esc, Backspace, Delete, Insert, arrows, Home/End,
   Page keys and F1–F12. `Shift+Enter` sends `ESC CR`, the sequence Claude Code
-  binds for a prompt newline, and `Cmd+Left`/`Cmd+Right` send Home/End for the
-  beginning and end of the line.
+  binds for a prompt newline, `Cmd+Left`/`Cmd+Right` send Home/End for the
+  beginning and end of the line, and `Option+Left`/`Option+Right` send
+  `ESC b`/`ESC f` for word movement. Other modified function keys use the xterm
+  `CSI 1;<mod>` form.
 
 **Panels**
 

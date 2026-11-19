@@ -19,6 +19,8 @@ pub fn encode(key: &str, mods: &[String]) -> Vec<u8> {
         // Shift+Enter is ESC CR, the sequence Claude Code's own terminal setup
         // binds for a newline in the prompt.
         b"\x1b\r".to_vec()
+    } else if let Some(sequence) = modified(&lower, shift, alt, ctrl) {
+        return sequence;
     } else if let Some(sequence) = named(&lower) {
         sequence.to_vec()
     } else {
@@ -47,6 +49,44 @@ pub fn encode(key: &str, mods: &[String]) -> Vec<u8> {
 fn has(mods: &[String], names: &[&str]) -> bool {
     mods.iter()
         .any(|item| names.contains(&item.to_ascii_lowercase().as_str()))
+}
+
+/// Named keys with Shift, Alt or Ctrl become xterm modified sequences. The one
+/// exception is Alt+Left/Right, which every readline prompt binds as ESC b and
+/// ESC f for word movement; the xterm 1;3 form is not in the default keymaps.
+fn modified(key: &str, shift: bool, alt: bool, ctrl: bool) -> Option<Vec<u8>> {
+    let code = 1 + u8::from(shift) + u8::from(alt) * 2 + u8::from(ctrl) * 4;
+    if code == 1 {
+        return None;
+    }
+    let sequence = match key {
+        "left" if alt && !ctrl && !shift => b"\x1bb".to_vec(),
+        "right" if alt && !ctrl && !shift => b"\x1bf".to_vec(),
+        "left" => format!("\x1b[1;{code}D").into_bytes(),
+        "right" => format!("\x1b[1;{code}C").into_bytes(),
+        "up" => format!("\x1b[1;{code}A").into_bytes(),
+        "down" => format!("\x1b[1;{code}B").into_bytes(),
+        "home" => format!("\x1b[1;{code}H").into_bytes(),
+        "end" => format!("\x1b[1;{code}F").into_bytes(),
+        "insert" | "ins" => format!("\x1b[2;{code}~").into_bytes(),
+        "delete" | "del" => format!("\x1b[3;{code}~").into_bytes(),
+        "pageup" | "pgup" => format!("\x1b[5;{code}~").into_bytes(),
+        "pagedown" | "pgdn" => format!("\x1b[6;{code}~").into_bytes(),
+        "f1" => format!("\x1b[1;{code}P").into_bytes(),
+        "f2" => format!("\x1b[1;{code}Q").into_bytes(),
+        "f3" => format!("\x1b[1;{code}R").into_bytes(),
+        "f4" => format!("\x1b[1;{code}S").into_bytes(),
+        "f5" => format!("\x1b[15;{code}~").into_bytes(),
+        "f6" => format!("\x1b[17;{code}~").into_bytes(),
+        "f7" => format!("\x1b[18;{code}~").into_bytes(),
+        "f8" => format!("\x1b[19;{code}~").into_bytes(),
+        "f9" => format!("\x1b[20;{code}~").into_bytes(),
+        "f10" => format!("\x1b[21;{code}~").into_bytes(),
+        "f11" => format!("\x1b[23;{code}~").into_bytes(),
+        "f12" => format!("\x1b[24;{code}~").into_bytes(),
+        _ => return None,
+    };
+    Some(sequence)
 }
 
 fn named(key: &str) -> Option<&'static [u8]> {
@@ -126,6 +166,22 @@ mod tests {
         assert_eq!(encode("b", &mods(&["alt"])), b"\x1bb");
         assert_eq!(encode("a", &mods(&["shift"])), b"A");
         assert_eq!(encode("tab", &mods(&["shift"])), b"\x1b[Z");
+    }
+
+    #[test]
+    fn alt_arrows_are_readline_word_motions() {
+        assert_eq!(encode("left", &mods(&["alt"])), b"\x1bb");
+        assert_eq!(encode("right", &mods(&["option"])), b"\x1bf");
+    }
+
+    #[test]
+    fn modified_function_keys_use_xterm_codes() {
+        assert_eq!(encode("left", &mods(&["ctrl"])), b"\x1b[1;5D");
+        assert_eq!(encode("right", &mods(&["shift"])), b"\x1b[1;2C");
+        assert_eq!(encode("up", &mods(&["alt", "shift"])), b"\x1b[1;4A");
+        assert_eq!(encode("delete", &mods(&["ctrl"])), b"\x1b[3;5~");
+        assert_eq!(encode("f5", &mods(&["alt"])), b"\x1b[15;3~");
+        assert_eq!(encode("left", &[]), b"\x1b[D");
     }
 
     #[test]

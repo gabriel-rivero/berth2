@@ -473,7 +473,7 @@ dependencies = [
 
 [[package]]
 name = "berth-cli"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "berth-core",
  "berth-server",
@@ -484,7 +484,7 @@ dependencies = [
 
 [[package]]
 name = "berth-core"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "schemars",
  "serde",
@@ -493,7 +493,7 @@ dependencies = [
 
 [[package]]
 name = "berth-ffi"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "berth-core",
  "serde_json",
@@ -502,7 +502,7 @@ dependencies = [
 
 [[package]]
 name = "berth-gui"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "accesskit",
  "accesskit_winit",
@@ -523,7 +523,7 @@ dependencies = [
 
 [[package]]
 name = "berth-headless"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "berth-core",
  "berth-server",
@@ -536,7 +536,7 @@ dependencies = [
 
 [[package]]
 name = "berth-server"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "berth-core",
  "berth-transport",
@@ -548,7 +548,7 @@ dependencies = [
 
 [[package]]
 name = "berth-transport"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "interprocess",
 ]

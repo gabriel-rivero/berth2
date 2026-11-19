@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.12.1
+
+### Fixes
+
+- `Option+Left` and `Option+Right` move the prompt caret a word at a time by
+  sending `ESC b`/`ESC f`, which readline and Claude Code bind. The window sent
+  `ESC ESC [D` and no modifier-bearing function key was encoded.
+- Named keys now use xterm modifier sequences: `Ctrl+Left` is `CSI 1;5D`,
+  `Shift+Left` is `CSI 1;2D`, and arrows, Home/End, Insert/Delete, Page keys and
+  F1–F12 carry Shift/Alt/Ctrl instead of being sent unmodified.
+
 ## 0.12.0
 
 ### Features
