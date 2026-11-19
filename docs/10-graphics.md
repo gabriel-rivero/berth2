@@ -1,11 +1,12 @@
 # Graphics protocols (design)
 
-Status: iTerm2 and kitty are implemented. The PTY reader separates APC
-sequences, reassembles chunked kitty transmissions, stores images by id, and
-paints U+10EEEE placeholder cells from that store; a synthetic frame verified
-the placeholder path. A real yazi preview is the next check. Sixel still waits
-on a DCS parser. The portable window is smoke-tested under X11 and a headless
-Weston Wayland session in CI.
+Status: iTerm2 and kitty are implemented and verified with a real yazi preview.
+The PTY reader separates APC sequences, reassembles chunked kitty
+transmissions, decodes PNG/RGB/RGBA, stores images by id, answers the `a=q`
+capability probe and paints U+10EEEE placeholder cells from that store,
+including the row and column diacritics. Sixel still waits on a DCS parser. The
+portable window is smoke-tested under X11 and a headless Weston Wayland session
+in CI.
 
 ## The question this answers
 
@@ -31,6 +32,9 @@ pass.
    preceding bytes to `vt100`, reads the cursor cell, stores the image, then
    continues after the terminator. It must survive a sequence split across two
    reads; the state is `Normal`, `Apc`, `Dcs`, plus a pending lone `ESC`.
+   The scanner also answers the `a=q` capability probe: `OK` when graphics are
+   on and `ENOTSUPPORTED` for shared memory or when `graphics` is off. Without
+   that reply, clients such as yazi assume no image support and never transmit.
 2. **Image store.** Each surface owns a bounded list of images: protocol id,
    pixel buffer, pixel size, the cell rectangle or auto size, and an absolute
    line anchor (`scrollback_len + cursor_row` at insert). Scrolling and
@@ -51,7 +55,7 @@ pass.
 | --- | --- | --- | --- |
 | 1 | iTerm2 OSC 1337 `File=` | base64 + PNG (landed) | `imgcat`, `viu`, `chafa`, `timg` |
 | 2 | Sixel (DCS) | sixel decoder, palette registers | `chafa`, `viu`, `timg`, `lsix`, `img2sixel` |
-| 3 | Kitty graphics (APC `G`) | PNG / RGB / RGBA, chunks, placements, ids | `kitten icat`, `viu`, `chafa`, Ghostty-native tools |
+| 3 | Kitty graphics (APC `G`) | PNG / RGB / RGBA, chunks, ids, Unicode placeholders, `a=q`, `a=T`, `a=d`; no shared memory or z-index | yazi, `kitten icat`, `viu`, `chafa`, Ghostty-native tools |
 
 Phase 1 is the smallest complete path and covers the widest set of CLI tools; it
 also validates the scanner, anchor and paint plumbing. Phase 2 is the

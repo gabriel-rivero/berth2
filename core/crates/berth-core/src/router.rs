@@ -521,7 +521,11 @@ fn handle(
         }
         "surface.resize" => {
             let p: SurfaceResize = params(raw)?;
-            ops.resize(&p.surface_id, p.cols, p.rows)?;
+            let pixels = match (p.pixel_width, p.pixel_height) {
+                (Some(width), Some(height)) if width > 0 && height > 0 => Some((width, height)),
+                _ => None,
+            };
+            ops.resize_pixels(&p.surface_id, p.cols, p.rows, pixels)?;
             if let Some(s) = state.surface_mut(&p.surface_id) {
                 s.cols = p.cols;
                 s.rows = p.rows;
@@ -965,6 +969,10 @@ struct SurfaceResize {
     surface_id: String,
     cols: u16,
     rows: u16,
+    #[serde(default)]
+    pixel_width: Option<u32>,
+    #[serde(default)]
+    pixel_height: Option<u32>,
 }
 #[derive(Debug, Deserialize)]
 struct AgentRegister {

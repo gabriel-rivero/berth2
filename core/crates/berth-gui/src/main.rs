@@ -562,7 +562,7 @@ struct Gui {
     window: Option<Arc<Window>>,
     context: Option<softbuffer::Context<Arc<Window>>>,
     surface: Option<softbuffer::Surface<Arc<Window>, Arc<Window>>>,
-    sized: HashMap<String, (u16, u16)>,
+    sized: HashMap<String, (u16, u16, u32, u32)>,
     pointer: (f64, f64),
     modifiers: ModifiersState,
     title: String,
@@ -1276,17 +1276,22 @@ impl Gui {
             };
             let cols = (pane.content.w / cell.width).max(1).min(u16::MAX as usize) as u16;
             let rows = (pane.content.h / cell.height).max(1).min(u16::MAX as usize) as u16;
-            if self.sized.get(surface_id) == Some(&(cols, rows)) {
+            let pixel_width = pane.content.w.min(u32::MAX as usize) as u32;
+            let pixel_height = pane.content.h.min(u32::MAX as usize) as u32;
+            if self.sized.get(surface_id) == Some(&(cols, rows, pixel_width, pixel_height)) {
                 continue;
             }
             let params = serde_json::json!({
                 "surface_id": surface_id,
                 "cols": cols,
                 "rows": rows,
+                "pixel_width": pixel_width,
+                "pixel_height": pixel_height,
             });
             match self.dispatch("surface.resize", params) {
                 Ok(_) => {
-                    self.sized.insert(surface_id.clone(), (cols, rows));
+                    self.sized
+                        .insert(surface_id.clone(), (cols, rows, pixel_width, pixel_height));
                 }
                 Err(error) => eprintln!("berth-gui: surface.resize: {error}"),
             }

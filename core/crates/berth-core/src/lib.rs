@@ -57,6 +57,19 @@ pub trait SurfaceOps: Send + Sync {
     fn focus(&self, surface_id: &str) -> Result<(), CoreError>;
     /// Resize the underlying terminal grid.
     fn resize(&self, surface_id: &str, cols: u16, rows: u16) -> Result<(), CoreError>;
+    /// Resize and report the text area in pixels, so the program can ask for
+    /// the cell size (XTWINOPS `CSI 16 t`). Implementations without pixels
+    /// fall back to a plain resize.
+    fn resize_pixels(
+        &self,
+        surface_id: &str,
+        cols: u16,
+        rows: u16,
+        pixels: Option<(u32, u32)>,
+    ) -> Result<(), CoreError> {
+        let _ = pixels;
+        self.resize(surface_id, cols, rows)
+    }
     /// Process facts for passive agent detection.
     fn pid_info(&self, surface_id: &str) -> Result<PidInfo, CoreError>;
     /// Deliver a user-visible notification through the OS.

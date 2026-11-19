@@ -13,10 +13,14 @@
 
 ### Features
 
-- Kitty graphics: the PTY reader separates APC sequences, reassembles chunked
-  transmissions, decodes PNG/RGB/RGBA and stores images by id; the paint pass
-  renders U+10EEEE placeholder cells, which is what yazi uses. Verified with a
-  synthetic frame; a real yazi preview is next.
+- Kitty graphics, verified with a real yazi preview: the PTY reader separates
+  APC sequences, reassembles chunked transmissions, decodes PNG/RGB/RGBA,
+  stores images by id and answers the `a=q` capability probe, so clients pick
+  kitty instead of falling back to text. The paint pass renders U+10EEEE
+  placeholder cells, decoding the row and column from the kitty diacritics.
+- `surface.resize` takes the text area in pixels. The program can then query the
+  cell size with XTWINOPS (`CSI 16 t`, `CSI 14 t`), which image clients use to
+  size a preview.
 - The window is smoke-tested under a headless Weston Wayland session in CI,
   alongside the existing Xvfb frame.
 - CLI: `rename-workspace`, `group-create`, `group-rename`, `group-color` and

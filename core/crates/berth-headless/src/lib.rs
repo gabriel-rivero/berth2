@@ -145,6 +145,9 @@ pub struct ScreenMeta {
     pub clipboard: Option<String>,
     /// Latest OSC 9 / OSC 777 desktop notification body.
     pub notification: Option<String>,
+    /// Cell size in pixels, reported through XTWINOPS (`CSI 16 t`). The UI
+    /// sets it on resize; zero means unknown.
+    pub cell_pixels: Option<(u16, u16)>,
     /// Replies the terminal owes the program (cursor position, device
     /// attributes). The reader drains them back to the PTY.
     pub responses: Vec<String>,
@@ -227,6 +230,22 @@ impl vt100::Callbacks for ScreenEvents {
             // Primary and secondary device attributes.
             (None, 'c') => meta.responses.push("\x1b[?1;2c".into()),
             (Some(b'>'), 'c') => meta.responses.push("\x1b[>0;0;0c".into()),
+            // XTWINOPS: 14 is the text area in pixels, 16 the cell size.
+            (None, 't') => {
+                if let Some((width, height)) = meta.cell_pixels {
+                    let (rows, cols) = screen.size();
+                    let (rows, cols) = (u32::from(rows.get()), u32::from(cols.get()));
+                    match first {
+                        14 => meta.responses.push(format!(
+                            "\x1b[4;{};{}t",
+                            u32::from(height) * rows,
+                            u32::from(width) * cols
+                        )),
+                        16 => meta.responses.push(format!("\x1b[6;{height};{width}t")),
+                        _ => {}
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -607,6 +626,7 @@ impl PtyHost {
             progress: meta.progress,
             clipboard: meta.clipboard.take(),
             notification: meta.notification.take(),
+            cell_pixels: meta.cell_pixels,
             // Replies belong to the reader, which writes them to the PTY; the
             // window must not take them or the program waits forever.
             responses: Vec::new(),
@@ -805,11 +825,14 @@ impl SurfaceOps for PtyHost {
 
         spawn_reader(
             reader,
-            Arc::clone(&screen),
-            Arc::clone(&alive),
-            Arc::clone(&writer),
-            Arc::clone(&meta),
-            Arc::clone(&kitty),
+            ReaderShare {
+                screen: Arc::clone(&screen),
+                alive: Arc::clone(&alive),
+                writer: Arc::clone(&writer),
+                meta: Arc::clone(&meta),
+                kitty: Arc::clone(&kitty),
+                graphics: self.graphics,
+            },
             Arc::clone(&self.waker),
         );
         spawn_waiter(child, Arc::clone(&alive), Arc::clone(&self.waker));
@@ -882,6 +905,16 @@ impl SurfaceOps for PtyHost {
     }
 
     fn resize(&self, surface_id: &str, cols: u16, rows: u16) -> Result<(), CoreError> {
+        self.resize_pixels(surface_id, cols, rows, None)
+    }
+
+    fn resize_pixels(
+        &self,
+        surface_id: &str,
+        cols: u16,
+        rows: u16,
+        pixels: Option<(u32, u32)>,
+    ) -> Result<(), CoreError> {
         if cols == 0 || rows == 0 {
             return Err(CoreError::new(
                 ErrorCode::BadRequest,
@@ -890,18 +923,24 @@ impl SurfaceOps for PtyHost {
         }
         let surface = self.surface(surface_id)?;
         let master = lock(&surface.master);
+        let (pixel_width, pixel_height) = pixels.unwrap_or((0, 0));
         master
             .resize(PtySize {
                 rows,
                 cols,
-                pixel_width: 0,
-                pixel_height: 0,
+                pixel_width: pixel_width.min(u32::from(u16::MAX)) as u16,
+                pixel_height: pixel_height.min(u32::from(u16::MAX)) as u16,
             })
             .map_err(|error| CoreError::internal(format!("resize: {error}")))?;
         lock(&surface.screen).set_size(
             std::num::NonZeroU16::new(rows).expect("rows > 0"),
             std::num::NonZeroU16::new(cols).expect("cols > 0"),
         );
+        if let Some((pixel_width, pixel_height)) = pixels {
+            let width = (pixel_width / u32::from(cols)).min(u32::from(u16::MAX)) as u16;
+            let height = (pixel_height / u32::from(rows)).min(u32::from(u16::MAX)) as u16;
+            lock(&surface.meta).cell_pixels = Some((width, height));
+        }
         Ok(())
     }
 
@@ -978,15 +1017,26 @@ fn notify(waker: &SharedWaker) {
     }
 }
 
-fn spawn_reader(
-    mut reader: Box<dyn Read + Send>,
+/// The per-surface state a reader touches: the grid, the PTY writer, the
+/// screen metadata, the kitty image store and the liveness flag.
+struct ReaderShare {
     screen: Arc<Mutex<Parser>>,
     alive: Arc<AtomicBool>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     meta: Arc<Mutex<ScreenMeta>>,
     kitty: Arc<Mutex<HashMap<u32, KittyImage>>>,
-    waker: SharedWaker,
-) {
+    graphics: bool,
+}
+
+fn spawn_reader(mut reader: Box<dyn Read + Send>, share: ReaderShare, waker: SharedWaker) {
+    let ReaderShare {
+        screen,
+        alive,
+        writer,
+        meta,
+        kitty,
+        graphics,
+    } = share;
     let _ = thread::Builder::new()
         .name("berth-pty-reader".into())
         .spawn(move || {
@@ -996,7 +1046,7 @@ fn spawn_reader(
                 match reader.read(&mut buffer) {
                     Ok(0) => break,
                     Ok(n) => {
-                        scanner.feed(&buffer[..n], &screen, &kitty);
+                        scanner.feed(&buffer[..n], &screen, &meta, &kitty, graphics);
                         answer_queries(&meta, &writer);
                         notify(&waker);
                     }
@@ -1424,12 +1474,92 @@ mod meta_tests {
         let kitty = Arc::new(Mutex::new(HashMap::new()));
         let data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
         let mut scanner = GraphicsScanner::default();
-        scanner.feed(b"\x1b_Gq=2,a=T,U=1,f=100,i=7;", &screen, &kitty);
-        scanner.feed(format!("{data}\x1b\\").as_bytes(), &screen, &kitty);
+        scanner.feed(
+            b"\x1b_Gq=2,a=T,U=1,f=100,i=7;",
+            &screen,
+            &meta,
+            &kitty,
+            true,
+        );
+        scanner.feed(
+            format!("{data}\x1b\\").as_bytes(),
+            &screen,
+            &meta,
+            &kitty,
+            true,
+        );
         let store = kitty.lock().unwrap();
         let image = store.get(&7).expect("image 7");
         assert_eq!((image.width, image.height), (1, 1));
         assert_eq!(image.pixels.len(), 4);
+    }
+
+    #[test]
+    fn given_a_kitty_capability_query_then_it_is_answered_ok() {
+        let meta = Arc::new(Mutex::new(ScreenMeta::default()));
+        let images = Arc::new(Mutex::new(Vec::new()));
+        let events = ScreenEvents::new(Arc::clone(&meta), images, true, DEFAULT_SCROLLBACK);
+        let screen = Arc::new(Mutex::new(Parser::new_with_callbacks(
+            std::num::NonZeroU16::new(24).unwrap(),
+            std::num::NonZeroU16::new(80).unwrap(),
+            DEFAULT_SCROLLBACK,
+            events,
+        )));
+        let kitty = Arc::new(Mutex::new(HashMap::new()));
+        let mut scanner = GraphicsScanner::default();
+        scanner.feed(
+            b"\x1b_Gi=278941603,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\",
+            &screen,
+            &meta,
+            &kitty,
+            true,
+        );
+        assert_eq!(
+            lock(&meta).responses,
+            vec!["\x1b_Gi=278941603;OK\x1b\\".to_string()]
+        );
+    }
+
+    #[test]
+    fn given_a_shared_memory_query_then_it_is_reported_unsupported() {
+        let meta = Arc::new(Mutex::new(ScreenMeta::default()));
+        let images = Arc::new(Mutex::new(Vec::new()));
+        let events = ScreenEvents::new(Arc::clone(&meta), images, true, DEFAULT_SCROLLBACK);
+        let screen = Arc::new(Mutex::new(Parser::new_with_callbacks(
+            std::num::NonZeroU16::new(24).unwrap(),
+            std::num::NonZeroU16::new(80).unwrap(),
+            DEFAULT_SCROLLBACK,
+            events,
+        )));
+        let kitty = Arc::new(Mutex::new(HashMap::new()));
+        let mut scanner = GraphicsScanner::default();
+        scanner.feed(
+            b"\x1b_Gi=916472805,s=1,v=1,a=q,t=s,f=24,S=3;L3RtcC94\x1b\\",
+            &screen,
+            &meta,
+            &kitty,
+            true,
+        );
+        assert_eq!(
+            lock(&meta).responses,
+            vec!["\x1b_Gi=916472805;ENOTSUPPORTED\x1b\\".to_string()]
+        );
+    }
+
+    #[test]
+    fn given_a_known_cell_size_when_xtwinops_asks_then_it_is_reported() {
+        let meta = Arc::new(Mutex::new(ScreenMeta::default()));
+        let images = Arc::new(Mutex::new(Vec::new()));
+        let events = ScreenEvents::new(Arc::clone(&meta), images, true, DEFAULT_SCROLLBACK);
+        let mut parser = Parser::new_with_callbacks(
+            std::num::NonZeroU16::new(24).unwrap(),
+            std::num::NonZeroU16::new(80).unwrap(),
+            DEFAULT_SCROLLBACK,
+            events,
+        );
+        lock(&meta).cell_pixels = Some((10, 20));
+        parser.process(b"\x1b[16t");
+        assert_eq!(lock(&meta).responses, vec!["\x1b[6;20;10t".to_string()]);
     }
 
     #[test]
@@ -1613,6 +1743,13 @@ struct GraphicsScanner {
     apc: Option<Vec<u8>>,
     esc: bool,
     apc_esc: bool,
+    pending: KittyPending,
+}
+
+/// A kitty transmission split across APC chunks: the control data of the first
+/// chunk and the base64 payload accumulated so far.
+#[derive(Default)]
+struct KittyPending {
     control: Option<String>,
     data: Vec<u8>,
 }
@@ -1622,7 +1759,9 @@ impl GraphicsScanner {
         &mut self,
         chunk: &[u8],
         screen: &Arc<Mutex<Parser>>,
+        meta: &Arc<Mutex<ScreenMeta>>,
         kitty: &Arc<Mutex<HashMap<u32, KittyImage>>>,
+        graphics: bool,
     ) {
         for &byte in chunk {
             if let Some(apc) = self.apc.as_mut() {
@@ -1631,7 +1770,7 @@ impl GraphicsScanner {
                     if byte == b'\\' {
                         let payload = std::mem::take(apc);
                         self.apc = None;
-                        handle_kitty(&payload, kitty, &mut self.control, &mut self.data);
+                        handle_kitty(&payload, meta, kitty, graphics, &mut self.pending);
                     } else {
                         apc.push(0x1b);
                         apc.push(byte);
@@ -1672,9 +1811,10 @@ impl GraphicsScanner {
 
 fn handle_kitty(
     payload: &[u8],
+    meta: &Arc<Mutex<ScreenMeta>>,
     kitty: &Arc<Mutex<HashMap<u32, KittyImage>>>,
-    pending_control: &mut Option<String>,
-    pending_data: &mut Vec<u8>,
+    graphics: bool,
+    pending: &mut KittyPending,
 ) {
     let Some(rest) = payload.strip_prefix(b"G") else {
         return;
@@ -1688,18 +1828,19 @@ fn handle_kitty(
         }
     }
     if more {
-        if pending_control.is_none() {
-            *pending_control = Some(control.to_string());
+        if pending.control.is_none() {
+            pending.control = Some(control.to_string());
         }
-        pending_data.extend_from_slice(data.as_bytes());
+        pending.data.extend_from_slice(data.as_bytes());
         return;
     }
-    let control = pending_control
+    let control = pending
+        .control
         .take()
         .unwrap_or_else(|| control.to_string());
     let mut bytes = data.as_bytes().to_vec();
-    if !pending_data.is_empty() {
-        bytes.splice(0..0, std::mem::take(pending_data));
+    if !pending.data.is_empty() {
+        bytes.splice(0..0, std::mem::take(&mut pending.data));
     }
     let mut map = std::collections::HashMap::new();
     for pair in control.split(',').filter(|pair| !pair.is_empty()) {
@@ -1711,6 +1852,16 @@ fn handle_kitty(
         .get("i")
         .and_then(|value| value.parse().ok())
         .unwrap_or(0);
+    if action == "q" {
+        // Capability probe. Shared memory is never supported, and graphics may
+        // be switched off; either way the program falls back to text.
+        let is_supported = graphics && id != 0 && map.get("t").copied() != Some("s");
+        let status = if is_supported { "OK" } else { "ENOTSUPPORTED" };
+        lock(meta)
+            .responses
+            .push(format!("\x1b_Gi={id};{status}\x1b\\"));
+        return;
+    }
     let mut store = lock(kitty);
     if action == "d" {
         match map.get("d").copied() {
@@ -1723,7 +1874,7 @@ fn handle_kitty(
         }
         return;
     }
-    if action == "q" || id == 0 {
+    if !graphics || id == 0 {
         return;
     }
     if action == "p" {

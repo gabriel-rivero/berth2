@@ -118,7 +118,7 @@ Event:
 | `surface.send_text` | `{surface_id, text}` | `{}` |
 | `surface.send_key` | `{surface_id, key:"enter"\|"ctrl-c"\|"esc"\|…, mods?:[…]}` | `{}` |
 | `surface.read_text` | `{surface_id, scope:"screen"\|"scrollback", max_bytes?}` | `{text, truncated}` |
-| `surface.resize` | `{surface_id, cols, rows}` | `{}` |
+| `surface.resize` | `{surface_id, cols, rows, pixel_width?, pixel_height?}` | `{}` |
 
 `surface.read_text` maps to `ghostty_surface_read_text`; `send_text`/`send_key` map to `ghostty_surface_text`/`ghostty_surface_key`. This is the automation surface: no accessibility tree, no screen scraping hacks.
 
