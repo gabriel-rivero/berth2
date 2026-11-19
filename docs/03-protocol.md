@@ -285,7 +285,7 @@ Three tiers, all writing the same typed state — tier 1 needs no cooperation at
 
 1. **Passive**: shell reports foreground pid/argv (`ghostty_surface_foreground_pid`, `tty_name`) plus Ghostty actions (title, OSC 9/99/777, progress, bell) → core matches provider table → `state: unknown`, live cwd/ports from `/proc`-equivalent (`lsof`), no registration.
 2. **Wrapper**: `berth run -- claude` creates a surface with `BERTH_AGENT_ID`, registers on start, forwards exit status → `done`/`errored`. Zero per-project setup; the argv is recorded as the resume payload automatically.
-3. **Hooks**: `berth hooks install` writes Claude Code `settings.json` hooks and an opencode plugin. Each event calls `berth hook claude` or `berth agent-set --surface …`, updating state/detail and recording the provider session id for `--resume` on the next launch. One socket round trip, so hook latency is negligible.
+3. **Hooks**: `berth hooks install` writes Claude Code `settings.json` hooks, an opencode plugin and a Copilot CLI hooks file. Each event calls `berth hook claude`, `berth hook copilot <event>` or `berth agent-set --surface …`, updating state/detail and recording the provider session id for `--resume` on the next launch. Copilot's `agentStop`, `preCompact` and `sessionEnd` events carry the session id from the first turn end. One socket round trip, so hook latency is negligible.
 
 The wrapper is the recommended default: it makes Tier 2 (and therefore correct restore) universal.
 

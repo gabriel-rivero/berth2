@@ -356,6 +356,82 @@ fn run_claude_hook(c: &mut Client) -> Result<(), String> {
     Ok(())
 }
 
+fn copilot_hook_state(event: &str) -> Option<(&'static str, &'static str)> {
+    match event {
+        "sessionStart" => Some(("idle", "session started")),
+        "agentStop" => Some(("idle", "turn complete")),
+        "preCompact" => Some(("thinking", "compacting context")),
+        "sessionEnd" => Some(("done", "session ended")),
+        _ => None,
+    }
+}
+
+fn run_copilot_hook(c: &mut Client, event: &str) -> Result<(), String> {
+    let Some((state, detail)) = copilot_hook_state(event) else {
+        return Ok(());
+    };
+    let mut input = String::new();
+    std::io::stdin()
+        .read_to_string(&mut input)
+        .map_err(|e| e.to_string())?;
+    let payload: Value = serde_json::from_str(&input).unwrap_or(Value::Null);
+    let session = payload["session_id"]
+        .as_str()
+        .or_else(|| payload["sessionId"].as_str());
+    let agent_id = hook_agent(c)?;
+    if let Some(session) = session {
+        let cwd = payload["cwd"].as_str();
+        ensure_resume_payload(c, &agent_id, session, cwd)?;
+    }
+    c.call(
+        "agent.update",
+        json!({"agent_id": agent_id, "state": state, "detail": detail}),
+    )?;
+    Ok(())
+}
+
+fn copilot_hook_command(berth: &str, event: &str) -> String {
+    #[cfg(windows)]
+    {
+        format!("{} hook copilot {event} >NUL 2>&1", shell_quote(berth))
+    }
+    #[cfg(not(windows))]
+    {
+        format!(
+            "{} hook copilot {event} >/dev/null 2>&1 || true",
+            shell_quote(berth)
+        )
+    }
+}
+
+/// Copilot reads one hooks file per provider from `~/.copilot/hooks`. Its known
+/// events are agentStop, preCompact and sessionEnd; the session id arrives on
+/// the first turn end, which is enough for the next restore.
+fn copilot_hook_settings(berth: &str) -> Value {
+    let mut hooks = serde_json::Map::new();
+    for event in ["agentStop", "preCompact", "sessionEnd"] {
+        hooks.insert(
+            event.to_string(),
+            json!([{
+                "type": "command",
+                "bash": copilot_hook_command(berth, event),
+                "timeoutSec": 5
+            }]),
+        );
+    }
+    json!({"version": 1, "hooks": hooks})
+}
+
+fn install_copilot_hooks(berth: &str) -> Result<PathBuf, String> {
+    let path = home_dir()?.join(".copilot/hooks/berth.json");
+    let text = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&copilot_hook_settings(berth)).map_err(|e| e.to_string())?
+    );
+    write_atomic(&path, &text)?;
+    Ok(path)
+}
+
 fn home_dir() -> Result<PathBuf, String> {
     berth_core::paths::home_dir().ok_or_else(|| "no home directory is set".to_string())
 }
@@ -561,14 +637,18 @@ fn hooks_install(target: &str) -> Result<(), String> {
         .to_string();
     let claude = target == "claude" || target == "all";
     let opencode = target == "opencode" || target == "all";
-    if !claude && !opencode {
-        return Err("hooks install: target must be claude, opencode, or all".into());
+    let copilot = target == "copilot" || target == "all";
+    if !claude && !opencode && !copilot {
+        return Err("hooks install: target must be claude, opencode, copilot, or all".into());
     }
     if claude {
         println!("claude: {}", install_claude_hooks(&berth)?.display());
     }
     if opencode {
         println!("opencode: {}", install_opencode_plugin(&berth)?.display());
+    }
+    if copilot {
+        println!("copilot: {}", install_copilot_hooks(&berth)?.display());
     }
     Ok(())
 }
@@ -593,6 +673,15 @@ fn hooks_print(target: &str) -> Result<(), String> {
         }
         println!("{}", opencode_plugin(&berth));
     }
+    if target == "copilot" || target == "all" {
+        if target == "all" {
+            println!();
+        }
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&copilot_hook_settings(&berth)).unwrap()
+        );
+    }
     Ok(())
 }
 
@@ -614,9 +703,10 @@ usage:
   berth agent-set AGENT_ID [--state S] [--detail D] [--progress 0.4] [--session-ref ID]
   berth agent-set --surface SURFACE_ID [--state S] [--detail D]
   berth agent-ack AGENT_ID       # clear attention + acknowledge notifications
-  berth hooks install [claude|opencode|all]
-  berth hooks print [claude|opencode|all]
+  berth hooks install [claude|opencode|copilot|all]
+  berth hooks print [claude|opencode|copilot|all]
   berth hook claude             read a Claude Code hook payload on stdin
+  berth hook copilot <event>    read a Copilot CLI hook payload on stdin
   berth run [--name N] [--provider P] [--cwd DIR] -- <argv…>
   berth events [--types a,b] [--since SEQ]
   berth snapshot                session JSON on stdout
@@ -850,6 +940,10 @@ fn run() -> Result<(), String> {
             let provider = rest.first().map(String::as_str).unwrap_or_default();
             match provider {
                 "claude" => run_claude_hook(&mut c)?,
+                "copilot" => {
+                    let event = rest.get(1).map(String::as_str).unwrap_or_default();
+                    run_copilot_hook(&mut c, event)?;
+                }
                 other => return Err(format!("hook: unknown provider {other}")),
             }
         }
@@ -1039,6 +1133,34 @@ mod tests {
     fn a_hook_resume_payload_without_a_path_has_an_empty_env() {
         let payload = resume_payload("sess-9", "/tmp", None);
         assert_eq!(payload["env"], json!([]));
+    }
+
+    #[test]
+    fn copilot_hooks_map_to_agent_states() {
+        assert_eq!(
+            copilot_hook_state("agentStop"),
+            Some(("idle", "turn complete"))
+        );
+        assert_eq!(
+            copilot_hook_state("sessionEnd"),
+            Some(("done", "session ended"))
+        );
+        assert_eq!(
+            copilot_hook_state("preCompact"),
+            Some(("thinking", "compacting context"))
+        );
+        assert_eq!(copilot_hook_state("unknown"), None);
+    }
+
+    #[test]
+    fn copilot_hook_settings_cover_the_known_events() {
+        let settings = copilot_hook_settings("/opt/berth");
+        assert_eq!(settings["version"], 1);
+        for event in ["agentStop", "preCompact", "sessionEnd"] {
+            let command = settings["hooks"][event][0]["bash"].as_str().unwrap();
+            assert!(command.contains("hook copilot"));
+            assert!(command.contains(event));
+        }
     }
 
     #[test]

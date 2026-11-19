@@ -4,6 +4,9 @@
 
 ### Changes
 
+- Copilot CLI has a hook integration: `berth hooks install copilot` writes
+  `~/.copilot/hooks/berth.json`, and `agentStop`/`preCompact`/`sessionEnd` update
+  the state and record the session id for `copilot --resume`.
 - Sidebar groups can be created from `+G` (the selected workspace moves into
   the new group), renamed by double-click, and coloured by Shift-click;
   workspace rows render their stored colour and icon, and a workspace with

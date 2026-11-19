@@ -198,7 +198,7 @@ session id has nothing to resume, and the row comes back `unknown · not resumed
 ```sh
 make cli
 ./core/target/release/berth hooks print claude    # inspect before writing
-./core/target/release/berth hooks install         # claude + opencode
+./core/target/release/berth hooks install         # claude + opencode + copilot
 ```
 
 `hooks install` embeds the absolute path of the binary you invoked, so run it
@@ -226,6 +226,8 @@ Check:
 - [ ] The relaunched session starts bypassed: `--permission-mode
       bypassPermissions` is on the process. Set `claudeBypassPermissions` to
       `false` and it is gone.
+- [ ] Start Copilot CLI in a pane; after its first turn, its session id is
+      recorded and a relaunch resumes with `copilot --resume <id>`.
 - [ ] Start opencode directly in a pane with the plugin installed; session
       idle/error and permission events update the row, and its session id
       resumes the chat after a relaunch. Copilot is detected but has no hook

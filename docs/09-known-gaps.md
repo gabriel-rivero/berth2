@@ -64,6 +64,9 @@ app itself has the gaps listed in
 
 ### Agents, attention and notifications
 
+- **Copilot resumes from a hook.** `berth hooks install copilot` writes
+  `~/.copilot/hooks/berth.json`; its known events arrive after the first turn,
+  so a session quit before any turn has no id to resume.
 - **Detection is process-name only.** A provider is recognised from the
   foreground process name and argv; an agent whose CLI name changed, or one
   running through a wrapper script, is not detected.
