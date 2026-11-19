@@ -345,6 +345,13 @@ impl<'a> Painter<'a> {
                     fg = options.theme.inactive(fg);
                 }
                 self.fill(Rect::new(origin.0, origin.1, cell.width, cell.height), bg);
+                if cell_view.wide {
+                    // Fill both halves before the glyph: a wide glyph such as an
+                    // emoji extends into the continuation cell, so filling that
+                    // cell after the draw cut the right half off.
+                    let next = Rect::new(origin.0 + cell.width, origin.1, cell.width, cell.height);
+                    self.fill(next, bg);
+                }
                 let search_hit = options.search.is_some_and(|(line, start, len)| {
                     let absolute = view.scrollback_len - view.scrollback + row;
                     absolute == line && col >= start && col < start + len
@@ -377,10 +384,6 @@ impl<'a> Painter<'a> {
                         cell.width
                     };
                     self.fill(Rect::new(origin.0, y, width, 1), fg);
-                }
-                if cell_view.wide {
-                    let next = Rect::new(origin.0 + cell.width, origin.1, cell.width, cell.height);
-                    self.fill(next, bg);
                 }
             }
             for run in &runs {
