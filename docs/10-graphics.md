@@ -1,12 +1,12 @@
 # Graphics protocols (design)
 
-Status: iTerm2 and kitty are implemented and verified with a real yazi preview.
-The PTY reader separates APC sequences, reassembles chunked kitty
-transmissions, decodes PNG/RGB/RGBA, stores images by id, answers the `a=q`
-capability probe and paints U+10EEEE placeholder cells from that store,
-including the row and column diacritics. Sixel still waits on a DCS parser. The
-portable window is smoke-tested under X11 and a headless Weston Wayland session
-in CI.
+Status: all three protocols render. iTerm2 and kitty were verified with real
+tools; sixel is verified with `chafa --format sixel`. The PTY reader separates
+APC and DCS sequences, reassembles chunked kitty transmissions, decodes
+PNG/RGB/RGBA and sixel, stores images, answers the `a=q` capability probe and
+paints kitty U+10EEEE placeholder cells from that store, including the row and
+column diacritics. The portable window is smoke-tested under X11 and a headless
+Weston Wayland session in CI.
 
 ## The question this answers
 
@@ -27,11 +27,12 @@ pass.
 
 1. **Side-channel scanner.** iTerm2 is done through `vt100`'s OSC callback.
    Kitty (APC) and sixel (DCS) are not: `vt100` 0.18 has no APC or DCS callback,
-   so those bytes are consumed and dropped. The next step is a scanner in the
-   PTY reader that holds `ESC _ … ESC \` and `ESC P … ESC \` aside, feeds the
-   preceding bytes to `vt100`, reads the cursor cell, stores the image, then
-   continues after the terminator. It must survive a sequence split across two
-   reads; the state is `Normal`, `Apc`, `Dcs`, plus a pending lone `ESC`.
+   so those bytes are consumed and dropped. A scanner in the PTY reader holds
+   `ESC _ … ESC \` and `ESC P … ESC \` aside, feeds the preceding bytes to
+   `vt100`, reads the cursor cell, stores the image, then continues after the
+   terminator. It survives a sequence split across two reads; the state is
+   `Normal`, `Apc`, `Dcs`, plus a pending lone `ESC`. A DCS that is not sixel
+   (DECRQSS, XTVERSION) is replayed to `vt100` unchanged.
    The scanner also answers the `a=q` capability probe: `OK` when graphics are
    on and `ENOTSUPPORTED` for shared memory or when `graphics` is off. Without
    that reply, clients such as yazi assume no image support and never transmit.
@@ -54,13 +55,14 @@ pass.
 | Phase | Protocol | Decode | Tool support |
 | --- | --- | --- | --- |
 | 1 | iTerm2 OSC 1337 `File=` | base64 + PNG (landed) | `imgcat`, `viu`, `chafa`, `timg` |
-| 2 | Sixel (DCS) | sixel decoder, palette registers | `chafa`, `viu`, `timg`, `lsix`, `img2sixel` |
+| 2 | Sixel (DCS) | raster attributes, palette registers (RGB and HLS), repeats, `$` and `-` (landed) | `chafa`, `viu`, `timg`, `lsix`, `img2sixel` |
 | 3 | Kitty graphics (APC `G`) | PNG / RGB / RGBA, chunks, ids, Unicode placeholders, `a=q`, `a=T`, `a=d`; no shared memory, z-index or direct placements | yazi, `kitten icat`, `viu`, `chafa`, Ghostty-native tools |
 
-Phase 1 is the smallest complete path and covers the widest set of CLI tools; it
-also validates the scanner, anchor and paint plumbing. Phase 2 is the
-compatibility workhorse on Linux. Phase 3 is the Ghostty-parity target and the
-largest parser (transmission chunks, placement ids, delete actions, z-index).
+Phase 1 is the smallest complete path and covers the widest set of CLI tools.
+Phase 2 is the compatibility workhorse on Linux. Phase 3 is the Ghostty-parity
+target and the largest parser (transmission chunks, placement ids, delete
+actions). Kitty's shared memory, z-index and direct placements are not
+implemented, so clients that need them fall back to base64 or text.
 
 ## Interaction with the rest of the window
 
@@ -83,8 +85,8 @@ largest parser (transmission chunks, placement ids, delete actions, z-index).
 - Real-tool checks: `imgcat`/`viu` for iTerm2, `chafa --format sixel` for sixel,
   `kitten icat` for kitty.
 
-## Decision needed
+## Decision
 
-Pick the first protocol. The recommendation is iTerm2 OSC 1337, because it
-proves the plumbing with the least parser code and works with the tools most
-people try first.
+Stay on winit + `vt100` + cosmic-text, with the side-channel scanner for the
+protocols `vt100` cannot represent. A renderer migration is not justified for
+graphics.

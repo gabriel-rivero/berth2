@@ -25,6 +25,10 @@
   stores images by id and answers the `a=q` capability probe, so clients pick
   kitty instead of falling back to text. The paint pass renders U+10EEEE
   placeholder cells, decoding the row and column from the kitty diacritics.
+- Sixel graphics: the scanner holds DCS sequences, decodes palette registers,
+  raster attributes, repeats and carriage-return/newline motion, and paints the
+  image at the cursor. Verified with `chafa --format sixel`. A DCS that is not
+  sixel is replayed to the parser unchanged.
 - `surface.resize` takes the text area in pixels. The program can then query the
   cell size with XTWINOPS (`CSI 16 t`, `CSI 14 t`), which image clients use to
   size a preview.

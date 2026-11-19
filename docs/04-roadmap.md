@@ -154,10 +154,11 @@ Swift gaps list, because several items are new to both shells.
   terminal as a `Terminal` node; sidebar and panels are still outside it.
 - **Packaging**: the Linux release ships a Debian `.deb`, an Arch `PKGBUILD` and
   the CLI beside the window; notarization is next.
-- **Graphics protocols**: iTerm2 inline images render in the portable window.
-  Kitty and sixel need a side-channel scanner in the PTY reader because `vt100`
-  exposes no APC/DCS callback; the design is in
-  [docs/10-graphics.md](10-graphics.md). No renderer migration for this.
+- **Graphics protocols**: iTerm2 inline images, kitty graphics (including yazi's
+  Unicode placeholders) and sixel render in the portable window. `vt100` has no
+  APC or DCS callback, so a side-channel scanner in the PTY reader handles them;
+  the design is in [docs/10-graphics.md](10-graphics.md). No renderer migration
+  for this.
 
 ## After v1 (ordered, not scheduled)
 

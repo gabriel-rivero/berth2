@@ -26,10 +26,12 @@ app itself has the gaps listed in
   into the scrollback the view is.
 - **No audible bell, dock badge or per-provider mute.** Bells flash a pane ring;
   OSC 9/777 notifications also reach the desktop on macOS and Linux.
-- **No sixel.** iTerm2 inline images and kitty graphics render, but sixel needs
-  a DCS parser. Kitty shared-memory transmission and z-index are not supported,
-  so clients fall back to base64. No hyperlink (`OSC 8`) hover styling beyond
-  the text scan.
+- **Partial graphics protocols.** iTerm2 inline images, kitty graphics and
+  sixel render. Kitty shared memory, z-index and direct placements are not
+  supported, so clients fall back to base64 or text. Sixel covers the raster
+  subset: 256 colour registers, RGB and HLS definitions, repeats and motion. No
+  hyperlink
+  (`OSC 8`) hover styling beyond the text scan.
 
 
 ### Input and clipboard

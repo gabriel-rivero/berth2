@@ -78,6 +78,8 @@ pub struct KittyImage {
     pub pixels: Arc<Vec<u8>>,
 }
 
+mod sixel;
+
 #[derive(Debug, Clone, Default)]
 pub struct ScreenView {
     pub cols: u16,
@@ -324,18 +326,43 @@ fn store_iterm_image(
         return;
     };
     let (row, col) = screen.cursor_position();
-    let anchor_line = screen.scrollback_len() + usize::from(row);
+    push_image(
+        images,
+        scrollback,
+        screen.scrollback_len() + usize::from(row),
+        usize::from(col),
+        width,
+        height,
+        target_width,
+        target_height,
+        pixels,
+    );
+}
+
+/// Store an image anchored at a screen cell and enforce the cache budget.
+#[allow(clippy::too_many_arguments)]
+fn push_image(
+    images: &Arc<Mutex<Vec<ImageView>>>,
+    scrollback: usize,
+    anchor_line: usize,
+    col: usize,
+    width: u32,
+    height: u32,
+    target_width: Dimension,
+    target_height: Dimension,
+    pixels: Vec<u8>,
+) {
     let mut list = lock(images);
     list.push(ImageView {
         anchor_line,
-        col: usize::from(col),
+        col,
         width,
         height,
         target_width,
         target_height,
         pixels: Arc::new(pixels),
     });
-    let oldest = screen.scrollback_len().saturating_sub(scrollback);
+    let oldest = anchor_line.saturating_sub(scrollback);
     list.retain(|image| image.anchor_line >= oldest);
     while list.len() > MAX_IMAGES {
         list.remove(0);
@@ -830,8 +857,10 @@ impl SurfaceOps for PtyHost {
                 alive: Arc::clone(&alive),
                 writer: Arc::clone(&writer),
                 meta: Arc::clone(&meta),
+                images: Arc::clone(&images),
                 kitty: Arc::clone(&kitty),
                 graphics: self.graphics,
+                scrollback: self.scrollback,
             },
             Arc::clone(&self.waker),
         );
@@ -1024,19 +1053,13 @@ struct ReaderShare {
     alive: Arc<AtomicBool>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     meta: Arc<Mutex<ScreenMeta>>,
+    images: Arc<Mutex<Vec<ImageView>>>,
     kitty: Arc<Mutex<HashMap<u32, KittyImage>>>,
     graphics: bool,
+    scrollback: usize,
 }
 
 fn spawn_reader(mut reader: Box<dyn Read + Send>, share: ReaderShare, waker: SharedWaker) {
-    let ReaderShare {
-        screen,
-        alive,
-        writer,
-        meta,
-        kitty,
-        graphics,
-    } = share;
     let _ = thread::Builder::new()
         .name("berth-pty-reader".into())
         .spawn(move || {
@@ -1046,15 +1069,15 @@ fn spawn_reader(mut reader: Box<dyn Read + Send>, share: ReaderShare, waker: Sha
                 match reader.read(&mut buffer) {
                     Ok(0) => break,
                     Ok(n) => {
-                        scanner.feed(&buffer[..n], &screen, &meta, &kitty, graphics);
-                        answer_queries(&meta, &writer);
+                        scanner.feed(&buffer[..n], &share);
+                        answer_queries(&share.meta, &share.writer);
                         notify(&waker);
                     }
                     Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
                     Err(_) => break,
                 }
             }
-            alive.store(false, Ordering::Relaxed);
+            share.alive.store(false, Ordering::Relaxed);
             notify(&waker);
         });
 }
@@ -1460,35 +1483,63 @@ mod meta_tests {
         (images, parser)
     }
 
+    struct ScannerFixture {
+        meta: Arc<Mutex<ScreenMeta>>,
+        images: Arc<Mutex<Vec<ImageView>>>,
+        screen: Arc<Mutex<Parser>>,
+        kitty: Arc<Mutex<HashMap<u32, KittyImage>>>,
+    }
+
+    impl ScannerFixture {
+        fn new() -> Self {
+            let meta = Arc::new(Mutex::new(ScreenMeta::default()));
+            let images = Arc::new(Mutex::new(Vec::new()));
+            let events = ScreenEvents::new(
+                Arc::clone(&meta),
+                Arc::clone(&images),
+                true,
+                DEFAULT_SCROLLBACK,
+            );
+            let screen = Arc::new(Mutex::new(Parser::new_with_callbacks(
+                std::num::NonZeroU16::new(24).unwrap(),
+                std::num::NonZeroU16::new(80).unwrap(),
+                DEFAULT_SCROLLBACK,
+                events,
+            )));
+            Self {
+                meta,
+                images,
+                screen,
+                kitty: Arc::new(Mutex::new(HashMap::new())),
+            }
+        }
+
+        fn feed(&self, scanner: &mut GraphicsScanner, bytes: &[u8]) {
+            scanner.feed(bytes, &self.share());
+        }
+
+        fn share(&self) -> ReaderShare {
+            ReaderShare {
+                screen: Arc::clone(&self.screen),
+                alive: Arc::new(AtomicBool::new(true)),
+                writer: Arc::new(Mutex::new(Box::new(io::sink()))),
+                meta: Arc::clone(&self.meta),
+                images: Arc::clone(&self.images),
+                kitty: Arc::clone(&self.kitty),
+                graphics: true,
+                scrollback: DEFAULT_SCROLLBACK,
+            }
+        }
+    }
+
     #[test]
     fn given_a_kitty_apc_split_across_reads_then_the_image_is_stored() {
-        let meta = Arc::new(Mutex::new(ScreenMeta::default()));
-        let images = Arc::new(Mutex::new(Vec::new()));
-        let events = ScreenEvents::new(Arc::clone(&meta), images, true, DEFAULT_SCROLLBACK);
-        let screen = Arc::new(Mutex::new(Parser::new_with_callbacks(
-            std::num::NonZeroU16::new(24).unwrap(),
-            std::num::NonZeroU16::new(80).unwrap(),
-            DEFAULT_SCROLLBACK,
-            events,
-        )));
-        let kitty = Arc::new(Mutex::new(HashMap::new()));
+        let fixture = ScannerFixture::new();
         let data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
         let mut scanner = GraphicsScanner::default();
-        scanner.feed(
-            b"\x1b_Gq=2,a=T,U=1,f=100,i=7;",
-            &screen,
-            &meta,
-            &kitty,
-            true,
-        );
-        scanner.feed(
-            format!("{data}\x1b\\").as_bytes(),
-            &screen,
-            &meta,
-            &kitty,
-            true,
-        );
-        let store = kitty.lock().unwrap();
+        fixture.feed(&mut scanner, b"\x1b_Gq=2,a=T,U=1,f=100,i=7;");
+        fixture.feed(&mut scanner, format!("{data}\x1b\\").as_bytes());
+        let store = fixture.kitty.lock().unwrap();
         let image = store.get(&7).expect("image 7");
         assert_eq!((image.width, image.height), (1, 1));
         assert_eq!(image.pixels.len(), 4);
@@ -1496,75 +1547,75 @@ mod meta_tests {
 
     #[test]
     fn given_text_before_a_split_escape_then_the_text_is_not_held_back() {
-        let meta = Arc::new(Mutex::new(ScreenMeta::default()));
-        let images = Arc::new(Mutex::new(Vec::new()));
-        let events = ScreenEvents::new(Arc::clone(&meta), images, true, DEFAULT_SCROLLBACK);
-        let screen = Arc::new(Mutex::new(Parser::new_with_callbacks(
-            std::num::NonZeroU16::new(24).unwrap(),
-            std::num::NonZeroU16::new(80).unwrap(),
-            DEFAULT_SCROLLBACK,
-            events,
-        )));
-        let kitty = Arc::new(Mutex::new(HashMap::new()));
+        let fixture = ScannerFixture::new();
         let mut scanner = GraphicsScanner::default();
-        scanner.feed(b"before\x1b", &screen, &meta, &kitty, true);
-        let text = lock(&screen).screen().contents();
+        fixture.feed(&mut scanner, b"before\x1b");
+        let text = lock(&fixture.screen).screen().contents();
         assert!(text.starts_with("before"), "held back: {text}");
-        scanner.feed(b"[31mafter", &screen, &meta, &kitty, true);
-        let text = lock(&screen).screen().contents();
+        fixture.feed(&mut scanner, b"[31mafter");
+        let text = lock(&fixture.screen).screen().contents();
         assert!(text.starts_with("beforeafter"), "{text}");
     }
 
     #[test]
     fn given_a_kitty_capability_query_then_it_is_answered_ok() {
-        let meta = Arc::new(Mutex::new(ScreenMeta::default()));
-        let images = Arc::new(Mutex::new(Vec::new()));
-        let events = ScreenEvents::new(Arc::clone(&meta), images, true, DEFAULT_SCROLLBACK);
-        let screen = Arc::new(Mutex::new(Parser::new_with_callbacks(
-            std::num::NonZeroU16::new(24).unwrap(),
-            std::num::NonZeroU16::new(80).unwrap(),
-            DEFAULT_SCROLLBACK,
-            events,
-        )));
-        let kitty = Arc::new(Mutex::new(HashMap::new()));
+        let fixture = ScannerFixture::new();
         let mut scanner = GraphicsScanner::default();
-        scanner.feed(
+        fixture.feed(
+            &mut scanner,
             b"\x1b_Gi=278941603,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\",
-            &screen,
-            &meta,
-            &kitty,
-            true,
         );
         assert_eq!(
-            lock(&meta).responses,
+            lock(&fixture.meta).responses,
             vec!["\x1b_Gi=278941603;OK\x1b\\".to_string()]
         );
     }
 
     #[test]
     fn given_a_shared_memory_query_then_it_is_reported_unsupported() {
-        let meta = Arc::new(Mutex::new(ScreenMeta::default()));
-        let images = Arc::new(Mutex::new(Vec::new()));
-        let events = ScreenEvents::new(Arc::clone(&meta), images, true, DEFAULT_SCROLLBACK);
-        let screen = Arc::new(Mutex::new(Parser::new_with_callbacks(
-            std::num::NonZeroU16::new(24).unwrap(),
-            std::num::NonZeroU16::new(80).unwrap(),
-            DEFAULT_SCROLLBACK,
-            events,
-        )));
-        let kitty = Arc::new(Mutex::new(HashMap::new()));
+        let fixture = ScannerFixture::new();
         let mut scanner = GraphicsScanner::default();
-        scanner.feed(
+        fixture.feed(
+            &mut scanner,
             b"\x1b_Gi=916472805,s=1,v=1,a=q,t=s,f=24,S=3;L3RtcC94\x1b\\",
-            &screen,
-            &meta,
-            &kitty,
-            true,
         );
         assert_eq!(
-            lock(&meta).responses,
+            lock(&fixture.meta).responses,
             vec!["\x1b_Gi=916472805;ENOTSUPPORTED\x1b\\".to_string()]
         );
+    }
+
+    #[test]
+    fn given_a_sixel_dcs_then_the_image_is_stored_at_the_cursor() {
+        let fixture = ScannerFixture::new();
+        let mut scanner = GraphicsScanner::default();
+        fixture.feed(&mut scanner, b"\x1bP0;0;0q\"1;1;2;6#0;2;100;0;0#0~~\x1b\\");
+        let images = fixture.images.lock().unwrap();
+        assert_eq!(images.len(), 1);
+        assert_eq!((images[0].width, images[0].height), (2, 6));
+        assert_eq!(&images[0].pixels[0..4], &[255, 0, 0, 255]);
+        assert_eq!((images[0].anchor_line, images[0].col), (0, 0));
+    }
+
+    #[test]
+    fn given_a_sixel_dcs_split_across_reads_then_the_image_is_stored() {
+        let fixture = ScannerFixture::new();
+        let mut scanner = GraphicsScanner::default();
+        fixture.feed(&mut scanner, b"\x1bPq#0;2;0;0;100#0");
+        assert!(fixture.images.lock().unwrap().is_empty());
+        fixture.feed(&mut scanner, b"~~\x1b");
+        fixture.feed(&mut scanner, b"\\");
+        let images = fixture.images.lock().unwrap();
+        assert_eq!(images.len(), 1);
+        assert_eq!((images[0].width, images[0].height), (2, 6));
+    }
+
+    #[test]
+    fn given_a_non_sixel_dcs_then_no_image_is_stored() {
+        let fixture = ScannerFixture::new();
+        let mut scanner = GraphicsScanner::default();
+        fixture.feed(&mut scanner, b"\x1bP$q q\x1b\\");
+        assert!(fixture.images.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -1756,16 +1807,26 @@ mod journal_tests {
     }
 }
 
-/// Splits a PTY read into text (fed to vt100) and kitty APC sequences (fed to
-/// the image store). The state survives chunk boundaries.
+/// Splits a PTY read into text (fed to vt100), kitty APC sequences and sixel
+/// DCS sequences (fed to the image store). The state survives chunk boundaries.
 #[derive(Default)]
 struct GraphicsScanner {
     normal: Vec<u8>,
-    apc: Option<Vec<u8>>,
+    capture: Option<Capture>,
+    capture_esc: bool,
+    capture_overflow: bool,
     esc: bool,
-    apc_esc: bool,
     pending: KittyPending,
 }
+
+enum Capture {
+    Apc(Vec<u8>),
+    Dcs(Vec<u8>),
+}
+
+/// Images are bounded by the same byte budget as the store; a sequence past
+/// this is dropped rather than buffered without limit.
+const MAX_SEQUENCE_BYTES: usize = 8 * 1024 * 1024;
 
 /// A kitty transmission split across APC chunks: the control data of the first
 /// chunk and the base64 payload accumulated so far.
@@ -1776,44 +1837,71 @@ struct KittyPending {
 }
 
 impl GraphicsScanner {
-    fn feed(
-        &mut self,
-        chunk: &[u8],
-        screen: &Arc<Mutex<Parser>>,
-        meta: &Arc<Mutex<ScreenMeta>>,
-        kitty: &Arc<Mutex<HashMap<u32, KittyImage>>>,
-        graphics: bool,
-    ) {
+    fn feed(&mut self, chunk: &[u8], share: &ReaderShare) {
         for &byte in chunk {
-            if let Some(apc) = self.apc.as_mut() {
-                if self.apc_esc {
-                    self.apc_esc = false;
-                    if byte == b'\\' {
-                        let payload = std::mem::take(apc);
-                        self.apc = None;
-                        handle_kitty(&payload, meta, kitty, graphics, &mut self.pending);
+            if self.capture.is_some() {
+                let mut complete = false;
+                {
+                    let buffer = match self.capture.as_mut().expect("capture") {
+                        Capture::Apc(buffer) => buffer,
+                        Capture::Dcs(buffer) => buffer,
+                    };
+                    if self.capture_esc {
+                        self.capture_esc = false;
+                        if byte == b'\\' {
+                            complete = true;
+                        } else {
+                            buffer.push(0x1b);
+                            buffer.push(byte);
+                        }
+                    } else if byte == 0x1b {
+                        self.capture_esc = true;
                     } else {
-                        apc.push(0x1b);
-                        apc.push(byte);
+                        buffer.push(byte);
                     }
-                } else if byte == 0x1b {
-                    self.apc_esc = true;
-                } else {
-                    apc.push(byte);
+                    if buffer.len() > MAX_SEQUENCE_BYTES {
+                        self.capture_overflow = true;
+                        buffer.clear();
+                    }
+                }
+                if complete {
+                    let capture = self.capture.take().expect("capture");
+                    let overflow = std::mem::take(&mut self.capture_overflow);
+                    match capture {
+                        Capture::Apc(payload) if !overflow => handle_kitty(
+                            &payload,
+                            &share.meta,
+                            &share.kitty,
+                            share.graphics,
+                            &mut self.pending,
+                        ),
+                        Capture::Dcs(payload) if !overflow => handle_dcs(
+                            &payload,
+                            &share.screen,
+                            &share.images,
+                            share.graphics,
+                            share.scrollback,
+                        ),
+                        _ => {}
+                    }
                 }
                 continue;
             }
             if self.esc {
                 self.esc = false;
-                if byte == b'_' {
-                    if !self.normal.is_empty() {
-                        lock(screen).process(&self.normal);
-                        self.normal.clear();
+                match byte {
+                    b'_' => {
+                        flush_normal(&share.screen, &mut self.normal);
+                        self.capture = Some(Capture::Apc(Vec::new()));
                     }
-                    self.apc = Some(Vec::new());
-                } else {
-                    self.normal.push(0x1b);
-                    self.normal.push(byte);
+                    b'P' => {
+                        flush_normal(&share.screen, &mut self.normal);
+                        self.capture = Some(Capture::Dcs(Vec::new()));
+                    }
+                    _ => {
+                        self.normal.push(0x1b);
+                        self.normal.push(byte);
+                    }
                 }
                 continue;
             }
@@ -1823,11 +1911,72 @@ impl GraphicsScanner {
                 self.normal.push(byte);
             }
         }
-        if self.apc.is_none() && !self.normal.is_empty() {
-            lock(screen).process(&self.normal);
-            self.normal.clear();
+        if self.capture.is_none() {
+            flush_normal(&share.screen, &mut self.normal);
         }
     }
+}
+
+fn flush_normal(screen: &Arc<Mutex<Parser>>, normal: &mut Vec<u8>) {
+    if !normal.is_empty() {
+        lock(screen).process(normal);
+        normal.clear();
+    }
+}
+
+/// A DCS is sixel when the part before `q` is only its numeric parameters.
+fn sixel_payload(payload: &[u8]) -> Option<&[u8]> {
+    let position = payload.iter().position(|byte| *byte == b'q')?;
+    let params = &payload[..position];
+    if params
+        .iter()
+        .all(|byte| byte.is_ascii_digit() || *byte == b';')
+    {
+        Some(&payload[position + 1..])
+    } else {
+        None
+    }
+}
+
+fn handle_dcs(
+    payload: &[u8],
+    screen: &Arc<Mutex<Parser>>,
+    images: &Arc<Mutex<Vec<ImageView>>>,
+    graphics: bool,
+    scrollback: usize,
+) {
+    let Some(data) = sixel_payload(payload) else {
+        // Not sixel: hand the sequence back to vt100, which ignored it before.
+        let mut sequence = Vec::with_capacity(payload.len() + 4);
+        sequence.extend_from_slice(b"\x1bP");
+        sequence.extend_from_slice(payload);
+        sequence.extend_from_slice(b"\x1b\\");
+        lock(screen).process(&sequence);
+        return;
+    };
+    if !graphics {
+        return;
+    }
+    let Some(image) = sixel::decode(data) else {
+        return;
+    };
+    let (row, col, scrollback_len) = {
+        let parser = lock(screen);
+        let screen = parser.screen();
+        let (row, col) = screen.cursor_position();
+        (row, col, screen.scrollback_len())
+    };
+    push_image(
+        images,
+        scrollback,
+        scrollback_len + usize::from(row),
+        usize::from(col),
+        image.width,
+        image.height,
+        Dimension::Auto,
+        Dimension::Auto,
+        image.pixels,
+    );
 }
 
 fn handle_kitty(
