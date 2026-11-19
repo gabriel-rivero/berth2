@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.11.4
+
+### Changes
+
+- A restored Claude session now starts with permissions bypassed: Berth appends
+  `--permission-mode bypassPermissions` to the resume command.
+  `claudeBypassPermissions` in `config.json`, or the Settings row, turns it off
+  (default on). The mode is applied at restore time and is not written into the
+  saved launch command, so the setting can be reversed later.
+
 ## 0.11.3
 
 ### Changes

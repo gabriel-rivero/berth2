@@ -17,7 +17,9 @@ use std::time::{Duration, Instant};
 
 use berth_core::model::Orientation;
 use berth_core::{AppState, CoreError, ReadScope, Request, Response, SurfaceOps, paths};
-use berth_headless::{MouseEncoding, MouseMode, PtyHost, restore_session_with, save_session};
+use berth_headless::{
+    MouseEncoding, MouseMode, PtyHost, RestorePolicy, restore_session_with, save_session,
+};
 use berth_server::{Server, ServerConfig, ServerHandle, SocketMode, auth};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
@@ -230,7 +232,14 @@ fn main() {
 
     let state = Arc::new(Mutex::new(AppState::default()));
     if !args.no_restore {
-        match restore_session_with(&state, host.as_ref(), config.restore_launch_flags) {
+        match restore_session_with(
+            &state,
+            host.as_ref(),
+            RestorePolicy {
+                keep_launch_flags: config.restore_launch_flags,
+                claude_bypass_permissions: config.claude_bypass_permissions,
+            },
+        ) {
             Ok(0) => {}
             Ok(count) => println!("berth-gui: restored {count} session(s)"),
             Err(error) => eprintln!("berth-gui: restore skipped: {error}"),

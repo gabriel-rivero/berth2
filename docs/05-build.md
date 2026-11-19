@@ -223,6 +223,9 @@ Check:
 - [ ] Start it with `--allow-dangerously-skip-permissions`; the relaunch keeps
       the flag. Set `restoreLaunchFlags` to `false` and the resumed command is
       `claude --resume <id>` alone.
+- [ ] The relaunched session starts bypassed: `--permission-mode
+      bypassPermissions` is on the process. Set `claudeBypassPermissions` to
+      `false` and it is gone.
 - [ ] Start opencode directly in a pane with the plugin installed; session
       idle/error and permission events update the row, and its session id
       resumes the chat after a relaunch. Copilot is detected but has no hook

@@ -253,13 +253,26 @@ impl Default for Snapshot {
     }
 }
 
-/// Rebuild a session. Terminals are respawned (scrollback is not restored);
-/// agents are re-registered with their resume payload so the shell can offer
-/// or perform a resume.
+/// Rebuild a session with the default resume policy: replay saved launch
+/// flags, no extra provider arguments.
 pub fn restore(
     state: &mut AppState,
     snapshot: Snapshot,
     ops: &dyn SurfaceOps,
+) -> Result<usize, CoreError> {
+    restore_with(state, snapshot, ops, true, &|_| Vec::new())
+}
+
+/// Rebuild a session. Terminals are respawned (scrollback is not restored);
+/// agents are re-registered with their resume payload so the shell can offer
+/// or perform a resume. `keep_launch_flags` replays the saved command's extra
+/// flags, and `extra_args` supplies shell policy such as Claude's bypass mode.
+pub fn restore_with(
+    state: &mut AppState,
+    snapshot: Snapshot,
+    ops: &dyn SurfaceOps,
+    keep_launch_flags: bool,
+    extra_args: &dyn Fn(&str) -> Vec<String>,
 ) -> Result<usize, CoreError> {
     validate(&snapshot)?;
     // Restoring over a live session must replace it, not append to it. The
@@ -314,7 +327,14 @@ pub fn restore(
                         .and_then(|a| crate::providers::by_id(&a.provider));
                     let argv = match provider {
                         Some(p) if r.session_ref.is_some() && !p.resume.is_empty() => {
-                            let extras = crate::providers::launch_args(p, &r.argv);
+                            let mut extras = if keep_launch_flags {
+                                crate::providers::launch_args(p, &r.argv)
+                            } else {
+                                Vec::new()
+                            };
+                            extras.extend(extra_args(p.id));
+                            let mut seen = std::collections::HashSet::new();
+                            extras.retain(|arg| seen.insert(arg.clone()));
                             crate::providers::resume_argv(p, r.session_ref.as_deref(), &extras)
                         }
                         _ => r.argv.clone(),
@@ -831,6 +851,66 @@ mod tests {
                 "--resume",
                 "new",
                 "--allow-dangerously-skip-permissions"
+            ]
+        );
+    }
+
+    #[test]
+    fn restore_with_adds_extras_and_can_drop_the_saved_flags() {
+        let mut st = AppState::default();
+        st.create_workspace(Some("agents"), Some("/work"), None, &NullOps)
+            .unwrap();
+        let sid = st.surfaces.keys().next().unwrap().clone();
+        st.register_agent(
+            &sid,
+            Some("claude-code"),
+            None,
+            Some(Resume {
+                argv: vec![
+                    "claude".into(),
+                    "--allow-dangerously-skip-permissions".into(),
+                ],
+                cwd: "/work".into(),
+                session_ref: Some("sess-1".into()),
+                env: Vec::new(),
+            }),
+            json!({}),
+            &NullOps,
+        )
+        .unwrap();
+        let snap = st.snapshot();
+        let extra = |provider: &str| -> Vec<String> {
+            if provider == "claude-code" {
+                vec!["--permission-mode".into(), "bypassPermissions".into()]
+            } else {
+                Vec::new()
+            }
+        };
+
+        let ops = RecordingOps::default();
+        restore_with(&mut AppState::default(), snap.clone(), &ops, true, &extra).unwrap();
+        assert_eq!(
+            ops.spawns.lock().unwrap()[0].argv,
+            vec![
+                "claude",
+                "--resume",
+                "sess-1",
+                "--allow-dangerously-skip-permissions",
+                "--permission-mode",
+                "bypassPermissions"
+            ]
+        );
+
+        let ops = RecordingOps::default();
+        restore_with(&mut AppState::default(), snap, &ops, false, &extra).unwrap();
+        assert_eq!(
+            ops.spawns.lock().unwrap()[0].argv,
+            vec![
+                "claude",
+                "--resume",
+                "sess-1",
+                "--permission-mode",
+                "bypassPermissions"
             ]
         );
     }

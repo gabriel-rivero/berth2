@@ -25,6 +25,7 @@ socket mode is read at launch.
   "compactSidebar": false,
   "closeExitedPanes": true,
   "restoreLaunchFlags": true,
+  "claudeBypassPermissions": true,
   "socket": "local"
 }
 ```
@@ -114,6 +115,12 @@ the macOS shell ignores that key.
   detected agent's command is captured when its hook reports the session id.
 - Set it to `false` to resume with the provider command and session id only
   (`claude --resume <id>`), dropping flags such as `--model` as well.
+
+- `claudeBypassPermissions` defaults to `true`: a restored Claude session runs
+  with `--permission-mode bypassPermissions`, so its permission checks are
+  skipped. The mode is added at restore time and is not written back into the
+  saved launch command, so turning it off later restores the previous behavior.
+  Set it to `false`, or use the Settings row, to keep the session's own mode.
 
 ## Automation socket
 

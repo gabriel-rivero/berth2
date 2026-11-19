@@ -17,6 +17,7 @@ pub enum Field {
     CompactSidebar,
     CloseExitedPanes,
     RestoreLaunchFlags,
+    ClaudeBypass,
     SocketMode,
     Shortcut(Action),
 }
@@ -74,6 +75,16 @@ pub fn rows(config: &Config, recording: Option<Action>) -> Vec<Row> {
             field: Field::RestoreLaunchFlags,
             label: "Restore launch flags".into(),
             value: if config.restore_launch_flags {
+                "on"
+            } else {
+                "off"
+            }
+            .to_string(),
+        },
+        Row {
+            field: Field::ClaudeBypass,
+            label: "Claude bypass".into(),
+            value: if config.claude_bypass_permissions {
                 "on"
             } else {
                 "off"
@@ -149,6 +160,7 @@ pub fn adjust(config: &mut Config, field: Field, delta: i32) -> Change {
         Field::CompactSidebar
         | Field::CloseExitedPanes
         | Field::RestoreLaunchFlags
+        | Field::ClaudeBypass
         | Field::Shortcut(_) => Change::None,
     }
 }
@@ -166,6 +178,10 @@ pub fn toggle(config: &mut Config, field: Field) -> Change {
         }
         Field::RestoreLaunchFlags => {
             config.restore_launch_flags = !config.restore_launch_flags;
+            Change::View
+        }
+        Field::ClaudeBypass => {
+            config.claude_bypass_permissions = !config.claude_bypass_permissions;
             Change::View
         }
         _ => Change::None,
@@ -193,7 +209,7 @@ mod tests {
     fn given_the_settings_rows_when_built_then_every_action_has_a_row() {
         let config = Config::default();
         let rows = rows(&config, None);
-        assert_eq!(rows.len(), 6 + Action::ALL.len());
+        assert_eq!(rows.len(), 7 + Action::ALL.len());
         assert_eq!(rows[0].label, "Font size");
     }
 
@@ -269,6 +285,13 @@ mod tests {
         let mut config = Config::default();
         assert_eq!(toggle(&mut config, Field::RestoreLaunchFlags), Change::View);
         assert!(!config.restore_launch_flags);
+    }
+
+    #[test]
+    fn given_claude_bypass_when_toggled_then_it_flips() {
+        let mut config = Config::default();
+        assert_eq!(toggle(&mut config, Field::ClaudeBypass), Change::View);
+        assert!(!config.claude_bypass_permissions);
     }
 
     #[test]

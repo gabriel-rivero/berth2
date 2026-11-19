@@ -111,7 +111,9 @@ the macOS window's 12pt labels.
   `opencode` or `copilot` started inside a pane becomes a sidebar agent row. A
   resumed agent keeps the launch flags it had, such as
   `claude --allow-dangerously-skip-permissions`; `restoreLaunchFlags` turns
-  that off.
+  that off. A restored Claude session also starts with permissions bypassed by
+  default (`--permission-mode bypassPermissions`); `claudeBypassPermissions`
+  turns that off.
 - The session autosaves 500 ms after the last core event, including changes made
   by the CLI or hooks through the socket, so a crash loses at most one
   interaction.

@@ -1001,22 +1001,40 @@ pub fn clear_journal() -> io::Result<()> {
     }
 }
 
+/// How a shell resumes agents at boot.
+#[derive(Clone, Copy, Debug)]
+pub struct RestorePolicy {
+    /// Replay the saved launch command's extra flags.
+    pub keep_launch_flags: bool,
+    /// Start a restored Claude session with permissions bypassed.
+    pub claude_bypass_permissions: bool,
+}
+
+impl Default for RestorePolicy {
+    fn default() -> Self {
+        Self {
+            keep_launch_flags: true,
+            claude_bypass_permissions: false,
+        }
+    }
+}
+
 /// Restore the newest session: the snapshot, or a newer journal entry left by a
 /// crash. A corrupt snapshot is reported, not deleted.
 pub fn restore_session(
     state: &Arc<Mutex<AppState>>,
     ops: &dyn SurfaceOps,
 ) -> Result<usize, CoreError> {
-    restore_session_with(state, ops, true)
+    restore_session_with(state, ops, RestorePolicy::default())
 }
 
-/// Restore with the shell's launch-flag policy. When `keep_launch_flags` is
-/// false, saved commands lose their extra flags and a resumed agent runs the
-/// provider template and session id alone.
+/// Restore with the shell's resume policy. `keep_launch_flags` replays saved
+/// flags, and `claude_bypass_permissions` appends the bypass mode to a Claude
+/// resume without persisting it into the saved payload.
 pub fn restore_session_with(
     state: &Arc<Mutex<AppState>>,
     ops: &dyn SurfaceOps,
-    keep_launch_flags: bool,
+    policy: RestorePolicy,
 ) -> Result<usize, CoreError> {
     let path = session_path();
     let directory = path.parent().unwrap_or_else(|| Path::new("."));
@@ -1048,23 +1066,15 @@ pub fn restore_session_with(
         (None, Some(journal)) => journal,
         (None, None) => return Ok(0),
     };
-    let mut snapshot = snapshot;
-    if !keep_launch_flags {
-        clear_launch_args(&mut snapshot);
-    }
-    let mut state = lock(state);
-    berth_core::store::restore(&mut state, snapshot, ops)
-}
-
-/// Drop every saved launch command, keeping the session id and cwd.
-fn clear_launch_args(snapshot: &mut Snapshot) {
-    for workspace in &mut snapshot.workspaces {
-        for agent in &mut workspace.agents {
-            if let Some(resume) = &mut agent.resume {
-                resume.argv.clear();
-            }
+    let extra = |provider: &str| -> Vec<String> {
+        if policy.claude_bypass_permissions && provider == "claude-code" {
+            vec!["--permission-mode".into(), "bypassPermissions".into()]
+        } else {
+            Vec::new()
         }
-    }
+    };
+    let mut state = lock(state);
+    berth_core::store::restore_with(&mut state, snapshot, ops, policy.keep_launch_flags, &extra)
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
@@ -1257,41 +1267,6 @@ mod journal_tests {
         ));
         fs::create_dir_all(&dir).expect("temp dir");
         dir
-    }
-
-    #[test]
-    fn given_launch_flags_disabled_then_only_the_resume_metadata_remains() {
-        let state = Arc::new(Mutex::new(AppState::default()));
-        {
-            let mut st = lock(&state);
-            st.create_workspace(Some("one"), Some("/work"), None, &NullOps)
-                .unwrap();
-            let sid = st.surfaces.keys().next().unwrap().clone();
-            st.register_agent(
-                &sid,
-                Some("claude-code"),
-                None,
-                Some(berth_core::model::Resume {
-                    argv: vec![
-                        "claude".into(),
-                        "--allow-dangerously-skip-permissions".into(),
-                    ],
-                    cwd: "/work".into(),
-                    session_ref: Some("sess-1".into()),
-                    env: vec![("PATH".into(), "/usr/bin".into())],
-                }),
-                serde_json::json!({}),
-                &NullOps,
-            )
-            .unwrap();
-        }
-        let mut snap = snapshot(&lock(&state));
-        clear_launch_args(&mut snap);
-        let resume = snap.workspaces[0].agents[0].resume.as_ref().unwrap();
-        assert!(resume.argv.is_empty());
-        assert_eq!(resume.session_ref.as_deref(), Some("sess-1"));
-        assert_eq!(resume.cwd, "/work");
-        assert_eq!(resume.env.len(), 1);
     }
 
     #[test]

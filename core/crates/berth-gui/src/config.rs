@@ -261,6 +261,9 @@ pub struct Config {
     /// Replay a saved agent launch command's extra flags on resume, such as
     /// `--allow-dangerously-skip-permissions`. On by default.
     pub restore_launch_flags: bool,
+    /// Start a restored Claude session with permissions bypassed. On by
+    /// default; the injected mode is not written back into the saved payload.
+    pub claude_bypass_permissions: bool,
     pub sidebar_width: f64,
     pub socket: Option<String>,
     pub shortcuts: Shortcuts,
@@ -275,6 +278,7 @@ impl Default for Config {
             compact_sidebar: false,
             close_exited_panes: true,
             restore_launch_flags: true,
+            claude_bypass_permissions: true,
             sidebar_width: 200.0,
             socket: None,
             shortcuts: Shortcuts::build(&HashMap::new()),
@@ -314,6 +318,7 @@ struct FileConfig {
     compact_sidebar: Option<bool>,
     close_exited_panes: Option<bool>,
     restore_launch_flags: Option<bool>,
+    claude_bypass_permissions: Option<bool>,
     sidebar_width: Option<f64>,
     socket: Option<String>,
     shortcuts: HashMap<String, String>,
@@ -367,6 +372,9 @@ impl Config {
             restore_launch_flags: file
                 .restore_launch_flags
                 .unwrap_or(defaults.restore_launch_flags),
+            claude_bypass_permissions: file
+                .claude_bypass_permissions
+                .unwrap_or(defaults.claude_bypass_permissions),
             sidebar_width: file
                 .sidebar_width
                 .unwrap_or(defaults.sidebar_width)
@@ -430,6 +438,10 @@ impl Config {
             "restoreLaunchFlags".into(),
             serde_json::json!(self.restore_launch_flags),
         );
+        object.insert(
+            "claudeBypassPermissions".into(),
+            serde_json::json!(self.claude_bypass_permissions),
+        );
         object.insert("sidebarWidth".into(), serde_json::json!(self.sidebar_width));
         if let Some(socket) = &self.socket {
             object.insert("socket".into(), serde_json::json!(socket));
@@ -477,6 +489,7 @@ mod tests {
         assert!(!config.compact_sidebar);
         assert!(config.close_exited_panes);
         assert!(config.restore_launch_flags);
+        assert!(config.claude_bypass_permissions);
     }
 
     #[test]
@@ -617,6 +630,18 @@ mod tests {
         let saved: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(saved["restoreLaunchFlags"], false);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn given_claude_bypass_false_when_parsed_then_it_is_kept() {
+        let config = Config::parse(r#"{"claudeBypassPermissions": false}"#).unwrap();
+        assert!(!config.claude_bypass_permissions);
+        let path = temp_path("claude-bypass");
+        config.save_to(&path).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved["claudeBypassPermissions"], false);
         let _ = std::fs::remove_file(&path);
     }
 
