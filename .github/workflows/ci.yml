@@ -116,13 +116,13 @@ jobs:
             ditto -c -k --keepParent build/BerthGui.app \
               "berth-gui-${version}-${{ matrix.target }}.app.zip"
           fi
-          ls -la berth-gui-* berth_*.deb 2>/dev/null || true
+          ls -la berth-gui-* dist/berth_*.deb 2>/dev/null || true
       - uses: actions/upload-artifact@v4
         with:
           name: portable-${{ matrix.target }}
           path: |
             berth-gui-*
-            berth_*.deb
+            dist/berth_*.deb
           retention-days: 7
 
   # One publish step, only after the app and every portable archive built. A
