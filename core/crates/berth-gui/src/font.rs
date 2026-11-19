@@ -594,17 +594,15 @@ mod tests {
 
     #[test]
     fn given_a_nerd_font_later_in_the_list_when_the_first_face_lacks_an_icon_then_it_draws_it() {
-        let installed = {
-            let system = FontSystem::new();
-            system.db().faces().any(|face| {
-                face.families
-                    .iter()
-                    .any(|(name, _)| name == "VictorMono NFM")
-            })
+        let installed = |name: &str| {
+            FontSystem::new()
+                .db()
+                .faces()
+                .any(|face| face.families.iter().any(|(family, _)| family == name))
         };
-        if !installed {
-            // CI images without the Nerd Font cannot say anything about the
-            // hand-over; the ordering test above still covers resolution.
+        if !installed("Monaco") || !installed("VictorMono NFM") {
+            // The hand-over needs an icon-less first face and a Nerd Font
+            // second; a machine with either missing cannot exercise it.
             return;
         }
         let mut font =
@@ -622,7 +620,7 @@ mod tests {
             .raster("\u{e0b0}", TextStyle::NORMAL)
             .expect("the separator rasterises");
         assert!(
-            raster.height >= cell.height,
+            raster.height >= cell.height && raster.width >= cell.width,
             "separator {}x{} in a {}x{} cell",
             raster.width,
             raster.height,
