@@ -113,7 +113,7 @@ jobs:
             tar -czf "berth-gui-${version}-${{ matrix.target }}.tar.gz" \
               -C dist berth-gui berth
           fi
-          if [ "$RUNNER_OS" = "Linux" ]; then
+          if [ "$RUNNER_OS" = "Linux" ] && [[ "$GITHUB_REF" == refs/tags/* ]]; then
             ./packaging/debian/build-deb.sh "$version" core/target/release dist
           fi
           if [ "$RUNNER_OS" = "macOS" ]; then
