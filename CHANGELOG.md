@@ -1,9 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.13.0
 
-### Changes
+### Features
 
+- Tab drag shows the dragged tab outlined and an insertion line at the drop
+  slot.
+- Settings has a "Reinstall agent hooks" row that runs the CLI beside the
+  window, so a moved app or repo refreshes all three hooks in one step.
 - CLI: `new-tab`, `select-workspace`, `focus-pane`, `close-pane`,
   `close-surface`, `rename`, `move-tab` and `save` join the client, closing the
   documented tab/pane/session gaps. The portable window warns at launch when the
@@ -15,7 +19,8 @@
   form of `claudeBypassPermissions`.
 - Copilot CLI has a hook integration: `berth hooks install copilot` writes
   `~/.copilot/hooks/berth.json`, and `agentStop`/`preCompact`/`sessionEnd` update
-  the state and record the session id for `copilot --resume`.
+  the state and record the session id for `copilot --resume`. The opencode
+  plugin now also works for a plain `opencode` in a pane, not just `berth run`.
 - Sidebar groups can be created from `+G` (the selected workspace moves into
   the new group), renamed by double-click, and coloured by Shift-click;
   workspace rows render their stored colour and icon, and a workspace with
@@ -30,6 +35,12 @@
   the requested cell or pixel size and clipped to the pane. `graphics` (default
   on) controls decoding; the per-surface cache is capped at eight images and
   32 MB. Kitty graphics is next.
+
+### Fixes
+
+- Wide characters (emoji) were cut in half: the continuation cell's background
+  was filled after the glyph. Both halves are filled first now, so emoji render
+  whole.
 
 ## 0.12.1
 
