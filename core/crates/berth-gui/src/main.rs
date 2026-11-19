@@ -1399,6 +1399,30 @@ impl Gui {
                 painter.fill(pane.content, theme.terminal_bg);
                 let font = self.chrome_font();
                 painter.tab_strip(font, pane, theme);
+                if let Drag::Tab {
+                    surface_id,
+                    pane_id,
+                    ..
+                } = &self.drag
+                    && &pane.pane_id == pane_id
+                {
+                    if let Some(tab) = pane.tabs.iter().find(|tab| &tab.id == surface_id) {
+                        painter.stroke(tab.rect, theme.accent);
+                    }
+                    let x = self.pointer.0.max(0.0) as usize;
+                    let target = ui::tab_index_at(&pane.tabs, x);
+                    let marker = pane
+                        .tabs
+                        .last()
+                        .filter(|tab| x >= tab.rect.x + tab.rect.w)
+                        .map(|tab| tab.rect.right())
+                        .or_else(|| pane.tabs.get(target).map(|tab| tab.rect.x))
+                        .unwrap_or_else(|| pane.tab_bar.right());
+                    painter.fill(
+                        Rect::new(marker.saturating_sub(1), pane.tab_bar.y, 2, pane.tab_bar.h),
+                        theme.accent,
+                    );
+                }
                 let Some(surface_id) = &pane.surface else {
                     continue;
                 };
@@ -3215,11 +3239,7 @@ impl Gui {
         let Some(pane) = panes.iter().find(|pane| pane.pane_id == pane_id) else {
             return;
         };
-        let target = pane
-            .tabs
-            .iter()
-            .position(|tab| end_x < tab.rect.x + tab.rect.w)
-            .unwrap_or(pane.tabs.len().saturating_sub(1));
+        let target = ui::tab_index_at(&pane.tabs, end_x);
         if let Err(error) = self.dispatch(
             "surface.move",
             serde_json::json!({"surface_id": surface_id, "index": target}),

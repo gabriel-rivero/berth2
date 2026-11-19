@@ -170,6 +170,14 @@ pub struct SidebarRow {
     pub rect: Rect,
 }
 
+/// Insertion index for a tab drag at `x`: the tab whose right edge passes the
+/// pointer, else the last slot.
+pub fn tab_index_at(tabs: &[TabView], x: usize) -> usize {
+    tabs.iter()
+        .position(|tab| x < tab.rect.x + tab.rect.w)
+        .unwrap_or(tabs.len().saturating_sub(1))
+}
+
 /// The rendered sidebar plus how many rows exist in total, for scroll limits.
 pub struct Sidebar {
     pub rows: Vec<SidebarRow>,
@@ -584,6 +592,31 @@ pub fn pane_at(panes: &[PaneView], x: usize, y: usize) -> Option<&PaneView> {
 mod tests {
     use super::*;
     use berth_core::model::{Orientation, PaneNode};
+
+    #[test]
+    fn given_a_tab_strip_then_the_drop_index_follows_the_pointer() {
+        let tabs = vec![
+            TabView {
+                id: "a".into(),
+                title: "a".into(),
+                rect: Rect::new(0, 0, 100, 20),
+                active: true,
+                close: Rect::new(80, 0, 20, 20),
+            },
+            TabView {
+                id: "b".into(),
+                title: "b".into(),
+                rect: Rect::new(100, 0, 100, 20),
+                active: false,
+                close: Rect::new(180, 0, 20, 20),
+            },
+        ];
+        assert_eq!(tab_index_at(&tabs, 10), 0);
+        assert_eq!(tab_index_at(&tabs, 90), 0);
+        assert_eq!(tab_index_at(&tabs, 110), 1);
+        assert_eq!(tab_index_at(&tabs, 250), 1);
+        assert_eq!(tab_index_at(&[], 10), 0);
+    }
 
     #[test]
     fn given_a_stored_colour_then_hex_and_names_parse() {
