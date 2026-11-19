@@ -185,7 +185,7 @@ final class AppConfig {
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true)
-        var object = Self.document(at: url)
+        var object = try Self.document(at: url)
         object["shortcuts"] = shortcuts
         object["fontSize"] = fontSize
         object["fontScale"] = fontScale
@@ -197,10 +197,20 @@ final class AppConfig {
         try data.write(to: url, options: .atomic)
     }
 
-    private static func document(at url: URL) -> [String: Any] {
-        guard let data = try? Data(contentsOf: url),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return [:] }
+    private static func document(at url: URL) throws -> [String: Any] {
+        guard FileManager.default.fileExists(atPath: url.path) else { return [:] }
+        let data = try Data(contentsOf: url)
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            // Merging into a document we cannot read would replace it, so say
+            // so and keep the file for the user to fix.
+            throw NSError(
+                domain: "dev.berth.config",
+                code: 1,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "\(url.lastPathComponent) is not a JSON object; fix or delete it"
+                ])
+        }
         return object
     }
 

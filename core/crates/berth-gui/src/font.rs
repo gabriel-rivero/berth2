@@ -282,7 +282,7 @@ impl FontRenderer {
         // Icons and powerline separators reach outside the cell: a separator
         // fills the whole line height and an icon can sit left of the pen. Pad
         // the box and keep the cell origin, so no ink is dropped.
-        let margin_x = self.cell.width as i32;
+        let margin_x = (self.cell.width / 2) as i32;
         let margin_y = (self.cell.height / 2) as i32;
         let width = self.cell.width * 2 + (margin_x * 2) as usize;
         let height = self.cell.height + (margin_y * 2) as usize;
@@ -447,7 +447,20 @@ mod tests {
 
     #[test]
     fn given_a_configured_face_when_shaped_then_every_glyph_advances_equally() {
+        let installed = {
+            let system = FontSystem::new();
+            system.db().faces().any(|face| {
+                face.families
+                    .iter()
+                    .any(|(name, _)| name == "VictorMono NFM")
+            })
+        };
+        if !installed {
+            // Without the face this test only re-checks the generic fallback.
+            return;
+        }
         let mut font = FontRenderer::new(16.0, &["VictorMono NFM".to_string()]);
+        assert!(matches!(font.families.first(), Some(FamilyOwned::Name(_))));
         assert_eq!(
             advance_of(&mut font, "M"),
             advance_of(&mut font, "i"),
@@ -596,6 +609,11 @@ mod tests {
         }
         let mut font =
             FontRenderer::new(13.0, &["Monaco".to_string(), "VictorMono NFM".to_string()]);
+        assert!(
+            matches!(font.families.first(), Some(FamilyOwned::Name(name)) if name.as_str() == "Monaco"),
+            "the icon-less face must lead the list: {:?}",
+            font.families
+        );
         let cell = font.cell();
         // U+E0B0 is a powerline separator: it fills the line height, so a
         // raster no taller than the cell means it was clipped or came from a

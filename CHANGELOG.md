@@ -16,9 +16,11 @@
   `self.overlay_len()`, which saw `None` and clamped every key press back to the
   first row.
 - The portable window repaints when something changes instead of on a 30 Hz
-  timer. Pty output, child exits and socket requests wake the loop, and the only
-  scheduled wake is the 530 ms cursor blink (plus bell flashes and autosave
-  debounce). Idle CPU went from a full core to under 1 %.
+  timer. Pty output, child exits and socket requests wake the loop; the only
+  scheduled wakes are the 530 ms cursor blink, bell flash expiry, the autosave
+  debounce, the one-second agent poll and the thirty-second stale sweep, none of
+  which paints unless something changed. Idle CPU went from a full core to under
+  1 %.
 - The macOS shell's config save merges into the file instead of rewriting it
   with only the keys it owns, so `fontFamily` and the portable window's keys
   survive a font-size change.

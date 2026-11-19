@@ -35,7 +35,7 @@ font8x8 = "0.3"
 # No fontconfig: fontdb scans the platform font directories itself.
 cosmic-text = { version = "0.19", default-features = false, features = ["std", "swash"] }
 # Face identity, to tell a real hit from cosmic-text's fallback substitution.
-fontdb = "0.23"
+fontdb = { version = "0.23", default-features = false }
 # System clipboard, text only.
 arboard = "3"
 # Screen-reader support for the window.

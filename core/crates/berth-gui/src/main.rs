@@ -334,6 +334,7 @@ fn main() {
         wake: Arc::clone(&wake),
         blink_shown: true,
         ime_cursor: None,
+        autoscroll: false,
         cursor_icon: CursorIcon::Default,
         last_detect: Instant::now(),
         last_sweep: Instant::now(),
@@ -523,8 +524,11 @@ struct Gui {
     /// Blink phase of the last frame, so a phase flip is what schedules a
     /// repaint instead of a fixed frame timer.
     blink_shown: bool,
-    /// Cursor cell the IME window was last placed at.
-    ime_cursor: Option<(String, u16, u16)>,
+    /// Cursor cell and pixel origin the IME window was last placed at.
+    ime_cursor: Option<(String, u16, u16, i32, i32)>,
+    /// Set by `tick_selection_autoscroll` while a drag sits past a pane edge,
+    /// so the loop keeps a frame cadence only while scrolling.
+    autoscroll: bool,
     cursor_icon: CursorIcon,
     save_due: Option<Instant>,
     save_seq: u64,
@@ -728,6 +732,8 @@ impl ApplicationHandler<UserEvent> for Gui {
             self.request_redraw();
         }
         self.expire_flashes();
+        // The agent poll always schedules a deadline, so `Wait` is only a
+        // fallback for a build with the poll compiled out.
         event_loop.set_control_flow(match self.next_deadline(Instant::now()) {
             Some(at) => ControlFlow::WaitUntil(at),
             None => ControlFlow::Wait,
@@ -789,11 +795,11 @@ impl Gui {
         consider(self.last_detect + Duration::from_secs(1));
         consider(self.last_sweep + Duration::from_secs(30));
         if self.smoke.is_some() || (self.smoke_png.is_some() && !self.captured) {
-            // A smoke run renders on a frame cadence, not as fast as the loop
-            // can spin; it exits after the capture.
+            // A smoke run wakes on a frame cadence instead of spinning, and
+            // exits once the frame is captured.
             consider(now + FRAME_INTERVAL);
         }
-        if self.mouse_down.is_some() && self.selection.values().any(|sel| sel.dragging) {
+        if self.autoscroll {
             consider(now + FRAME_INTERVAL);
         }
         next
@@ -822,10 +828,11 @@ impl Gui {
             }
             let params = serde_json::json!({"surface_id": surface_id});
             match self.dispatch("agent.detect", params) {
-                // A null result means nothing was detected; anything else
-                // added an agent row, and the window must show it without
-                // waiting for unrelated pty output.
-                Ok(result) if !result.is_null() => self.request_redraw(),
+                // The core answers `{"agent": null}` when it recognised
+                // nothing, so the inner field is what says a row appeared.
+                Ok(result) if result.get("agent").is_some_and(|agent| !agent.is_null()) => {
+                    self.request_redraw();
+                }
                 Ok(_) => {}
                 Err(error) => eprintln!("berth-gui: agent.detect: {error}"),
             }
@@ -847,6 +854,7 @@ impl Gui {
     /// Drag past the top or bottom of a pane and the view scrolls, extending the
     /// selection with it.
     fn tick_selection_autoscroll(&mut self) {
+        self.autoscroll = false;
         let Some(surface_id) = self.active_surface() else {
             return;
         };
@@ -886,6 +894,7 @@ impl Gui {
         if target == current {
             return;
         }
+        self.autoscroll = true;
         match self.host.set_scrollback(&surface_id, target) {
             Ok(applied) => {
                 if applied == current {
@@ -2982,15 +2991,14 @@ impl Gui {
             return;
         };
         let (row, col) = view.cursor;
-        let key = (surface_id.clone(), row, col);
+        let x = (pane.content.x + usize::from(col) * cell.width) as i32;
+        let y = (pane.content.y + usize::from(row) * cell.height) as i32;
+        let key = (surface_id.clone(), row, col, x, y);
         if self.ime_cursor.as_ref() == Some(&key) {
             return;
         }
         self.ime_cursor = Some(key);
-        let position = PhysicalPosition::new(
-            (pane.content.x + usize::from(col) * cell.width) as i32,
-            (pane.content.y + usize::from(row) * cell.height) as i32,
-        );
+        let position = PhysicalPosition::new(x, y);
         window.set_ime_cursor_area(
             position,
             PhysicalSize::new(cell.width as u32, cell.height as u32),

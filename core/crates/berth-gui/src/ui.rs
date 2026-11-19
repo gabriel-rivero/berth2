@@ -644,6 +644,24 @@ mod tests {
     }
 
     #[test]
+    fn given_a_workspace_with_no_live_surface_when_asking_then_the_last_selection_wins() {
+        let mut state = AppState::default();
+        let workspace = state
+            .create_workspace(Some("main"), None, None, &berth_core::NullOps)
+            .unwrap();
+        let surface = workspace.active_surface.clone().expect("a surface");
+        if let Some(ws) = state.workspace_mut(&workspace.id) {
+            ws.active_surface = None;
+        }
+        for pane in state.panes.values_mut() {
+            pane.surfaces.clear();
+            pane.active = 0;
+        }
+        state.selected_surface = Some(surface.clone());
+        assert_eq!(active_surface(&state), Some(surface));
+    }
+
+    #[test]
     fn given_a_vanished_selection_when_asking_for_the_active_surface_then_it_falls_back() {
         let mut state = AppState::default();
         state.selected_surface = Some("srf_gone".to_string());
