@@ -241,6 +241,11 @@ fn main() {
             RestorePolicy {
                 keep_launch_flags: config.restore_launch_flags,
                 claude_bypass_permissions: config.claude_bypass_permissions,
+                resume_args: config
+                    .resume_args
+                    .iter()
+                    .map(|(provider, args)| (provider.clone(), args.clone()))
+                    .collect(),
             },
         ) {
             Ok(0) => {}

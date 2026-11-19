@@ -1206,21 +1206,14 @@ pub fn clear_journal() -> io::Result<()> {
 }
 
 /// How a shell resumes agents at boot.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct RestorePolicy {
     /// Replay the saved launch command's extra flags.
     pub keep_launch_flags: bool,
     /// Start a restored Claude session with permissions bypassed.
     pub claude_bypass_permissions: bool,
-}
-
-impl Default for RestorePolicy {
-    fn default() -> Self {
-        Self {
-            keep_launch_flags: true,
-            claude_bypass_permissions: false,
-        }
-    }
+    /// Extra arguments per provider, applied on every resume.
+    pub resume_args: Vec<(String, Vec<String>)>,
 }
 
 /// Restore the newest session: the snapshot, or a newer journal entry left by a
@@ -1229,7 +1222,14 @@ pub fn restore_session(
     state: &Arc<Mutex<AppState>>,
     ops: &dyn SurfaceOps,
 ) -> Result<usize, CoreError> {
-    restore_session_with(state, ops, RestorePolicy::default())
+    restore_session_with(
+        state,
+        ops,
+        RestorePolicy {
+            keep_launch_flags: true,
+            ..RestorePolicy::default()
+        },
+    )
 }
 
 /// Restore with the shell's resume policy. `keep_launch_flags` replays saved
@@ -1271,11 +1271,17 @@ pub fn restore_session_with(
         (None, None) => return Ok(0),
     };
     let extra = |provider: &str| -> Vec<String> {
+        let mut args = policy
+            .resume_args
+            .iter()
+            .find(|(name, _)| name == provider)
+            .map(|(_, args)| args.clone())
+            .unwrap_or_default();
         if policy.claude_bypass_permissions && provider == "claude-code" {
-            vec!["--permission-mode".into(), "bypassPermissions".into()]
-        } else {
-            Vec::new()
+            args.push("--permission-mode".into());
+            args.push("bypassPermissions".into());
         }
+        args
     };
     let mut state = lock(state);
     berth_core::store::restore_with(&mut state, snapshot, ops, policy.keep_launch_flags, &extra)

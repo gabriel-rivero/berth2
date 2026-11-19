@@ -4,6 +4,8 @@
 
 ### Changes
 
+- `resumeArgs` adds per-provider arguments to every resume command, the general
+  form of `claudeBypassPermissions`.
 - Copilot CLI has a hook integration: `berth hooks install copilot` writes
   `~/.copilot/hooks/berth.json`, and `agentStop`/`preCompact`/`sessionEnd` update
   the state and record the session id for `copilot --resume`.

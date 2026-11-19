@@ -565,8 +565,11 @@ const BERTH = {berth:?};
 
 function update(state: string, detail: string, sessionRef?: string): Promise<void> {{
   const agent = process.env.BERTH_AGENT_ID;
-  if (!agent) return Promise.resolve();
-  const args = [BERTH, "agent-set", agent, "--state", state, "--detail", detail];
+  const surface = process.env.BERTH_SURFACE_ID;
+  if (!agent && !surface) return Promise.resolve();
+  const args = [BERTH, "agent-set"];
+  if (agent) args.push(agent); else args.push("--surface", surface!);
+  args.push("--state", state, "--detail", detail);
   if (sessionRef) args.push("--session-ref", sessionRef);
   return new Promise((resolve) => {{
     const child = spawn(BERTH, args, {{ stdio: "ignore", env: process.env }});

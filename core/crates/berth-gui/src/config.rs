@@ -276,6 +276,8 @@ pub struct Config {
     pub scrollback_lines: usize,
     /// Decode terminal image protocols and paint them. Read at launch.
     pub graphics: bool,
+    /// Extra arguments appended to a provider's resume command, by provider id.
+    pub resume_args: std::collections::HashMap<String, Vec<String>>,
     pub sidebar_width: f64,
     pub socket: Option<String>,
     pub shortcuts: Shortcuts,
@@ -294,6 +296,7 @@ impl Default for Config {
             copy_on_select: true,
             scrollback_lines: 4_000,
             graphics: true,
+            resume_args: std::collections::HashMap::new(),
             sidebar_width: 200.0,
             socket: None,
             shortcuts: Shortcuts::build(&HashMap::new()),
@@ -337,6 +340,7 @@ struct FileConfig {
     copy_on_select: Option<bool>,
     scrollback_lines: Option<usize>,
     graphics: Option<bool>,
+    resume_args: Option<std::collections::HashMap<String, Vec<String>>>,
     sidebar_width: Option<f64>,
     socket: Option<String>,
     shortcuts: HashMap<String, String>,
@@ -399,6 +403,7 @@ impl Config {
                 .unwrap_or(defaults.scrollback_lines)
                 .min(100_000),
             graphics: file.graphics.unwrap_or(defaults.graphics),
+            resume_args: file.resume_args.unwrap_or(defaults.resume_args),
             sidebar_width: file
                 .sidebar_width
                 .unwrap_or(defaults.sidebar_width)
@@ -475,6 +480,9 @@ impl Config {
             serde_json::json!(self.scrollback_lines),
         );
         object.insert("graphics".into(), serde_json::json!(self.graphics));
+        if !self.resume_args.is_empty() {
+            object.insert("resumeArgs".into(), serde_json::json!(self.resume_args));
+        }
         object.insert("sidebarWidth".into(), serde_json::json!(self.sidebar_width));
         if let Some(socket) = &self.socket {
             object.insert("socket".into(), serde_json::json!(socket));
@@ -716,6 +724,22 @@ mod tests {
         let saved: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(saved["scrollbackLines"], 4_096);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn given_resume_args_when_parsed_then_they_are_per_provider() {
+        let config =
+            Config::parse(r#"{"resumeArgs": {"codex": ["--sandbox", "read-only"]}}"#).unwrap();
+        assert_eq!(
+            config.resume_args.get("codex"),
+            Some(&vec!["--sandbox".to_string(), "read-only".to_string()])
+        );
+        let path = temp_path("resume-args");
+        config.save_to(&path).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved["resumeArgs"]["codex"][0], "--sandbox");
         let _ = std::fs::remove_file(&path);
     }
 

@@ -29,6 +29,7 @@ socket mode is read at launch.
   "copyOnSelect": true,
   "scrollbackLines": 4000,
   "graphics": true,
+  "resumeArgs": {"codex": ["--sandbox", "read-only"]},
   "socket": "local"
 }
 ```
@@ -145,6 +146,10 @@ the macOS shell ignores that key.
   detected agent's command is captured when its hook reports the session id.
 - Set it to `false` to resume with the provider command and session id only
   (`claude --resume <id>`), dropping flags such as `--model` as well.
+- `resumeArgs` adds arguments per provider id on every resume, on top of the
+  saved launch flags, for example `{"codex": ["--sandbox", "read-only"]}`.
+  Exact duplicates are kept once. This is the general form of
+  `claudeBypassPermissions`; both can be set.
 
 - `claudeBypassPermissions` defaults to `true`: a restored Claude session runs
   with `--permission-mode bypassPermissions`, so its permission checks are
