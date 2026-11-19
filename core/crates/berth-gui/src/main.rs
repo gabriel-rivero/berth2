@@ -789,7 +789,9 @@ impl Gui {
         consider(self.last_detect + Duration::from_secs(1));
         consider(self.last_sweep + Duration::from_secs(30));
         if self.smoke.is_some() || (self.smoke_png.is_some() && !self.captured) {
-            consider(now);
+            // A smoke run renders on a frame cadence, not as fast as the loop
+            // can spin; it exits after the capture.
+            consider(now + FRAME_INTERVAL);
         }
         if self.mouse_down.is_some() && self.selection.values().any(|sel| sel.dragging) {
             consider(now + FRAME_INTERVAL);
@@ -819,8 +821,13 @@ impl Gui {
                 continue;
             }
             let params = serde_json::json!({"surface_id": surface_id});
-            if let Err(error) = self.dispatch("agent.detect", params) {
-                eprintln!("berth-gui: agent.detect: {error}");
+            match self.dispatch("agent.detect", params) {
+                // A null result means nothing was detected; anything else
+                // added an agent row, and the window must show it without
+                // waiting for unrelated pty output.
+                Ok(result) if !result.is_null() => self.request_redraw(),
+                Ok(_) => {}
+                Err(error) => eprintln!("berth-gui: agent.detect: {error}"),
             }
         }
         if self.last_sweep.elapsed() >= Duration::from_secs(30) {
@@ -832,6 +839,7 @@ impl Gui {
             };
             if !changed.is_empty() {
                 self.flush_events();
+                self.request_redraw();
             }
         }
     }

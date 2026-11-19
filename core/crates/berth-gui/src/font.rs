@@ -580,6 +580,40 @@ mod tests {
     }
 
     #[test]
+    fn given_a_nerd_font_later_in_the_list_when_the_first_face_lacks_an_icon_then_it_draws_it() {
+        let installed = {
+            let system = FontSystem::new();
+            system.db().faces().any(|face| {
+                face.families
+                    .iter()
+                    .any(|(name, _)| name == "VictorMono NFM")
+            })
+        };
+        if !installed {
+            // CI images without the Nerd Font cannot say anything about the
+            // hand-over; the ordering test above still covers resolution.
+            return;
+        }
+        let mut font =
+            FontRenderer::new(13.0, &["Monaco".to_string(), "VictorMono NFM".to_string()]);
+        let cell = font.cell();
+        // U+E0B0 is a powerline separator: it fills the line height, so a
+        // raster no taller than the cell means it was clipped or came from a
+        // face that drew something else.
+        let raster = font
+            .raster("\u{e0b0}", TextStyle::NORMAL)
+            .expect("the separator rasterises");
+        assert!(
+            raster.height >= cell.height,
+            "separator {}x{} in a {}x{} cell",
+            raster.width,
+            raster.height,
+            cell.width,
+            cell.height
+        );
+    }
+
+    #[test]
     fn given_a_configured_family_when_the_renderer_shapes_a_glyph_then_it_still_draws() {
         let installed = {
             let system = FontSystem::new();
