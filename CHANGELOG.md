@@ -13,6 +13,10 @@
 
 ### Features
 
+- Kitty graphics: the PTY reader separates APC sequences, reassembles chunked
+  transmissions, decodes PNG/RGB/RGBA and stores images by id; the paint pass
+  renders U+10EEEE placeholder cells, which is what yazi uses. Verified with a
+  synthetic frame; a real yazi preview is next.
 - The window is smoke-tested under a headless Weston Wayland session in CI,
   alongside the existing Xvfb frame.
 - CLI: `rename-workspace`, `group-create`, `group-rename`, `group-color` and

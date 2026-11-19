@@ -1,9 +1,11 @@
 # Graphics protocols (design)
 
-Status: iTerm2 implemented. Kitty and sixel wait on the side-channel scanner
-described below, because `vt100` exposes no APC/DCS callback. The portable
-window is smoke-tested under X11 and, from 0.13.1, a headless Weston Wayland
-session in CI.
+Status: iTerm2 and kitty are implemented. The PTY reader separates APC
+sequences, reassembles chunked kitty transmissions, stores images by id, and
+paints U+10EEEE placeholder cells from that store; a synthetic frame verified
+the placeholder path. A real yazi preview is the next check. Sixel still waits
+on a DCS parser. The portable window is smoke-tested under X11 and a headless
+Weston Wayland session in CI.
 
 ## The question this answers
 
