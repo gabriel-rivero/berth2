@@ -234,6 +234,7 @@ fn main() {
     });
 
     let state = Arc::new(Mutex::new(AppState::default()));
+    lock(&state).set_muted_providers(config.mute_providers.clone());
     if !args.no_restore {
         match restore_session_with(
             &state,

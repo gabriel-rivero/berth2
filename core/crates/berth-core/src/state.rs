@@ -25,6 +25,8 @@ pub struct AppState {
     pub notifications: Vec<Notification>,
     pub selected_workspace: Option<String>,
     pub selected_surface: Option<String>,
+    /// Providers whose OS notifications are silenced. In-app attention stays.
+    pub muted_providers: std::collections::HashSet<String>,
     /// Minted lazily; identifies this app run in `system.hello`.
     pub instance: String,
     /// First activity timestamp, used by `system.ping` uptime.
@@ -66,6 +68,10 @@ impl AppState {
     /// Drop all live entities, closing their PTYs first. Used by
     /// `session.restore` so restoring over a running app cannot leave stale
     /// surfaces pointing at the old snapshot.
+    pub fn set_muted_providers(&mut self, providers: Vec<String>) {
+        self.muted_providers = providers.into_iter().collect();
+    }
+
     pub fn reset(&mut self, ops: &dyn SurfaceOps) {
         let surfaces: Vec<String> = self.surfaces.keys().cloned().collect();
         for id in surfaces {
@@ -903,6 +909,34 @@ impl AppState {
     /// Record the provider session id discovered by an agent hook. A passively
     /// detected agent has no launch payload, so its first session id builds one
     /// from the surface; a wrapper's argv and environment stay as saved.
+    /// Record provider-reported usage. Zero fields are left unchanged so a hook
+    /// can report tokens without inventing a cost.
+    pub fn set_agent_usage(
+        &mut self,
+        agent_id: &str,
+        tokens_in: Option<u64>,
+        tokens_out: Option<u64>,
+        cost_usd: Option<f64>,
+    ) -> Result<AgentSurface, CoreError> {
+        let mut agent = self
+            .agents
+            .get(agent_id)
+            .cloned()
+            .ok_or_else(|| CoreError::not_found(format!("no agent {agent_id}")))?;
+        if let Some(value) = tokens_in {
+            agent.tokens_in = value;
+        }
+        if let Some(value) = tokens_out {
+            agent.tokens_out = value;
+        }
+        if let Some(value) = cost_usd {
+            agent.cost_usd = value.max(0.0);
+        }
+        agent.last_seen_ms = time::now_ms();
+        self.agents.insert(agent.id.clone(), agent.clone());
+        Ok(agent)
+    }
+
     pub fn set_agent_session_ref(
         &mut self,
         agent_id: &str,
@@ -981,8 +1015,11 @@ impl AppState {
         self.notifications.push(n.clone());
         self.emit(names::NOTIFICATION_CREATED, serde_json::json!(n));
         // The in-app ladder is primary, but attention must still reach the OS
-        // when the user is in another workspace (M3 acceptance).
-        let _ = ops.notify_os(&n);
+        // when the user is in another workspace (M3 acceptance). A muted
+        // provider keeps the row and the ring, and loses only the OS banner.
+        if !self.muted_providers.contains(&agent.provider) {
+            let _ = ops.notify_os(&n);
+        }
     }
 
     /// Escalate agents that stopped reporting. Returns ids that changed.

@@ -4,6 +4,9 @@
 
 ### Changes
 
+- Agent polish: `muteProviders` silences OS notifications per provider while the
+  in-app attention stays, `agent.usage` (and `berth agent-usage`) records tokens
+  and cost for the sidebar row, and the opencode plugin handles passive surfaces.
 - `resumeArgs` adds per-provider arguments to every resume command, the general
   form of `claudeBypassPermissions`.
 - Copilot CLI has a hook integration: `berth hooks install copilot` writes

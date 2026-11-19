@@ -30,6 +30,7 @@ socket mode is read at launch.
   "scrollbackLines": 4000,
   "graphics": true,
   "resumeArgs": {"codex": ["--sandbox", "read-only"]},
+  "muteProviders": [],
   "socket": "local"
 }
 ```
@@ -156,6 +157,15 @@ the macOS shell ignores that key.
   skipped. The mode is added at restore time and is not written back into the
   saved launch command, so turning it off later restores the previous behavior.
   Set it to `false`, or use the Settings row, to keep the session's own mode.
+
+## Agent notifications
+
+- `muteProviders` lists provider ids whose OS notifications are silenced, for
+  example `["codex"]`. The sidebar row, attention ring and in-app list still
+  update; only the desktop banner is skipped. Read at launch.
+- Tokens and cost appear on the agent row when a client reports them with
+  `berth agent-usage AGENT_ID --tokens-in N --tokens-out N --cost USD` (or the
+  `agent.usage` protocol method). Nothing renders while they are zero.
 
 ## Automation socket
 

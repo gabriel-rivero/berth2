@@ -120,7 +120,10 @@ the macOS window's 12pt labels.
 - Passive agent detection runs once a second over surfaces without an agent,
   using the foreground process group (`tcgetpgrp` plus `/proc` on Linux and `ps`
   on macOS), then sweeps stale agents every 30 seconds. A `claude`, `codex`,
-  `opencode` or `copilot` started inside a pane becomes a sidebar agent row. A
+  `opencode` or `copilot` started inside a pane becomes a sidebar agent row.
+  Agent rows show token counts and cost when a client reports them, and
+  `muteProviders` silences desktop notifications for chosen providers while
+  keeping the row, ring and attention list. A
   resumed agent keeps the launch flags it had, such as
   `claude --allow-dangerously-skip-permissions`; `restoreLaunchFlags` turns
   that off. A restored Claude session also starts with permissions bypassed by

@@ -75,7 +75,9 @@ app itself has the gaps listed in
   bulk acknowledge, and the list is not reachable from the sidebar.
 - **No OS banners, sounds or dock/taskbar badges.** `notify_os` still prints to
   stderr.
-- **No mute, token or cost display.**
+- **Mute is config-only.** `muteProviders` silences desktop notifications at
+  launch; there is no Settings row. Token and cost display needs a client to
+  report usage, and no bundled hook does yet.
 
 ### Session and lifecycle
 

@@ -132,6 +132,8 @@ Event:
 | `agent.list` | `{workspace_id?, state?}` | `{agents:[Agent]}` |
 | `agent.clear` | `{agent_id}` | `{}` |
 | `agent.ack` | `{agent_id}` | `{agent}` — clears derived attention and acks its notifications |
+| `agent.usage` | `{agent_id, tokens_in?, tokens_out?, cost_usd?}` | `{agent}` |
+| `agent.mute` | `{providers: [...]}` | `{}` — silences OS notifications; in-app attention stays |
 | `agent.resume` | `{agent_id}` | `{surface_id}` |
 
 `agent.register` is idempotent per surface: re-registering rebinds rather than

@@ -278,6 +278,8 @@ pub struct Config {
     pub graphics: bool,
     /// Extra arguments appended to a provider's resume command, by provider id.
     pub resume_args: std::collections::HashMap<String, Vec<String>>,
+    /// Providers whose OS notifications are silenced; attention stays in-app.
+    pub mute_providers: Vec<String>,
     pub sidebar_width: f64,
     pub socket: Option<String>,
     pub shortcuts: Shortcuts,
@@ -297,6 +299,7 @@ impl Default for Config {
             scrollback_lines: 4_000,
             graphics: true,
             resume_args: std::collections::HashMap::new(),
+            mute_providers: Vec::new(),
             sidebar_width: 200.0,
             socket: None,
             shortcuts: Shortcuts::build(&HashMap::new()),
@@ -341,6 +344,7 @@ struct FileConfig {
     scrollback_lines: Option<usize>,
     graphics: Option<bool>,
     resume_args: Option<std::collections::HashMap<String, Vec<String>>>,
+    mute_providers: Option<Vec<String>>,
     sidebar_width: Option<f64>,
     socket: Option<String>,
     shortcuts: HashMap<String, String>,
@@ -404,6 +408,7 @@ impl Config {
                 .min(100_000),
             graphics: file.graphics.unwrap_or(defaults.graphics),
             resume_args: file.resume_args.unwrap_or(defaults.resume_args),
+            mute_providers: file.mute_providers.unwrap_or(defaults.mute_providers),
             sidebar_width: file
                 .sidebar_width
                 .unwrap_or(defaults.sidebar_width)
@@ -480,6 +485,12 @@ impl Config {
             serde_json::json!(self.scrollback_lines),
         );
         object.insert("graphics".into(), serde_json::json!(self.graphics));
+        if !self.mute_providers.is_empty() {
+            object.insert(
+                "muteProviders".into(),
+                serde_json::json!(self.mute_providers),
+            );
+        }
         if !self.resume_args.is_empty() {
             object.insert("resumeArgs".into(), serde_json::json!(self.resume_args));
         }
@@ -740,6 +751,18 @@ mod tests {
         let saved: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(saved["resumeArgs"]["codex"][0], "--sandbox");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn given_mute_providers_when_parsed_then_they_are_kept() {
+        let config = Config::parse(r#"{"muteProviders": ["codex"]}"#).unwrap();
+        assert_eq!(config.mute_providers, vec!["codex".to_string()]);
+        let path = temp_path("mute");
+        config.save_to(&path).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved["muteProviders"][0], "codex");
         let _ = std::fs::remove_file(&path);
     }
 

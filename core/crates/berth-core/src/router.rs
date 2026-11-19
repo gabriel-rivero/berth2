@@ -591,6 +591,17 @@ fn handle(
                 .collect();
             Ok(json!({"agents": agents}))
         }
+        "agent.mute" => {
+            let p: AgentMute = params(raw)?;
+            state.set_muted_providers(p.providers);
+            Ok(json!({}))
+        }
+        "agent.usage" => {
+            let p: AgentUsage = params(raw)?;
+            let agent =
+                state.set_agent_usage(&p.agent_id, p.tokens_in, p.tokens_out, p.cost_usd)?;
+            Ok(json!({"agent": agent}))
+        }
         "agent.clear" => {
             let p: AgentIdParam = params(raw)?;
             let agent = state
@@ -990,6 +1001,21 @@ struct AgentIdParam {
     agent_id: String,
 }
 #[derive(Debug, Deserialize)]
+struct AgentMute {
+    #[serde(default)]
+    providers: Vec<String>,
+}
+#[derive(Debug, Deserialize)]
+struct AgentUsage {
+    agent_id: String,
+    #[serde(default)]
+    tokens_in: Option<u64>,
+    #[serde(default)]
+    tokens_out: Option<u64>,
+    #[serde(default)]
+    cost_usd: Option<f64>,
+}
+#[derive(Debug, Deserialize)]
 struct AgentList {
     #[serde(default)]
     workspace_id: Option<String>,
@@ -1070,6 +1096,8 @@ pub const METHODS: &[&str] = &[
     "agent.list",
     "agent.clear",
     "agent.ack",
+    "agent.mute",
+    "agent.usage",
     "agent.resume",
     "notification.create",
     "notification.list",
@@ -1518,6 +1546,28 @@ mod tests {
             layout["panes"][0]["active_surface"].as_str(),
             Some(second.as_str())
         );
+    }
+
+    #[test]
+    fn given_usage_when_reported_then_the_agent_carries_it() {
+        let mut st = AppState::default();
+        call(&mut st, "workspace.create", json!({}));
+        let sid = call(&mut st, "surface.list", json!({}))["surfaces"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let aid = call(&mut st, "agent.register", json!({"surface_id": sid}))["agent"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let updated = call(
+            &mut st,
+            "agent.usage",
+            json!({"agent_id": aid, "tokens_in": 1200, "tokens_out": 300, "cost_usd": 0.42}),
+        );
+        assert_eq!(updated["agent"]["tokens_in"], 1200);
+        assert_eq!(updated["agent"]["tokens_out"], 300);
+        assert_eq!(updated["agent"]["cost_usd"], 0.42);
     }
 
     #[test]

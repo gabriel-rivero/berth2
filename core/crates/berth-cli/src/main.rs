@@ -706,6 +706,8 @@ usage:
   berth agent-set AGENT_ID [--state S] [--detail D] [--progress 0.4] [--session-ref ID]
   berth agent-set --surface SURFACE_ID [--state S] [--detail D]
   berth agent-ack AGENT_ID       # clear attention + acknowledge notifications
+  berth agent-usage AGENT_ID [--tokens-in N] [--tokens-out N] [--cost USD]
+  berth mute [PROVIDER...]       # silence OS notifications; empty clears
   berth hooks install [claude|opencode|copilot|all]
   berth hooks print [claude|opencode|copilot|all]
   berth hook claude             read a Claude Code hook payload on stdin
@@ -931,6 +933,37 @@ fn run() -> Result<(), String> {
                 params["clear_progress"] = json!(true);
             }
             c.call("agent.update", params)?;
+        }
+
+        "mute" => {
+            let providers: Vec<String> = positional(rest)
+                .iter()
+                .flat_map(|arg| arg.split(','))
+                .map(str::trim)
+                .filter(|arg| !arg.is_empty())
+                .map(str::to_string)
+                .collect();
+            c.call("agent.mute", json!({"providers": providers}))?;
+        }
+
+        "agent-usage" => {
+            let pos = positional(rest);
+            let aid = pos.first().ok_or("agent-usage: missing AGENT_ID")?;
+            let mut params = json!({"agent_id": aid});
+            if let Some(v) = arg_after(rest, "--tokens-in") {
+                params["tokens_in"] =
+                    json!(v.parse::<u64>().map_err(|_| "tokens-in must be a number")?);
+            }
+            if let Some(v) = arg_after(rest, "--tokens-out") {
+                params["tokens_out"] = json!(
+                    v.parse::<u64>()
+                        .map_err(|_| "tokens-out must be a number")?
+                );
+            }
+            if let Some(v) = arg_after(rest, "--cost") {
+                params["cost_usd"] = json!(v.parse::<f64>().map_err(|_| "cost must be a number")?);
+            }
+            c.call("agent.usage", params)?;
         }
 
         "agent-ack" => {
