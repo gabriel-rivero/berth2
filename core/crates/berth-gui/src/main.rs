@@ -1592,6 +1592,18 @@ impl Gui {
             theme.text_secondary,
             cell.width,
         );
+        let group_button = ui::new_group_button(area);
+        painter.text(
+            font,
+            (
+                group_button.x + 2,
+                group_button.y + group_button.h.saturating_sub(cell.height) / 2,
+            ),
+            "+G",
+            font::TextStyle::NORMAL,
+            theme.text_tertiary,
+            group_button.w.saturating_sub(2),
+        );
         for row in rows {
             painter.sidebar_row(font, row, theme, compact);
         }
@@ -2001,6 +2013,10 @@ impl Gui {
     }
 
     fn sidebar_pressed(&mut self, point: (usize, usize), nav: Nav) {
+        if ui::new_group_button(nav.sidebar).contains(point.0, point.1) {
+            self.new_group();
+            return;
+        }
         if ui::new_workspace_button(nav.sidebar).contains(point.0, point.1) {
             if let Err(error) = self.dispatch("workspace.create", serde_json::json!({})) {
                 eprintln!("berth-gui: workspace.create: {error}");
@@ -2034,7 +2050,22 @@ impl Gui {
             return;
         };
         match &row.kind {
-            ui::RowKind::Group { id, collapsed, .. } => {
+            ui::RowKind::Group {
+                id,
+                collapsed,
+                color,
+                ..
+            } => {
+                if self.modifiers.shift_key() {
+                    let next = next_row_color(color.as_deref());
+                    if let Err(error) = self.dispatch(
+                        "group.update",
+                        serde_json::json!({"group_id": id, "color": next}),
+                    ) {
+                        eprintln!("berth-gui: group colour: {error}");
+                    }
+                    return;
+                }
                 if self.same_click(point, ClickTarget::GroupRow(id.clone())) {
                     let name = lock(&self.state)
                         .groups
@@ -2055,6 +2086,16 @@ impl Gui {
                 }
             }
             ui::RowKind::Workspace(workspace) => {
+                if self.modifiers.shift_key() {
+                    let next = next_row_color(workspace.color.as_deref());
+                    if let Err(error) = self.dispatch(
+                        "workspace.update",
+                        serde_json::json!({"workspace_id": workspace.id, "color": next}),
+                    ) {
+                        eprintln!("berth-gui: workspace colour: {error}");
+                    }
+                    return;
+                }
                 if self.same_click(point, ClickTarget::WorkspaceRow(workspace.id.clone())) {
                     let name = lock(&self.state)
                         .workspace(&workspace.id)
@@ -2434,6 +2475,30 @@ impl Gui {
             .and_then(|pane| pane.active_surface().map(str::to_owned));
         if let Some(surface_id) = surface {
             self.activate(&surface_id);
+        }
+    }
+
+    /// Create a group and put the selected workspace in it.
+    fn new_group(&mut self) {
+        let name = format!("Group {}", lock(&self.state).groups.len() + 1);
+        match self.dispatch("group.create", serde_json::json!({"name": name})) {
+            Ok(result) => {
+                let id = result["group"]["id"].as_str().map(str::to_string);
+                if let (Some(id), Some(workspace)) = (
+                    id,
+                    self.active_surface().and_then(|surface| {
+                        lock(&self.state)
+                            .surface(&surface)
+                            .map(|surface| surface.workspace_id.clone())
+                    }),
+                ) && let Err(error) = self.dispatch(
+                    "workspace.update",
+                    serde_json::json!({"workspace_id": workspace, "group_id": id}),
+                ) {
+                    eprintln!("berth-gui: workspace group: {error}");
+                }
+            }
+            Err(error) => eprintln!("berth-gui: group.create: {error}"),
         }
     }
 
@@ -3625,6 +3690,21 @@ fn super_arrow_key(key: &Key) -> Option<&'static str> {
     }
 }
 
+/// The palette Shift-click cycles a sidebar row through.
+const ROW_COLORS: [&str; 5] = ["#e8b06a", "#8bd5a6", "#7fb4ff", "#e06c75", "#c792ea"];
+
+fn next_row_color(current: Option<&str>) -> &'static str {
+    let index = current
+        .and_then(|color| {
+            ROW_COLORS
+                .iter()
+                .position(|candidate| candidate.eq_ignore_ascii_case(color))
+        })
+        .map(|index| (index + 1) % ROW_COLORS.len())
+        .unwrap_or(0);
+    ROW_COLORS[index]
+}
+
 fn mouse_button(button: MouseButton) -> Option<mouse::Button> {
     Some(match button {
         MouseButton::Left => mouse::Button::Left,
@@ -3717,6 +3797,13 @@ mod press_tests {
             Some("srf-left"),
             "srf-left"
         ));
+    }
+
+    #[test]
+    fn given_a_row_colour_then_shift_click_cycles_through_the_palette() {
+        assert_eq!(super::next_row_color(None), "#e8b06a");
+        assert_eq!(super::next_row_color(Some("#e8b06a")), "#8bd5a6");
+        assert_eq!(super::next_row_color(Some("#c792ea")), "#e8b06a");
     }
 
     #[test]

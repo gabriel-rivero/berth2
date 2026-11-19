@@ -40,7 +40,9 @@ the macOS window's 12pt labels.
 - Every pane has a tab strip with one tab per surface, a close cross and an
   active underline. Tabs share the strip equally and truncate their label, so a
   long OSC title cannot hide the tabs after it.
-- The sidebar lists workspaces with groups (chevron toggles `group.update`),
+- The sidebar lists workspaces with groups (chevron toggles `group.update`; the
+  `+G` button creates a group and moves the selected workspace into it;
+  Shift-clicking a workspace or group cycles its colour),
   pinned-first ordering, then attention rank, with the active surface's title,
   the workspace name and cwd, an agent line and an OSC 9;4 progress bar.
 - The sidebar edge drags between 180 and 360 points; `+` and double-clicking

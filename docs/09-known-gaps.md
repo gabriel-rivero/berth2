@@ -49,8 +49,11 @@ app itself has the gaps listed in
 
 - **One window, one visible workspace.** No multiple windows, detachable
   surfaces or overview.
-- **Sidebar has no colours, icons or filter.** Groups can be renamed and
-  collapsed, but there is no create/colour picker.
+- **Sidebar polish is partial.** Groups can be created, renamed, collapsed and
+  picked from a fixed colour cycle; workspaces show an icon if one is stored and
+  a colour bar. There is no colour picker or icon picker, no sidebar filter, and
+  a workspace still shows one agent line plus an agent count rather than a row
+  per agent.
 - **No tab overflow menu.** Tabs resize down to a minimum label; a very large
   number of tabs squeezes every label. Rename and drag-reorder are in.
 - **No pane maximize/zoom, swap or move.** Splits and closes are created by

@@ -4,6 +4,10 @@
 
 ### Changes
 
+- Sidebar groups can be created from `+G` (the selected workspace moves into
+  the new group), renamed by double-click, and coloured by Shift-click;
+  workspace rows render their stored colour and icon, and a workspace with
+  several agents shows the count.
 - Linux packaging: every archive now contains the `berth` CLI beside
   `berth-gui`, and releases attach a Debian `.deb` (both binaries, desktop
   entry, icon) built in CI. An Arch `PKGBUILD` builds both from the tag.

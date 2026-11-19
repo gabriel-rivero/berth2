@@ -146,6 +146,7 @@ pub struct AgentView {
 pub struct WorkspaceView {
     pub id: String,
     pub label: String,
+    pub color: Option<String>,
     pub detail: String,
     pub unread: u32,
     pub attention: Attention,
@@ -159,6 +160,7 @@ pub enum RowKind {
         id: String,
         name: String,
         collapsed: bool,
+        color: Option<String>,
     },
     Workspace(WorkspaceView),
 }
@@ -182,6 +184,34 @@ pub fn new_workspace_button(sidebar: Rect) -> Rect {
         28,
         SIDEBAR_HEADER.saturating_sub(2),
     )
+}
+
+/// The header button that creates a group, left of the workspace "+".
+pub fn new_group_button(sidebar: Rect) -> Rect {
+    Rect::new(
+        sidebar.right().saturating_sub(60),
+        1,
+        28,
+        SIDEBAR_HEADER.saturating_sub(2),
+    )
+}
+
+/// Parse a stored row colour (`#rrggbb` or a few names) to RGB.
+pub fn parse_color(value: Option<&str>) -> Option<u32> {
+    let text = value?.trim();
+    if let Some(hex) = text.strip_prefix('#')
+        && hex.len() == 6
+    {
+        return u32::from_str_radix(hex, 16).ok();
+    }
+    Some(match text.to_ascii_lowercase().as_str() {
+        "orange" => 0x00e8_b06a,
+        "green" => 0x008b_d5a6,
+        "blue" => 0x007f_b4ff,
+        "red" => 0x00e0_6c75,
+        "purple" => 0x00c7_92ea,
+        _ => return None,
+    })
 }
 
 /// The workspace whose tree is visible: the selection, else the first one.
@@ -318,19 +348,24 @@ pub fn build_sidebar(
     let group_height = (GROUP_ROW_HEIGHT * row_height / WORKSPACE_ROW_HEIGHT) as usize;
     let workspace_height = row_height as usize;
 
-    let push_group =
-        |rows: &mut Vec<SidebarRow>, y: &mut usize, id: &str, name: &str, collapsed: bool| {
-            let rect = Rect::new(area.x, *y, area.w, group_height);
-            rows.push(SidebarRow {
-                kind: RowKind::Group {
-                    id: id.to_string(),
-                    name: name.to_string(),
-                    collapsed,
-                },
-                rect,
-            });
-            *y = y.saturating_add(group_height);
-        };
+    let push_group = |rows: &mut Vec<SidebarRow>,
+                      y: &mut usize,
+                      id: &str,
+                      name: &str,
+                      collapsed: bool,
+                      color: Option<String>| {
+        let rect = Rect::new(area.x, *y, area.w, group_height);
+        rows.push(SidebarRow {
+            kind: RowKind::Group {
+                id: id.to_string(),
+                name: name.to_string(),
+                collapsed,
+                color,
+            },
+            rect,
+        });
+        *y = y.saturating_add(group_height);
+    };
 
     let workspace_row = |id: &str, y: usize, height: usize| -> Option<SidebarRow> {
         let workspace = state.workspace(id)?;
@@ -346,11 +381,13 @@ pub fn build_sidebar(
         } else {
             live
         };
-        let label = if workspace.pinned {
-            format!("★ {base}")
-        } else {
-            base
+        let mut label = match &workspace.icon {
+            Some(icon) if !icon.is_empty() => format!("{icon} {base}"),
+            _ => base,
         };
+        if workspace.pinned {
+            label = format!("★ {label}");
+        }
         let mut parts = Vec::new();
         if !workspace.name.is_empty() {
             parts.push(workspace.name.clone());
@@ -364,10 +401,19 @@ pub fn build_sidebar(
         if !cwd.is_empty() {
             parts.push(abbreviate(&cwd));
         }
+        let agents = state
+            .agents
+            .values()
+            .filter(|agent| agent.workspace_id == id)
+            .count();
+        if agents > 1 {
+            parts.push(format!("{agents} agents"));
+        }
         Some(SidebarRow {
             kind: RowKind::Workspace(WorkspaceView {
                 id: workspace.id.clone(),
                 label,
+                color: workspace.color.clone(),
                 detail: parts.join("  "),
                 unread: workspace.unread,
                 attention: agent.map(|agent| agent.attention).unwrap_or_default(),
@@ -380,7 +426,14 @@ pub fn build_sidebar(
     };
 
     for group in &state.groups {
-        push_group(&mut rows, &mut y, &group.id, &group.name, group.collapsed);
+        push_group(
+            &mut rows,
+            &mut y,
+            &group.id,
+            &group.name,
+            group.collapsed,
+            group.color.clone(),
+        );
         if group.collapsed {
             continue;
         }
@@ -531,6 +584,14 @@ pub fn pane_at(panes: &[PaneView], x: usize, y: usize) -> Option<&PaneView> {
 mod tests {
     use super::*;
     use berth_core::model::{Orientation, PaneNode};
+
+    #[test]
+    fn given_a_stored_colour_then_hex_and_names_parse() {
+        assert_eq!(parse_color(Some("#e8b06a")), Some(0x00e8_b06a));
+        assert_eq!(parse_color(Some("green")), Some(0x008b_d5a6));
+        assert_eq!(parse_color(Some("nope")), None);
+        assert_eq!(parse_color(None), None);
+    }
 
     #[test]
     fn given_cells_in_two_orders_when_spanned_then_the_span_is_the_same() {

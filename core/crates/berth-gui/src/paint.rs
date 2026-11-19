@@ -463,9 +463,23 @@ impl<'a> Painter<'a> {
         let cell = font.cell();
         match &row.kind {
             RowKind::Group {
-                name, collapsed, ..
+                name,
+                collapsed,
+                color,
+                ..
             } => {
                 self.fill(row.rect, theme.sidebar_bg);
+                if let Some(color) = crate::ui::parse_color(color.as_deref()) {
+                    self.fill(
+                        Rect::new(
+                            row.rect.x + 2,
+                            row.rect.y + 4,
+                            3,
+                            row.rect.h.saturating_sub(8),
+                        ),
+                        color,
+                    );
+                }
                 let chevron = if *collapsed { "▸" } else { "▾" };
                 let x = row.rect.x + 8;
                 let y = row.rect.y + (row.rect.h.saturating_sub(cell.height) / 2);
@@ -501,6 +515,17 @@ impl<'a> Painter<'a> {
         let cell = font.cell();
         let rect = workspace.rect;
         self.fill(rect, theme.sidebar_bg);
+        if let Some(color) = crate::ui::parse_color(workspace.color.as_deref()) {
+            self.fill(
+                Rect::new(
+                    rect.right().saturating_sub(4),
+                    rect.y + 4,
+                    3,
+                    rect.h.saturating_sub(8),
+                ),
+                color,
+            );
+        }
         if workspace.active {
             self.fill(rect, theme.sidebar_active);
             self.fill(Rect::new(rect.x, rect.y, 3, rect.h), theme.accent);
