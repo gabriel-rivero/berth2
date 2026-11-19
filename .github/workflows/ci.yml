@@ -48,18 +48,24 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends xvfb libxkbcommon-x11-0
+          sudo apt-get install -y --no-install-recommends xvfb libxkbcommon-x11-0 \
+            weston libwayland-client0 libwayland-cursor0 libwayland-egl1 libxkbcommon0
       - name: window smoke
         if: runner.os == 'Linux'
         run: |
           (cd core && cargo build -p berth-gui)
           ./scripts/gui-smoke.sh core/target/debug/berth-gui "$PWD/gui-frame.png"
+      - name: window smoke (wayland)
+        if: runner.os == 'Linux'
+        run: ./scripts/gui-smoke-wayland.sh core/target/debug/berth-gui "$PWD/gui-frame-wayland.png"
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Linux'
         continue-on-error: true
         with:
           name: gui-frame
-          path: gui-frame.png
+          path: |
+            gui-frame.png
+            gui-frame-wayland.png
           retention-days: 7
 
       # The generated Swift bindings are committed; regenerate and fail if the

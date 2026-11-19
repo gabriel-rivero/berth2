@@ -1,7 +1,9 @@
 # Graphics protocols (design)
 
-Status: iTerm2 phase implemented in the portable window (0.13 work in progress).
-Kitty is next; sixel remains planned.
+Status: iTerm2 implemented. Kitty and sixel wait on the side-channel scanner
+described below, because `vt100` exposes no APC/DCS callback. The portable
+window is smoke-tested under X11 and, from 0.13.1, a headless Weston Wayland
+session in CI.
 
 ## The question this answers
 
@@ -20,13 +22,13 @@ pass.
 
 ## Design
 
-1. **Side-channel scanner.** In the PTY reader (`berth-headless`), scan each
-   chunk for graphics sequences before feeding it to `vt100`: APC `ESC _ G …`
-   (kitty), DCS `ESC P … q … ESC \` (sixel), and OSC `1337;File=…` (iTerm2).
-   Feed the bytes before the sequence to `vt100`, read the cursor cell at that
-   point, record the image, then continue after the sequence. `vt100` keeps
-   receiving everything else unchanged, so the text grid, scrollback and OSC
-   handling stay as they are.
+1. **Side-channel scanner.** iTerm2 is done through `vt100`'s OSC callback.
+   Kitty (APC) and sixel (DCS) are not: `vt100` 0.18 has no APC or DCS callback,
+   so those bytes are consumed and dropped. The next step is a scanner in the
+   PTY reader that holds `ESC _ … ESC \` and `ESC P … ESC \` aside, feeds the
+   preceding bytes to `vt100`, reads the cursor cell, stores the image, then
+   continues after the terminator. It must survive a sequence split across two
+   reads; the state is `Normal`, `Apc`, `Dcs`, plus a pending lone `ESC`.
 2. **Image store.** Each surface owns a bounded list of images: protocol id,
    pixel buffer, pixel size, the cell rectangle or auto size, and an absolute
    line anchor (`scrollback_len + cursor_row` at insert). Scrolling and

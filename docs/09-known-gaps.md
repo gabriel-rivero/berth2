@@ -90,8 +90,10 @@ app itself has the gaps listed in
 
 ### Platform and distribution
 
-- **Linux/X11 is the only scripted path.** Wayland, Windows and macOS are compile
-  and test coverage; punch-through to a real desktop is manual.
+- **Wayland and X11 are both smoke-tested** (`gui-smoke.sh` under Xvfb and a
+  headless Weston session); Windows and macOS remain compile and test coverage
+  with manual punch-through. Mixed-DPI hotplug is still manual; the automatic
+  scale rule and the font rebuild on `ScaleFactorChanged` are covered.
 - **Only two packages.** Releases attach a Debian `.deb` and ship an Arch
   `PKGBUILD` in the tree, both installing the window and the CLI with a desktop
   entry; there is no AppImage, Flatpak, rpm, Windows installer, signing or

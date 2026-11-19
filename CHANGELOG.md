@@ -13,6 +13,8 @@
 
 ### Features
 
+- The window is smoke-tested under a headless Weston Wayland session in CI,
+  alongside the existing Xvfb frame.
 - CLI: `rename-workspace`, `group-create`, `group-rename`, `group-color` and
   `group-delete` complete the documented commands.
 

@@ -152,11 +152,12 @@ Swift gaps list, because several items are new to both shells.
   The AppKit surface still needs the UI.
 - ~~Accessibility tree~~: shipped in 0.11 as an AccessKit tree with the focused
   terminal as a `Terminal` node; sidebar and panels are still outside it.
-- **Packaging**: 0.11 publishes the portable window binaries next to the macOS
-  app (Linux/Windows/macOS archives); installers and notarization are next.
-- **Graphics protocols** (sixel/kitty/iTerm images) stay with the renderer
-  decision: `vt100` cannot carry them, so this is the reason to move to
-  `libghostty-vt` or add a decoder. Not planned before that call.
+- **Packaging**: the Linux release ships a Debian `.deb`, an Arch `PKGBUILD` and
+  the CLI beside the window; notarization is next.
+- **Graphics protocols**: iTerm2 inline images render in the portable window.
+  Kitty and sixel need a side-channel scanner in the PTY reader because `vt100`
+  exposes no APC/DCS callback; the design is in
+  [docs/10-graphics.md](10-graphics.md). No renderer migration for this.
 
 ## After v1 (ordered, not scheduled)
 
