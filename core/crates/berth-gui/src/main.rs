@@ -1765,6 +1765,37 @@ impl Gui {
         true
     }
 
+    /// Report a horizontal wheel event (xterm buttons 6 and 7). Programs that
+    /// do not track the mouse never see it; nothing scrolls sideways here.
+    fn report_wheel_horizontal(&mut self, right: bool) -> bool {
+        let point = (
+            self.pointer.0.max(0.0) as usize,
+            self.pointer.1.max(0.0) as usize,
+        );
+        let Some(target) = self.mouse_target(point) else {
+            return false;
+        };
+        if !target.mode.is_on() {
+            return false;
+        }
+        self.send_mouse(
+            &target,
+            mouse::Report {
+                col: target.col,
+                row: target.row,
+                button: if right {
+                    mouse::Button::WheelRight
+                } else {
+                    mouse::Button::WheelLeft
+                },
+                release: false,
+                motion: false,
+                modifiers: self.modifiers_bits(),
+            },
+        );
+        true
+    }
+
     /// The link under the pointer, if any, with the surface and cell it lives in.
     fn link_under_pointer(&mut self) -> Option<String> {
         if self.overlay.is_some() {
@@ -2328,21 +2359,20 @@ impl Gui {
     }
 
     fn wheel(&mut self, delta: MouseScrollDelta) {
-        let up = match delta {
-            MouseScrollDelta::LineDelta(_, y) => Some(y > 0.0),
-            MouseScrollDelta::PixelDelta(position) => {
-                if position.y > 0.0 {
-                    Some(true)
-                } else if position.y < 0.0 {
-                    Some(false)
-                } else {
-                    None
-                }
-            }
+        let (x, y) = match delta {
+            MouseScrollDelta::LineDelta(x, y) => (f64::from(x), f64::from(y)),
+            MouseScrollDelta::PixelDelta(position) => (position.x, position.y),
         };
-        if let Some(up) = up
-            && self.report_wheel(up)
-        {
+        // A trackpad reports both axes. Horizontal gestures go to the program
+        // as buttons 6/7; there is no horizontal scrollback to fall back on.
+        if let Some(right) = mouse::horizontal_gesture(x, y) {
+            self.report_wheel_horizontal(right);
+            return;
+        }
+        if y == 0.0 {
+            return;
+        }
+        if self.report_wheel(y > 0.0) {
             return;
         }
         let cell = self.cell();

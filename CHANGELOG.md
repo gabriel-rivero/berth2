@@ -11,6 +11,13 @@
 - The CLI rejects a `hello` whose protocol version is stated and differs from
   its own.
 
+### Fixes
+
+- A horizontal wheel gesture (trackpad swipe or tilt wheel) is reported to a
+  mouse-tracking program as xterm buttons 6 and 7. It used to be read as
+  `y > 0.0 == false`, so a sideways swipe arrived as a wheel-down and moved the
+  selection instead of shifting the view.
+
 ### Features
 
 - Kitty graphics, verified with a real yazi preview: the PTY reader separates

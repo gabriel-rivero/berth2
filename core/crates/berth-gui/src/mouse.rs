@@ -13,6 +13,9 @@ pub enum Button {
     Right,
     WheelUp,
     WheelDown,
+    /// Horizontal wheel (trackpad swipe or tilt wheel), xterm buttons 6 and 7.
+    WheelLeft,
+    WheelRight,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -61,6 +64,19 @@ fn button_code(button: Button) -> u8 {
         Button::Right => 2,
         Button::WheelUp => 64,
         Button::WheelDown => 65,
+        Button::WheelLeft => 66,
+        Button::WheelRight => 67,
+    }
+}
+
+/// Classify a two-axis scroll as horizontal, returning `true` for right.
+/// A gesture counts as horizontal only when that axis dominates, so a diagonal
+/// trackpad swipe keeps scrolling vertically.
+pub fn horizontal_gesture(x: f64, y: f64) -> Option<bool> {
+    if x != 0.0 && x.abs() > y.abs() {
+        Some(x > 0.0)
+    } else {
+        None
     }
 }
 
@@ -203,5 +219,33 @@ mod tests {
         assert!(should_report(MouseMode::PressRelease, false));
         assert!(should_report(MouseMode::Drag, false));
         assert!(should_report(MouseMode::Motion, false));
+    }
+
+    #[test]
+    fn given_a_horizontal_scroll_then_the_gesture_is_horizontal() {
+        assert_eq!(horizontal_gesture(3.0, 0.0), Some(true));
+        assert_eq!(horizontal_gesture(-2.0, 0.5), Some(false));
+        assert_eq!(horizontal_gesture(0.4, 0.1), Some(true));
+    }
+
+    #[test]
+    fn given_a_vertical_or_absent_scroll_then_no_horizontal_gesture() {
+        assert_eq!(horizontal_gesture(0.0, 2.0), None);
+        assert_eq!(horizontal_gesture(1.0, 1.0), None);
+        assert_eq!(horizontal_gesture(0.0, 0.0), None);
+    }
+
+    #[test]
+    fn given_sgr_when_a_sideways_wheel_is_encoded_then_it_uses_buttons_six_and_seven() {
+        let left = encode(report(Button::WheelLeft), MouseEncoding::Sgr).unwrap();
+        let right = encode(report(Button::WheelRight), MouseEncoding::Sgr).unwrap();
+        assert_eq!(String::from_utf8(left).unwrap(), "\x1b[<66;5;3M");
+        assert_eq!(String::from_utf8(right).unwrap(), "\x1b[<67;5;3M");
+    }
+
+    #[test]
+    fn given_utf8_when_a_sideways_wheel_is_encoded_then_the_byte_follows_the_protocol() {
+        let bytes = encode(report(Button::WheelRight), MouseEncoding::Utf8).unwrap();
+        assert_eq!(bytes, vec![0x1b, b'[', b'M', 32 + 67, 32 + 5, 32 + 3]);
     }
 }

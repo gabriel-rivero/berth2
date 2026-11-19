@@ -80,7 +80,10 @@ the macOS window's 12pt labels.
   bracketed paste is honoured when the program enables it, and a multi-line
   paste opens a preview that sends only on Enter.
 - Mouse reporting: a program that enables X10, UTF-8 or SGR tracking receives
-  presses, releases, drags and wheel events with modifier bits. A press in
+  presses, releases, drags and wheel events with modifier bits. A horizontal
+  gesture, such as a trackpad swipe or a tilt wheel, is reported as xterm
+  buttons 6 and 7 on the dominant axis; it never turns into a vertical wheel.
+  Programs that do not track the mouse ignore it. A press in
   another pane moves keyboard focus there first, so paste and typing follow the
   click even when the program consumes the mouse. Shift-click always selects
   locally, so copy still works inside a TUI.
