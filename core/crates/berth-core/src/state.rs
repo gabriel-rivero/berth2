@@ -906,6 +906,7 @@ impl AppState {
         &mut self,
         agent_id: &str,
         session_ref: &str,
+        ops: &dyn SurfaceOps,
     ) -> Result<AgentSurface, CoreError> {
         let mut agent = self
             .agents
@@ -925,6 +926,15 @@ impl AppState {
             });
         }
         let resume = agent.resume.as_mut().expect("resume set above");
+        if resume.argv.is_empty() {
+            // The hook runs inside the provider process, so the foreground argv
+            // is the launch command, including flags such as
+            // `--allow-dangerously-skip-permissions`.
+            resume.argv = ops
+                .pid_info(&agent.surface_id)
+                .map(|info| info.argv)
+                .unwrap_or_default();
+        }
         if resume.session_ref.as_deref() != Some(session_ref) {
             resume.session_ref = Some(session_ref.to_string());
         }
@@ -1052,5 +1062,114 @@ impl AppState {
             serde_json::json!({"notification_id": id}),
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{NullOps, PidInfo};
+
+    /// Reports a fixed foreground argv, the way a shell sees a running agent.
+    struct PidOps(Vec<String>);
+
+    impl SurfaceOps for PidOps {
+        fn spawn(&self, req: SpawnRequest) -> Result<crate::Spawned, CoreError> {
+            NullOps.spawn(req)
+        }
+        fn send_text(&self, a: &str, b: &str) -> Result<(), CoreError> {
+            NullOps.send_text(a, b)
+        }
+        fn send_key(&self, a: &str, b: &str, c: &[String]) -> Result<(), CoreError> {
+            NullOps.send_key(a, b, c)
+        }
+        fn read_text(
+            &self,
+            a: &str,
+            b: crate::ReadScope,
+            c: usize,
+        ) -> Result<crate::Readback, CoreError> {
+            NullOps.read_text(a, b, c)
+        }
+        fn close(&self, a: &str) -> Result<(), CoreError> {
+            NullOps.close(a)
+        }
+        fn focus(&self, a: &str) -> Result<(), CoreError> {
+            NullOps.focus(a)
+        }
+        fn resize(&self, a: &str, b: u16, c: u16) -> Result<(), CoreError> {
+            NullOps.resize(a, b, c)
+        }
+        fn pid_info(&self, _: &str) -> Result<PidInfo, CoreError> {
+            Ok(PidInfo {
+                pid: Some(1),
+                comm: Some("claude".into()),
+                argv: self.0.clone(),
+            })
+        }
+        fn notify_os(&self, n: &crate::Notification) -> Result<(), CoreError> {
+            NullOps.notify_os(n)
+        }
+    }
+
+    #[test]
+    fn given_a_passive_agent_when_a_session_ref_arrives_then_the_live_argv_is_kept() {
+        let ops = PidOps(vec![
+            "/usr/local/bin/claude".into(),
+            "--allow-dangerously-skip-permissions".into(),
+        ]);
+        let mut st = AppState::default();
+        st.create_workspace(Some("main"), Some("/work"), None, &ops)
+            .unwrap();
+        let sid = st.surfaces.keys().next().unwrap().clone();
+        let agent = st
+            .register_agent(
+                &sid,
+                Some("claude-code"),
+                None,
+                None,
+                serde_json::json!({}),
+                &ops,
+            )
+            .unwrap();
+        let updated = st.set_agent_session_ref(&agent.id, "sess-1", &ops).unwrap();
+        let resume = updated.resume.unwrap();
+        assert_eq!(
+            resume.argv,
+            vec![
+                "/usr/local/bin/claude",
+                "--allow-dangerously-skip-permissions"
+            ]
+        );
+        assert_eq!(resume.cwd, "/work");
+        assert_eq!(resume.session_ref.as_deref(), Some("sess-1"));
+    }
+
+    #[test]
+    fn given_a_wrapper_command_then_a_session_ref_keeps_the_saved_argv() {
+        let ops = PidOps(vec!["/usr/local/bin/claude".into()]);
+        let mut st = AppState::default();
+        st.create_workspace(Some("main"), Some("/work"), None, &ops)
+            .unwrap();
+        let sid = st.surfaces.keys().next().unwrap().clone();
+        let agent = st
+            .register_agent(
+                &sid,
+                Some("claude-code"),
+                None,
+                Some(Resume {
+                    argv: vec!["/opt/claude".into(), "--model".into(), "opus".into()],
+                    cwd: "/saved".into(),
+                    session_ref: None,
+                    env: Vec::new(),
+                }),
+                serde_json::json!({}),
+                &ops,
+            )
+            .unwrap();
+        let updated = st.set_agent_session_ref(&agent.id, "sess-1", &ops).unwrap();
+        let resume = updated.resume.unwrap();
+        assert_eq!(resume.argv, vec!["/opt/claude", "--model", "opus"]);
+        assert_eq!(resume.cwd, "/saved");
     }
 }

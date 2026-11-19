@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use berth_core::model::Orientation;
 use berth_core::{AppState, CoreError, ReadScope, Request, Response, SurfaceOps, paths};
-use berth_headless::{MouseEncoding, MouseMode, PtyHost, restore_session, save_session};
+use berth_headless::{MouseEncoding, MouseMode, PtyHost, restore_session_with, save_session};
 use berth_server::{Server, ServerConfig, ServerHandle, SocketMode, auth};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
@@ -230,7 +230,7 @@ fn main() {
 
     let state = Arc::new(Mutex::new(AppState::default()));
     if !args.no_restore {
-        match restore_session(&state, host.as_ref()) {
+        match restore_session_with(&state, host.as_ref(), config.restore_launch_flags) {
             Ok(0) => {}
             Ok(count) => println!("berth-gui: restored {count} session(s)"),
             Err(error) => eprintln!("berth-gui: restore skipped: {error}"),
@@ -1156,6 +1156,11 @@ impl Gui {
                 continue;
             }
             self.exit_announced.insert(surface_id.clone(), true);
+            if self.config.close_exited_panes {
+                self.close_surface(&surface_id);
+                self.ensure_workspace();
+                continue;
+            }
             let params = serde_json::json!({
                 "surface_id": surface_id,
                 "exited": true,
@@ -1163,6 +1168,16 @@ impl Gui {
             if let Err(error) = self.dispatch("surface.update", params) {
                 eprintln!("berth-gui: surface.update exited: {error}");
             }
+        }
+    }
+
+    /// Keep the window usable when the last pane exits and its workspace closes.
+    fn ensure_workspace(&mut self) {
+        if !lock(&self.state).workspaces.is_empty() {
+            return;
+        }
+        if let Err(error) = self.dispatch("workspace.create", serde_json::json!({"name": "1"})) {
+            eprintln!("berth-gui: workspace.create after exit: {error}");
         }
     }
 
@@ -2157,6 +2172,10 @@ impl Gui {
             Ok(_) => {
                 self.selection.remove(surface_id);
                 self.scroll.remove(surface_id);
+                self.sized.remove(surface_id);
+                self.last_meta.remove(surface_id);
+                self.flashes.remove(surface_id);
+                self.exit_announced.remove(surface_id);
             }
             Err(error) => eprintln!("berth-gui: close {surface_id}: {error}"),
         }

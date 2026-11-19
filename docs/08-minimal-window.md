@@ -88,8 +88,11 @@ the macOS window's 12pt labels.
   and the window title. OSC 7 sets the cwd, BEL and the visual bell increment
   `surface.bell`, OSC 9;4 reports progress, OSC 52 writes the clipboard, and
   OSC 9/777 create a core notification.
-- A child exit is reported once as `surface.exited`; the pane keeps its final
-  screen with a red "process exited" banner until the tab is closed.
+- A pane closes when its process exits, so `Ctrl+D` removes the tab and the
+  layout reflows; the last workspace exit opens a fresh one. Set
+  `closeExitedPanes` to `false` to keep the final screen with a red "process
+  exited" banner instead (then the exit is reported as `surface.exited` and the
+  tab stays until you close it).
 - OSC 9/777 notifications reach the desktop through `osascript` on macOS and
   `notify-send` on Linux, in addition to the attention list. Agent rows show
   token counts and cost when the hooks report them.
@@ -105,7 +108,10 @@ the macOS window's 12pt labels.
 - Passive agent detection runs once a second over surfaces without an agent,
   using the foreground process group (`tcgetpgrp` plus `/proc` on Linux and `ps`
   on macOS), then sweeps stale agents every 30 seconds. A `claude`, `codex`,
-  `opencode` or `copilot` started inside a pane becomes a sidebar agent row.
+  `opencode` or `copilot` started inside a pane becomes a sidebar agent row. A
+  resumed agent keeps the launch flags it had, such as
+  `claude --allow-dangerously-skip-permissions`; `restoreLaunchFlags` turns
+  that off.
 - The session autosaves 500 ms after the last core event, including changes made
   by the CLI or hooks through the socket, so a crash loses at most one
   interaction.
@@ -123,10 +129,11 @@ the macOS window's 12pt labels.
 - `⌘I` opens the attention list: unacknowledged notifications newest first, with
   the level colour, body and workspace. Enter acknowledges the notification,
   selects its workspace and focuses the surface that raised it.
-- `⌘,` opens settings: font size, display scale, compact sidebar, socket mode,
-  and all 14 shortcuts. Arrows adjust or cycle a value, Enter toggles or starts
-  recording a chord, Backspace unbinds. Every change applies live and is written
-  to `config.json` with the keys the window does not own preserved.
+- `⌘,` opens settings: font size, display scale, compact sidebar, close on exit,
+  socket mode, and all 14 shortcuts. Arrows adjust or cycle a value, Enter
+  toggles or starts recording a chord, Backspace unbinds. Every change applies
+  live and is written to `config.json` with the keys the window does not own
+  preserved.
 - Long panels scroll to follow the selection. Clicking outside a panel or
   focusing another window closes it.
 

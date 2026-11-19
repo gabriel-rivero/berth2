@@ -92,6 +92,49 @@ pub fn detect(comm: Option<&str>, argv: &[String]) -> Option<&'static Provider> 
     None
 }
 
+/// Extra arguments from a saved launch command: everything after the program,
+/// minus the provider's own resume flag. A resumed launch keeps flags such as
+/// `--allow-dangerously-skip-permissions` or `--model`.
+pub fn launch_args(provider: &Provider, argv: &[String]) -> Vec<String> {
+    let resume_flag = provider
+        .resume
+        .iter()
+        .position(|token| *token == "{ref}")
+        .and_then(|index| index.checked_sub(1))
+        .map(|index| provider.resume[index]);
+    let runtime_hosted = argv
+        .first()
+        .is_some_and(|first| matches!(normalize(first).as_str(), "node" | "bun" | "deno"));
+    let mut out = Vec::new();
+    let mut skip_value = false;
+    for (index, arg) in argv.iter().enumerate().skip(1) {
+        if skip_value {
+            skip_value = false;
+            continue;
+        }
+        // A runtime-hosted CLI carries its script path as the second token.
+        if index == 1 && (runtime_hosted || is_provider_program(provider, arg)) {
+            continue;
+        }
+        if Some(arg.as_str()) == resume_flag {
+            skip_value = true;
+            continue;
+        }
+        out.push(arg.clone());
+    }
+    out
+}
+
+fn is_provider_program(provider: &Provider, token: &str) -> bool {
+    let base = normalize(token);
+    provider.aliases.iter().any(|alias| {
+        base == *alias
+            || base == format!("{alias}.js")
+            || base == format!("{alias}.mjs")
+            || base == format!("{alias}.cjs")
+    })
+}
+
 /// Build the resume argv for a provider, preserving extra flags.
 pub fn resume_argv(
     provider: &Provider,
@@ -155,6 +198,58 @@ mod tests {
         assert_eq!(
             resume_argv(c, Some("9a2b"), &[]),
             vec!["copilot", "--resume", "9a2b"]
+        );
+    }
+
+    #[test]
+    fn launch_args_keep_provider_flags_and_drop_the_resume_pair() {
+        let claude = by_id("claude-code").unwrap();
+        let saved = argv(&[
+            "/usr/local/bin/claude",
+            "--allow-dangerously-skip-permissions",
+            "--resume",
+            "old-id",
+            "--model",
+            "opus",
+        ]);
+        assert_eq!(
+            launch_args(claude, &saved),
+            argv(&["--allow-dangerously-skip-permissions", "--model", "opus"])
+        );
+    }
+
+    #[test]
+    fn launch_args_skip_a_node_hosted_script_path() {
+        let claude = by_id("claude-code").unwrap();
+        let saved = argv(&[
+            "node",
+            "/usr/local/lib/node_modules/claude/cli.js",
+            "--allow-dangerously-skip-permissions",
+        ]);
+        assert_eq!(
+            launch_args(claude, &saved),
+            argv(&["--allow-dangerously-skip-permissions"])
+        );
+    }
+
+    #[test]
+    fn launch_args_ignore_a_plain_program_name() {
+        let opencode = by_id("opencode").unwrap();
+        assert!(launch_args(opencode, &argv(&["opencode"])).is_empty());
+    }
+
+    #[test]
+    fn resume_with_extras_appends_them_after_the_template() {
+        let claude = by_id("claude-code").unwrap();
+        let extras = argv(&["--allow-dangerously-skip-permissions"]);
+        assert_eq!(
+            resume_argv(claude, Some("sess-1"), &extras),
+            argv(&[
+                "claude",
+                "--resume",
+                "sess-1",
+                "--allow-dangerously-skip-permissions"
+            ])
         );
     }
 

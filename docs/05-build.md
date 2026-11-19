@@ -220,6 +220,9 @@ Check:
       fresh `claude`).
 - [ ] Type `claude` directly in a shell, with no wrapper. The `SessionStart`
       hook records the session id, and a relaunch resumes that chat too.
+- [ ] Start it with `--allow-dangerously-skip-permissions`; the relaunch keeps
+      the flag. Set `restoreLaunchFlags` to `false` and the resumed command is
+      `claude --resume <id>` alone.
 - [ ] Start opencode directly in a pane with the plugin installed; session
       idle/error and permission events update the row, and its session id
       resumes the chat after a relaunch. Copilot is detected but has no hook

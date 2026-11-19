@@ -1007,6 +1007,17 @@ pub fn restore_session(
     state: &Arc<Mutex<AppState>>,
     ops: &dyn SurfaceOps,
 ) -> Result<usize, CoreError> {
+    restore_session_with(state, ops, true)
+}
+
+/// Restore with the shell's launch-flag policy. When `keep_launch_flags` is
+/// false, saved commands lose their extra flags and a resumed agent runs the
+/// provider template and session id alone.
+pub fn restore_session_with(
+    state: &Arc<Mutex<AppState>>,
+    ops: &dyn SurfaceOps,
+    keep_launch_flags: bool,
+) -> Result<usize, CoreError> {
     let path = session_path();
     let directory = path.parent().unwrap_or_else(|| Path::new("."));
     let from_file = match fs::read(&path) {
@@ -1037,8 +1048,23 @@ pub fn restore_session(
         (None, Some(journal)) => journal,
         (None, None) => return Ok(0),
     };
+    let mut snapshot = snapshot;
+    if !keep_launch_flags {
+        clear_launch_args(&mut snapshot);
+    }
     let mut state = lock(state);
     berth_core::store::restore(&mut state, snapshot, ops)
+}
+
+/// Drop every saved launch command, keeping the session id and cwd.
+fn clear_launch_args(snapshot: &mut Snapshot) {
+    for workspace in &mut snapshot.workspaces {
+        for agent in &mut workspace.agents {
+            if let Some(resume) = &mut agent.resume {
+                resume.argv.clear();
+            }
+        }
+    }
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
@@ -1231,6 +1257,41 @@ mod journal_tests {
         ));
         fs::create_dir_all(&dir).expect("temp dir");
         dir
+    }
+
+    #[test]
+    fn given_launch_flags_disabled_then_only_the_resume_metadata_remains() {
+        let state = Arc::new(Mutex::new(AppState::default()));
+        {
+            let mut st = lock(&state);
+            st.create_workspace(Some("one"), Some("/work"), None, &NullOps)
+                .unwrap();
+            let sid = st.surfaces.keys().next().unwrap().clone();
+            st.register_agent(
+                &sid,
+                Some("claude-code"),
+                None,
+                Some(berth_core::model::Resume {
+                    argv: vec![
+                        "claude".into(),
+                        "--allow-dangerously-skip-permissions".into(),
+                    ],
+                    cwd: "/work".into(),
+                    session_ref: Some("sess-1".into()),
+                    env: vec![("PATH".into(), "/usr/bin".into())],
+                }),
+                serde_json::json!({}),
+                &NullOps,
+            )
+            .unwrap();
+        }
+        let mut snap = snapshot(&lock(&state));
+        clear_launch_args(&mut snap);
+        let resume = snap.workspaces[0].agents[0].resume.as_ref().unwrap();
+        assert!(resume.argv.is_empty());
+        assert_eq!(resume.session_ref.as_deref(), Some("sess-1"));
+        assert_eq!(resume.cwd, "/work");
+        assert_eq!(resume.env.len(), 1);
     }
 
     #[test]

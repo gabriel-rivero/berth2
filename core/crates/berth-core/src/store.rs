@@ -314,7 +314,8 @@ pub fn restore(
                         .and_then(|a| crate::providers::by_id(&a.provider));
                     let argv = match provider {
                         Some(p) if r.session_ref.is_some() && !p.resume.is_empty() => {
-                            crate::providers::resume_argv(p, r.session_ref.as_deref(), &[])
+                            let extras = crate::providers::launch_args(p, &r.argv);
+                            crate::providers::resume_argv(p, r.session_ref.as_deref(), &extras)
                         }
                         _ => r.argv.clone(),
                     };
@@ -780,7 +781,8 @@ mod tests {
             )
             .unwrap();
         assert!(agent.resume.is_none());
-        st.set_agent_session_ref(&agent.id, "sess-9").unwrap();
+        st.set_agent_session_ref(&agent.id, "sess-9", &NullOps)
+            .unwrap();
         let snap = st.snapshot();
 
         let ops = RecordingOps::default();
@@ -790,6 +792,47 @@ mod tests {
         assert_eq!(spawns.len(), 1);
         assert_eq!(spawns[0].argv, vec!["claude", "--resume", "sess-9"]);
         assert_eq!(spawns[0].cwd.as_deref(), Some("/work/project"));
+    }
+
+    #[test]
+    fn restore_keeps_launch_flags_when_the_session_is_resumed() {
+        let mut st = AppState::default();
+        st.create_workspace(Some("agents"), Some("/work"), None, &NullOps)
+            .unwrap();
+        let sid = st.surfaces.keys().next().unwrap().clone();
+        st.register_agent(
+            &sid,
+            Some("claude-code"),
+            None,
+            Some(Resume {
+                argv: vec![
+                    "claude".into(),
+                    "--allow-dangerously-skip-permissions".into(),
+                    "--resume".into(),
+                    "old".into(),
+                ],
+                cwd: "/work".into(),
+                session_ref: Some("new".into()),
+                env: Vec::new(),
+            }),
+            json!({}),
+            &NullOps,
+        )
+        .unwrap();
+        let snap = st.snapshot();
+
+        let ops = RecordingOps::default();
+        restore(&mut AppState::default(), snap, &ops).unwrap();
+        let spawns = ops.spawns.lock().unwrap();
+        assert_eq!(
+            spawns[0].argv,
+            vec![
+                "claude",
+                "--resume",
+                "new",
+                "--allow-dangerously-skip-permissions"
+            ]
+        );
     }
 
     #[test]

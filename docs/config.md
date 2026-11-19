@@ -23,6 +23,8 @@ socket mode is read at launch.
   "fontScale": 0,
   "fontFamily": ["MesloLGS NF", "JetBrains Mono"],
   "compactSidebar": false,
+  "closeExitedPanes": true,
+  "restoreLaunchFlags": true,
   "socket": "local"
 }
 ```
@@ -79,7 +81,8 @@ capture, so the window ships a Ctrl-based default table instead:
 
 A value overrides the default for that action; an empty string unbinds it. The
 settings panel (`⌘,` / `Ctrl+,`) edits this table, the font size, the display
-scale, the sidebar density and the socket mode, and writes the same file. Fixed
+scale, the sidebar density, close-on-exit and the socket mode, and writes the
+same file. Fixed
 bindings that do not appear in the table: `Super+1…9` selects a workspace, and
 `Super+C`/`Ctrl+Shift+C` copy and `Super+V`/`Ctrl+Shift+V` paste.
 
@@ -91,6 +94,26 @@ the macOS shell ignores that key.
 
 - `compactSidebar: true` reduces row height from 62 to 52 points and hides the
   metadata line (workspace name, cwd, git branch, listening ports).
+
+## Panes on exit
+
+- `closeExitedPanes` defaults to `true`. When a pane's process exits, its tab
+  closes; an emptied pane is removed, and closing the last pane closes the
+  workspace. If that was the last workspace, a fresh one opens so the window
+  stays usable.
+- Set it to `false` to keep the final screen with the red "process exited"
+  banner and close the tab yourself. The key is read by the portable window;
+  the macOS app keeps its own surfaces until you close them.
+
+## Agent resumes
+
+- `restoreLaunchFlags` defaults to `true`. When Berth restores an agent, extra
+  flags from the saved launch command are kept, so
+  `claude --allow-dangerously-skip-permissions` comes back as
+  `claude --resume <id> --allow-dangerously-skip-permissions`. A passively
+  detected agent's command is captured when its hook reports the session id.
+- Set it to `false` to resume with the provider command and session id only
+  (`claude --resume <id>`), dropping flags such as `--model` as well.
 
 ## Automation socket
 

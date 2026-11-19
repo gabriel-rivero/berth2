@@ -255,6 +255,12 @@ pub struct Config {
     /// system monospace.
     pub font_family: Vec<String>,
     pub compact_sidebar: bool,
+    /// Close a pane when its process exits instead of keeping the final screen
+    /// with a banner. On by default, like a terminal tab.
+    pub close_exited_panes: bool,
+    /// Replay a saved agent launch command's extra flags on resume, such as
+    /// `--allow-dangerously-skip-permissions`. On by default.
+    pub restore_launch_flags: bool,
     pub sidebar_width: f64,
     pub socket: Option<String>,
     pub shortcuts: Shortcuts,
@@ -267,6 +273,8 @@ impl Default for Config {
             font_scale: 0.0,
             font_family: Vec::new(),
             compact_sidebar: false,
+            close_exited_panes: true,
+            restore_launch_flags: true,
             sidebar_width: 200.0,
             socket: None,
             shortcuts: Shortcuts::build(&HashMap::new()),
@@ -304,6 +312,8 @@ struct FileConfig {
     font_scale: Option<f32>,
     font_family: Option<FamilyNames>,
     compact_sidebar: Option<bool>,
+    close_exited_panes: Option<bool>,
+    restore_launch_flags: Option<bool>,
     sidebar_width: Option<f64>,
     socket: Option<String>,
     shortcuts: HashMap<String, String>,
@@ -351,6 +361,12 @@ impl Config {
                 .map(FamilyNames::into_names)
                 .unwrap_or_default(),
             compact_sidebar: file.compact_sidebar.unwrap_or(defaults.compact_sidebar),
+            close_exited_panes: file
+                .close_exited_panes
+                .unwrap_or(defaults.close_exited_panes),
+            restore_launch_flags: file
+                .restore_launch_flags
+                .unwrap_or(defaults.restore_launch_flags),
             sidebar_width: file
                 .sidebar_width
                 .unwrap_or(defaults.sidebar_width)
@@ -406,6 +422,14 @@ impl Config {
             "compactSidebar".into(),
             serde_json::json!(self.compact_sidebar),
         );
+        object.insert(
+            "closeExitedPanes".into(),
+            serde_json::json!(self.close_exited_panes),
+        );
+        object.insert(
+            "restoreLaunchFlags".into(),
+            serde_json::json!(self.restore_launch_flags),
+        );
         object.insert("sidebarWidth".into(), serde_json::json!(self.sidebar_width));
         if let Some(socket) = &self.socket {
             object.insert("socket".into(), serde_json::json!(socket));
@@ -451,6 +475,8 @@ mod tests {
         assert_eq!(config.font_size, DEFAULT_FONT_SIZE);
         assert_eq!(config.font_scale, 0.0);
         assert!(!config.compact_sidebar);
+        assert!(config.close_exited_panes);
+        assert!(config.restore_launch_flags);
     }
 
     #[test]
@@ -562,6 +588,35 @@ mod tests {
         assert_eq!(saved["futureKey"]["a"], 1);
         assert_eq!(saved["shortcuts"]["newTab"], "ctrl+alt+t");
         assert!(saved["shortcuts"]["splitRight"].is_string());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn given_close_exited_panes_false_when_parsed_then_it_is_kept() {
+        let config = Config::parse(r#"{"closeExitedPanes": false}"#).unwrap();
+        assert!(!config.close_exited_panes);
+        let saved_path = temp_path("close-exited");
+        config.save_to(&saved_path).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&saved_path).unwrap()).unwrap();
+        assert_eq!(saved["closeExitedPanes"], false);
+        assert!(
+            !Config::parse(&std::fs::read_to_string(&saved_path).unwrap())
+                .unwrap()
+                .close_exited_panes
+        );
+        let _ = std::fs::remove_file(&saved_path);
+    }
+
+    #[test]
+    fn given_restore_launch_flags_false_when_parsed_then_it_is_kept() {
+        let config = Config::parse(r#"{"restoreLaunchFlags": false}"#).unwrap();
+        assert!(!config.restore_launch_flags);
+        let path = temp_path("launch-flags");
+        config.save_to(&path).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved["restoreLaunchFlags"], false);
         let _ = std::fs::remove_file(&path);
     }
 

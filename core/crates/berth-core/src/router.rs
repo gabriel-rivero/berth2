@@ -511,7 +511,7 @@ fn handle(
             let mut agent =
                 state.update_agent(&p.agent_id, p.state, p.detail, progress, p.meta, ops)?;
             if let Some(session_ref) = p.session_ref {
-                agent = state.set_agent_session_ref(&p.agent_id, &session_ref)?;
+                agent = state.set_agent_session_ref(&p.agent_id, &session_ref, ops)?;
             }
             Ok(json!({"agent": agent}))
         }
@@ -565,7 +565,8 @@ fn handle(
                     let provider = providers::by_id(&agent.provider);
                     let argv = match provider {
                         Some(p) if r.session_ref.is_some() && !p.resume.is_empty() => {
-                            providers::resume_argv(p, r.session_ref.as_deref(), &[])
+                            let extras = providers::launch_args(p, &r.argv);
+                            providers::resume_argv(p, r.session_ref.as_deref(), &extras)
                         }
                         _ => r.argv.clone(),
                     };

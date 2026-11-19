@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.11.3
+
+### Changes
+
+- A resumed agent keeps the flags it was launched with. The provider template
+  used to replace the whole command, so
+  `claude --allow-dangerously-skip-permissions` came back without it; the saved
+  launch argv is now captured for passive agents too and replayed on resume.
+  `restoreLaunchFlags` in `config.json`, or the Settings row, turns it off
+  (default on).
+- A pane whose process exits now closes by default, so `Ctrl+D` in a shell
+  removes its tab and the layout reflows instead of leaving a "process exited"
+  banner. If it was the last pane in the last workspace, a fresh workspace
+  opens. `closeExitedPanes` in `config.json`, or the Settings row, keeps the
+  final screen for inspection when set to `false`.
+
 ## 0.11.2
 
 ### Fixes

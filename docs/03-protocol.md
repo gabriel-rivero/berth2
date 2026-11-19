@@ -157,7 +157,9 @@ without a ref the saved argv is executed verbatim. A failed resume keeps the
 surface in the tree and marks the agent `errored` with detail `resume failed`.
 `agent.update` accepts `session_ref` to fill that ref once a hook observes the
 provider's session id, without re-registering or losing the saved argv, and
-builds the payload when the agent had none.
+fills the payload when the agent had none. A shell that saved no command
+captures the live foreground argv at that moment, so launch flags such as
+`--allow-dangerously-skip-permissions` survive a restore.
 
 ### notification
 | method | params | result |

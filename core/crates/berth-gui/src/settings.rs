@@ -15,6 +15,8 @@ pub enum Field {
     FontSize,
     FontScale,
     CompactSidebar,
+    CloseExitedPanes,
+    RestoreLaunchFlags,
     SocketMode,
     Shortcut(Action),
 }
@@ -57,6 +59,26 @@ pub fn rows(config: &Config, recording: Option<Action>) -> Vec<Row> {
             field: Field::CompactSidebar,
             label: "Compact sidebar".into(),
             value: if config.compact_sidebar { "on" } else { "off" }.to_string(),
+        },
+        Row {
+            field: Field::CloseExitedPanes,
+            label: "Close exited panes".into(),
+            value: if config.close_exited_panes {
+                "on"
+            } else {
+                "off"
+            }
+            .to_string(),
+        },
+        Row {
+            field: Field::RestoreLaunchFlags,
+            label: "Restore launch flags".into(),
+            value: if config.restore_launch_flags {
+                "on"
+            } else {
+                "off"
+            }
+            .to_string(),
         },
         Row {
             field: Field::SocketMode,
@@ -124,17 +146,29 @@ pub fn adjust(config: &mut Config, field: Field, delta: i32) -> Change {
             config.socket = SOCKET_MODES[next].map(str::to_string);
             Change::View
         }
-        Field::CompactSidebar | Field::Shortcut(_) => Change::None,
+        Field::CompactSidebar
+        | Field::CloseExitedPanes
+        | Field::RestoreLaunchFlags
+        | Field::Shortcut(_) => Change::None,
     }
 }
 
 /// Flip a boolean row.
 pub fn toggle(config: &mut Config, field: Field) -> Change {
-    if field == Field::CompactSidebar {
-        config.compact_sidebar = !config.compact_sidebar;
-        Change::View
-    } else {
-        Change::None
+    match field {
+        Field::CompactSidebar => {
+            config.compact_sidebar = !config.compact_sidebar;
+            Change::View
+        }
+        Field::CloseExitedPanes => {
+            config.close_exited_panes = !config.close_exited_panes;
+            Change::View
+        }
+        Field::RestoreLaunchFlags => {
+            config.restore_launch_flags = !config.restore_launch_flags;
+            Change::View
+        }
+        _ => Change::None,
     }
 }
 
@@ -159,7 +193,7 @@ mod tests {
     fn given_the_settings_rows_when_built_then_every_action_has_a_row() {
         let config = Config::default();
         let rows = rows(&config, None);
-        assert_eq!(rows.len(), 4 + Action::ALL.len());
+        assert_eq!(rows.len(), 6 + Action::ALL.len());
         assert_eq!(rows[0].label, "Font size");
     }
 
@@ -219,6 +253,22 @@ mod tests {
         assert_eq!(toggle(&mut config, Field::CompactSidebar), Change::View);
         assert!(config.compact_sidebar);
         assert_eq!(toggle(&mut config, Field::FontSize), Change::None);
+    }
+
+    #[test]
+    fn given_close_exited_panes_when_toggled_then_it_flips() {
+        let mut config = Config::default();
+        assert_eq!(toggle(&mut config, Field::CloseExitedPanes), Change::View);
+        assert!(!config.close_exited_panes);
+        assert_eq!(toggle(&mut config, Field::CloseExitedPanes), Change::View);
+        assert!(config.close_exited_panes);
+    }
+
+    #[test]
+    fn given_restore_launch_flags_when_toggled_then_it_flips() {
+        let mut config = Config::default();
+        assert_eq!(toggle(&mut config, Field::RestoreLaunchFlags), Change::View);
+        assert!(!config.restore_launch_flags);
     }
 
     #[test]
