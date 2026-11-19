@@ -15,6 +15,10 @@ pub fn encode(key: &str, mods: &[String]) -> Vec<u8> {
 
     let mut out = if shift && lower == "tab" {
         b"\x1b[Z".to_vec()
+    } else if shift && (lower == "enter" || lower == "return") {
+        // Shift+Enter is ESC CR, the sequence Claude Code's own terminal setup
+        // binds for a newline in the prompt.
+        b"\x1b\r".to_vec()
     } else if let Some(sequence) = named(&lower) {
         sequence.to_vec()
     } else {
@@ -122,6 +126,13 @@ mod tests {
         assert_eq!(encode("b", &mods(&["alt"])), b"\x1bb");
         assert_eq!(encode("a", &mods(&["shift"])), b"A");
         assert_eq!(encode("tab", &mods(&["shift"])), b"\x1b[Z");
+    }
+
+    #[test]
+    fn shift_enter_is_escape_cr_for_a_prompt_newline() {
+        assert_eq!(encode("enter", &mods(&["shift"])), b"\x1b\r");
+        assert_eq!(encode("Return", &mods(&["Shift"])), b"\x1b\r");
+        assert_eq!(encode("enter", &[]), b"\r");
     }
 
     #[test]

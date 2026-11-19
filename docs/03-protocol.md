@@ -140,20 +140,24 @@ and the core mints one.
 `agent.detect` is the passive tier: it inspects the surface's foreground
 process (`HostOps.pid_info`) and creates an `unknown` agent when the
 command/argv matches a provider. It is idempotent and returns `null` when the
-surface already has an agent or no provider is recognized. Passive agents have
-no resume payload; only `berth run` or an explicit `agent.register` can supply
-one.
+surface already has an agent or no provider is recognized. A passive agent has
+no launch payload of its own; the first `session_ref` an agent hook reports
+builds one from the surface's cwd. `berth hook claude` and `berth agent-set`
+also send the hook's `PATH`, so a provider installed outside the app's own path
+still resolves after restore. `berth run` and an explicit `agent.register`
+supply a payload up front.
 
 Resume payloads are `{argv, cwd, session_ref?, env?}`. `env` carries the
 launch environment (notably `PATH`) because Ghostty runs commands through a
 login shell with a minimal environment; without it a resumed `claude` can miss
 its interpreter. On restore, a provider session ref uses the provider template
-(`claude --resume <ref>`, `codex resume <ref>`, `opencode --session <ref>`);
+(`claude --resume <ref>`, `codex resume <ref>`, `opencode --session <ref>`,
+`copilot --resume <ref>`);
 without a ref the saved argv is executed verbatim. A failed resume keeps the
 surface in the tree and marks the agent `errored` with detail `resume failed`.
 `agent.update` accepts `session_ref` to fill that ref once a hook observes the
-provider's session id, without re-registering or losing the saved argv.
-rather than silently starting a bare shell.
+provider's session id, without re-registering or losing the saved argv, and
+builds the payload when the agent had none.
 
 ### notification
 | method | params | result |
@@ -207,7 +211,7 @@ Events are derived from Ghostty actions where possible: `SET_TITLE`, `PWD`, `PRO
   "id": "agt_44de",
   "surface_id": "srf_91c2",
   "workspace_id": "ws_7f3a",
-  "provider": "claude-code",          // claude-code | codex | opencode | custom
+  "provider": "claude-code",          // claude-code | codex | opencode | copilot | custom
   "name": "fix-auth-refresh",         // human label; defaults to provider + short id
   "state": "waiting_input",           // see lifecycle
   "detail": "permission: allow edit src/auth.ts",  // one line, ≤120 chars

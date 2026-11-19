@@ -1347,6 +1347,39 @@ mod tests {
     }
 
     #[test]
+    fn a_detected_agent_gets_a_resume_payload_from_its_first_session_ref() {
+        let mut st = AppState::default();
+        call(
+            &mut st,
+            "workspace.create",
+            json!({"name":"main","cwd":"/work/project"}),
+        );
+        let sid = call(&mut st, "surface.list", json!({}))["surfaces"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        // Passive detection registers the provider without a launch payload.
+        let aid = call(
+            &mut st,
+            "agent.register",
+            json!({"surface_id": sid, "provider": "claude-code"}),
+        )["agent"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(call(&mut st, "agent.get", json!({"agent_id": aid}))["agent"]["resume"].is_null());
+
+        let updated = call(
+            &mut st,
+            "agent.update",
+            json!({"agent_id": aid, "session_ref": "sess-9"}),
+        );
+        assert_eq!(updated["agent"]["resume"]["session_ref"], "sess-9");
+        assert_eq!(updated["agent"]["resume"]["cwd"], "/work/project");
+        assert_eq!(updated["agent"]["resume"]["argv"], json!([]));
+    }
+
+    #[test]
     fn attention_creates_exactly_one_notification() {
         let mut st = AppState::default();
         call(&mut st, "workspace.create", json!({}));

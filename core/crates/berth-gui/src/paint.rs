@@ -4,9 +4,9 @@
 //! Alpha blending is done per pixel, so glyph edges and the selection tint look
 //! the same on every platform.
 
-use berth_headless::ScreenView;
+use berth_headless::{CellView, ScreenView};
 
-use crate::font::{Bitmap, FontRenderer, TextStyle};
+use crate::font::{Bitmap, CellSize, FontRenderer, Raster, TextStyle};
 use crate::layout::Rect;
 use crate::theme::Theme;
 use crate::ui::{PaneView, RowKind, Selection, SidebarRow, WorkspaceView};
@@ -109,6 +109,52 @@ impl<'a> Painter<'a> {
         };
         let x0 = origin.0 as i32 + raster.left;
         let y0 = origin.1 as i32 + raster.top;
+        self.blit(&raster, x0, y0, color);
+        cell.width
+    }
+
+    /// Draw a shaped run of cells at `origin`, `width` pixels wide.
+    fn glyph_run(
+        &mut self,
+        font: &mut FontRenderer,
+        origin: (usize, usize),
+        text: &str,
+        width: usize,
+        style: TextStyle,
+        color: u32,
+    ) {
+        let Some(raster) = font.raster_run(text, width, style) else {
+            return;
+        };
+        let x0 = origin.0 as i32 + raster.left;
+        let y0 = origin.1 as i32 + raster.top;
+        self.blit(&raster, x0, y0, color);
+    }
+
+    /// Fill a Unicode block element with the cell's foreground. Returns false
+    /// when the character is not a block element.
+    fn block_glyph(
+        &mut self,
+        origin: (usize, usize),
+        cell: CellSize,
+        ch: char,
+        color: u32,
+    ) -> bool {
+        let Some(coverage) = block_coverage(ch) else {
+            return false;
+        };
+        for &(x0, y0, x1, y1) in coverage {
+            let left = origin.0 + cell.width * x0 as usize / 8;
+            let top = origin.1 + cell.height * y0 as usize / 8;
+            let right = origin.0 + cell.width * x1 as usize / 8;
+            let bottom = origin.1 + cell.height * y1 as usize / 8;
+            self.fill(Rect::new(left, top, right - left, bottom - top), color);
+        }
+        true
+    }
+
+    /// Blend one shaped raster with its top-left at (`x0`, `y0`).
+    fn blit(&mut self, raster: &Raster, x0: i32, y0: i32, color: u32) {
         match &raster.bitmap {
             Bitmap::Mask(alpha) => {
                 let r = ((color >> 16) & 0xff) as u8;
@@ -154,7 +200,6 @@ impl<'a> Painter<'a> {
                 }
             }
         }
-        cell.width
     }
 
     /// Draw a single line of text, clipped to `max_width` pixels. Returns the
@@ -222,6 +267,8 @@ impl<'a> Painter<'a> {
         let rows = usize::from(view.rows).min(area.h / cell.height.max(1));
         let cursor_visible = options.cursor_visible && !view.cursor_hidden && view.scrollback == 0;
         for row in 0..rows {
+            let base = row * usize::from(view.cols);
+            let runs = rtl_runs(&view.cells, base, cols);
             for col in 0..cols {
                 let index = row * usize::from(view.cols) + col;
                 let Some(cell_view) = view.cells.get(index) else {
@@ -262,7 +309,12 @@ impl<'a> Painter<'a> {
                     bold: cell_view.bold,
                     italic: cell_view.italic,
                 };
-                if !text.is_empty() && text != " " {
+                let in_run = runs.iter().any(|run| col >= run.start && col < run.end);
+                let mut painted = false;
+                if !in_run && let Some(ch) = single_char(text) {
+                    painted = self.block_glyph(origin, cell, ch, fg);
+                }
+                if !in_run && !painted && !text.is_empty() && text != " " {
                     self.glyph(font, origin, text, style, fg);
                 }
                 if cell_view.underline {
@@ -278,6 +330,32 @@ impl<'a> Painter<'a> {
                     let next = Rect::new(origin.0 + cell.width, origin.1, cell.width, cell.height);
                     self.fill(next, bg);
                 }
+            }
+            for run in &runs {
+                let first = &view.cells[base + run.start];
+                let origin = (area.x + run.start * cell.width, area.y + row * cell.height);
+                let mut fg = first.fg.map(rgb).unwrap_or(options.theme.terminal_fg);
+                if first.dim {
+                    fg = options.theme.inactive(fg);
+                }
+                if first.inverse {
+                    fg = first.bg.map(rgb).unwrap_or(options.theme.terminal_bg);
+                }
+                if !options.focused {
+                    fg = options.theme.inactive(fg);
+                }
+                let style = TextStyle {
+                    bold: first.bold,
+                    italic: first.italic,
+                };
+                self.glyph_run(
+                    font,
+                    origin,
+                    &run.text,
+                    (run.end - run.start) * cell.width,
+                    style,
+                    fg,
+                );
             }
         }
         if view.scrollback > 0 && view.scrollback_len > 0 {
@@ -625,12 +703,242 @@ fn rgb(color: [u8; 3]) -> u32 {
     (u32::from(color[0]) << 16) | (u32::from(color[1]) << 8) | u32::from(color[2])
 }
 
+fn single_char(text: &str) -> Option<char> {
+    let mut chars = text.chars();
+    let ch = chars.next()?;
+    chars.next().is_none().then_some(ch)
+}
+
+/// Sub-cell coverage of a Unicode block element, in eighths. Filling these
+/// rectangles tiles seamlessly, which a font glyph from a fallback face does
+/// not: pixel art such as a mascot needs every cell to be exactly covered.
+fn block_coverage(ch: char) -> Option<&'static [(u8, u8, u8, u8)]> {
+    Some(match ch {
+        '\u{2580}' => &[(0, 0, 8, 4)],
+        '\u{2581}' => &[(0, 7, 8, 8)],
+        '\u{2582}' => &[(0, 6, 8, 8)],
+        '\u{2583}' => &[(0, 5, 8, 8)],
+        '\u{2584}' => &[(0, 4, 8, 8)],
+        '\u{2585}' => &[(0, 3, 8, 8)],
+        '\u{2586}' => &[(0, 2, 8, 8)],
+        '\u{2587}' => &[(0, 1, 8, 8)],
+        '\u{2588}' => &[(0, 0, 8, 8)],
+        '\u{2589}' => &[(0, 0, 7, 8)],
+        '\u{258A}' => &[(0, 0, 6, 8)],
+        '\u{258B}' => &[(0, 0, 5, 8)],
+        '\u{258C}' => &[(0, 0, 4, 8)],
+        '\u{258D}' => &[(0, 0, 3, 8)],
+        '\u{258E}' => &[(0, 0, 2, 8)],
+        '\u{258F}' => &[(0, 0, 1, 8)],
+        '\u{2590}' => &[(4, 0, 8, 8)],
+        '\u{2594}' => &[(0, 0, 8, 1)],
+        '\u{2595}' => &[(7, 0, 8, 8)],
+        '\u{2596}' => &[(0, 4, 4, 8)],
+        '\u{2597}' => &[(4, 4, 8, 8)],
+        '\u{2598}' => &[(0, 0, 4, 4)],
+        '\u{2599}' => &[(0, 0, 4, 8), (4, 4, 8, 8)],
+        '\u{259A}' => &[(0, 0, 4, 4), (4, 4, 8, 8)],
+        '\u{259B}' => &[(0, 0, 4, 8), (4, 0, 8, 4)],
+        '\u{259C}' => &[(0, 0, 8, 4), (4, 4, 8, 8)],
+        '\u{259D}' => &[(4, 0, 8, 4)],
+        '\u{259E}' => &[(4, 0, 8, 4), (0, 4, 4, 8)],
+        '\u{259F}' => &[(0, 4, 8, 8), (4, 0, 8, 4)],
+        _ => return None,
+    })
+}
+
+/// One right-to-left phrase on a row, shaped and drawn as a single string.
+#[derive(Debug, PartialEq, Eq)]
+struct RtlRun {
+    start: usize,
+    end: usize,
+    text: String,
+}
+
+/// Group a row into right-to-left runs.
+///
+/// A run starts at an RTL letter and carries the spaces between RTL words and
+/// punctuation glued to the preceding letter. Table padding ends it, so the
+/// phrase stays right-aligned inside its own field instead of the whole row.
+fn rtl_runs(cells: &[CellView], base: usize, cols: usize) -> Vec<RtlRun> {
+    let row = &cells[base.min(cells.len())..(base + cols).min(cells.len())];
+    let mut runs = Vec::new();
+    let mut i = 0;
+    while i < row.len() {
+        let first = &row[i];
+        if first.wide || first.wide_continuation || !starts_rtl(first) {
+            i += 1;
+            continue;
+        }
+        let mut text = String::new();
+        let mut glued = false;
+        let mut j = i;
+        while j < row.len() {
+            let cell = &row[j];
+            if cell.wide
+                || cell.wide_continuation
+                || cell.bold != first.bold
+                || cell.italic != first.italic
+                || cell.dim != first.dim
+                || cell.inverse != first.inverse
+                || cell.fg != first.fg
+            {
+                break;
+            }
+            let content = cell.contents.as_str();
+            let Some(ch) = content.chars().next() else {
+                break;
+            };
+            if is_rtl_char(ch) {
+                text.push_str(content);
+                glued = true;
+                j += 1;
+                continue;
+            }
+            if content == " " {
+                let mut k = j;
+                while k < row.len() && row[k].contents == " " {
+                    k += 1;
+                }
+                if k < row.len() && starts_rtl(&row[k]) {
+                    text.push_str(&" ".repeat(k - j));
+                    j = k;
+                    continue;
+                }
+                break;
+            }
+            if glued && !ch.is_alphanumeric() {
+                // Punctuation attached to the previous letter travels with it.
+                text.push_str(content);
+                glued = false;
+                j += 1;
+                continue;
+            }
+            break;
+        }
+        if j > i {
+            runs.push(RtlRun {
+                start: i,
+                end: j,
+                text,
+            });
+        }
+        i = j.max(i + 1);
+    }
+    runs
+}
+
+fn starts_rtl(cell: &CellView) -> bool {
+    cell.contents.chars().next().is_some_and(is_rtl_char)
+}
+
+/// RTL script blocks: Hebrew, Arabic and its supplements, Syriac, Thaana, NKo,
+/// Samaritan, Mandaic, the presentation forms, and the supplementary planes.
+fn is_rtl_char(ch: char) -> bool {
+    matches!(
+        u32::from(ch),
+        0x0590..=0x05FF
+            | 0x0600..=0x06FF
+            | 0x0700..=0x074F
+            | 0x0750..=0x077F
+            | 0x0780..=0x07BF
+            | 0x07C0..=0x07FF
+            | 0x0800..=0x08FF
+            | 0xFB1D..=0xFB4F
+            | 0xFB50..=0xFDFF
+            | 0xFE70..=0xFEFF
+            | 0x10800..=0x10FFF
+            | 0x1E800..=0x1EFFF
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn painter<'a>(buffer: &'a mut [u32]) -> Painter<'a> {
         Painter::new(buffer, 10, 10)
+    }
+
+    fn row(texts: &[&str]) -> Vec<CellView> {
+        texts
+            .iter()
+            .map(|text| CellView {
+                contents: (*text).to_string(),
+                ..CellView::default()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn given_a_missing_quadrant_block_when_drawn_then_that_quadrant_stays_empty() {
+        let mut buffer = vec![0u32; 100];
+        let mut painter = painter(&mut buffer);
+        let cell = CellSize {
+            width: 10,
+            height: 10,
+        };
+        assert!(painter.block_glyph((0, 0), cell, '▛', 0x00ff_ffff));
+        assert_eq!(buffer[0], 0x00ff_ffff);
+        assert_eq!(buffer[2 * 10 + 7], 0x00ff_ffff);
+        assert_eq!(buffer[7 * 10 + 2], 0x00ff_ffff);
+        assert_eq!(buffer[7 * 10 + 7], 0, "the lower right quadrant is empty");
+    }
+
+    #[test]
+    fn given_a_non_block_character_then_the_block_painter_declines() {
+        let mut buffer = vec![0u32; 100];
+        let mut painter = painter(&mut buffer);
+        let cell = CellSize {
+            width: 10,
+            height: 10,
+        };
+        assert!(!painter.block_glyph((0, 0), cell, 'a', 0x00ff_ffff));
+        assert!(painter.block_glyph((0, 0), cell, '▁', 0x00ff_ffff));
+    }
+
+    #[test]
+    fn given_an_arabic_phrase_then_spaces_and_a_trailing_period_join_one_run() {
+        let cells = row(&[
+            "ا", "ل", "ت", "ب", "غ", " ", "ض", "ا", "ر", " ", "ب", "ا", "ل", "ص", "ح", "ة", ".",
+            " ", " ", "x",
+        ]);
+        let runs = rtl_runs(&cells, 0, cells.len());
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].start, 0);
+        assert_eq!(runs[0].end, 17);
+        assert_eq!(runs[0].text, "التبغ ضار بالصحة.");
+    }
+
+    #[test]
+    fn given_a_latin_row_then_no_rtl_run_is_grouped() {
+        let cells = row(&["a", "r", "_", "S", "A", " ", "x"]);
+        assert!(rtl_runs(&cells, 0, cells.len()).is_empty());
+    }
+
+    #[test]
+    fn given_arabic_followed_by_table_padding_then_the_padding_stays_out() {
+        let cells = row(&["ا", "ب", " ", " ", " ", "│"]);
+        let runs = rtl_runs(&cells, 0, cells.len());
+        assert_eq!(runs.len(), 1);
+        assert_eq!((runs[0].start, runs[0].end), (0, 2));
+    }
+
+    #[test]
+    fn given_a_style_change_inside_the_phrase_then_the_run_splits_there() {
+        let mut cells = row(&["ا", "ب", "ج"]);
+        cells[1].bold = true;
+        cells[2].bold = true;
+        assert_eq!(rtl_runs(&cells, 0, cells.len()).len(), 2);
+    }
+
+    #[test]
+    fn given_a_row_offset_then_run_indices_are_relative_to_the_row() {
+        let mut cells = row(&["x", "ا", "ب"]);
+        cells.extend(row(&["c"]));
+        let runs = rtl_runs(&cells, 1, 2);
+        assert_eq!((runs[0].start, runs[0].end), (0, 2));
+        assert_eq!(runs[0].text, "اب");
     }
 
     #[test]

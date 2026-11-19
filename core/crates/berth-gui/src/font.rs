@@ -67,6 +67,8 @@ struct CacheKey {
     text: String,
     bold: bool,
     italic: bool,
+    /// Pixel width of a shaped text run; `None` for a single cell.
+    run_width: Option<usize>,
 }
 
 /// The glyph cache ceiling. Beyond this the cache is dropped; a terminal screen
@@ -218,6 +220,7 @@ impl FontRenderer {
             text: text.to_string(),
             bold: style.bold,
             italic: style.italic,
+            run_width: None,
         };
         if let Some(hit) = self.cache.get(&key) {
             return hit.clone();
@@ -226,6 +229,35 @@ impl FontRenderer {
             self.cache.clear();
         }
         let raster = self.render_cell(text, style).map(Arc::new);
+        self.cache.insert(key, raster.clone());
+        raster
+    }
+
+    /// Shaped bitmap for a run of cells, drawn as one string.
+    ///
+    /// A cell cannot be shaped alone when the text is right to left: Arabic
+    /// joins across cell boundaries and the shaped line sits at the run's
+    /// right edge, not at each cell's origin.
+    pub fn raster_run(
+        &mut self,
+        text: &str,
+        width: usize,
+        style: TextStyle,
+    ) -> Option<Arc<Raster>> {
+        let width = width.max(1);
+        let key = CacheKey {
+            text: text.to_string(),
+            bold: style.bold,
+            italic: style.italic,
+            run_width: Some(width),
+        };
+        if let Some(hit) = self.cache.get(&key) {
+            return hit.clone();
+        }
+        if self.cache.len() >= CACHE_LIMIT {
+            self.cache.clear();
+        }
+        let raster = self.render_run(text, width, style).map(Arc::new);
         self.cache.insert(key, raster.clone());
         raster
     }
@@ -370,6 +402,93 @@ impl FontRenderer {
         raster.top -= margin_y;
         Some(raster)
     }
+
+    fn render_run(&mut self, text: &str, width: usize, style: TextStyle) -> Option<Raster> {
+        let families = self.families.clone();
+        for family in &families {
+            let attrs = attrs_for(family.as_family(), style);
+            if let Some(raster) = self.shape_run(text, width, &attrs) {
+                return Some(raster);
+            }
+        }
+        None
+    }
+
+    /// Shape a whole run into a box exactly `width` pixels wide. Unlike a cell,
+    /// the box keeps its alignment: a right-to-left run is anchored to its
+    /// right edge, which is where the first printed cell belongs.
+    fn shape_run(&mut self, text: &str, width: usize, attrs: &Attrs<'_>) -> Option<Raster> {
+        let line_height = self.metrics.line_height;
+        let margin_y = (self.cell.height / 2) as i32;
+        let height = self.cell.height + (margin_y * 2) as usize;
+        self.buffer
+            .set_size(Some(width as f32), Some(line_height * 2.0));
+        self.buffer.set_text(text, attrs, Shaping::Advanced, None);
+        self.buffer.shape_until_scroll(&mut self.font_system, false);
+
+        let mut mask = vec![0u8; width * height];
+        let mut color: Option<Vec<u8>> = None;
+        let mut touched = false;
+
+        let run = self.buffer.layout_runs().next()?;
+        for glyph in run.glyphs {
+            let physical = glyph.physical((0.0, run.line_y), 1.0);
+            let Some(image) = self
+                .swash
+                .get_image(&mut self.font_system, physical.cache_key)
+            else {
+                continue;
+            };
+            if image.placement.width == 0 || image.placement.height == 0 {
+                continue;
+            }
+            let origin_x = physical.x + image.placement.left;
+            let origin_y = physical.y - image.placement.top + margin_y;
+            let is_color = matches!(image.content, SwashContent::Color);
+            if is_color && color.is_none() {
+                let mut pixels = vec![0u8; width * height * 4];
+                for (index, alpha) in mask.iter().enumerate() {
+                    pixels[index * 4 + 3] = *alpha;
+                }
+                color = Some(pixels);
+            }
+            let stride = image.placement.width as usize;
+            for row in 0..image.placement.height as i32 {
+                for col in 0..stride as i32 {
+                    let x = origin_x + col;
+                    let y = origin_y + row;
+                    if x < 0 || y < 0 || x >= width as i32 || y >= height as i32 {
+                        continue;
+                    }
+                    let index = (y as usize) * width + x as usize;
+                    let source = (row as usize) * stride + col as usize;
+                    if is_color {
+                        let rgba = color.as_mut().expect("colour buffer");
+                        rgba[index * 4] = image.data[source * 4];
+                        rgba[index * 4 + 1] = image.data[source * 4 + 1];
+                        rgba[index * 4 + 2] = image.data[source * 4 + 2];
+                        rgba[index * 4 + 3] = image.data[source * 4 + 3];
+                    } else {
+                        mask[index] = mask[index].max(image.data[source]);
+                    }
+                    touched = true;
+                }
+            }
+        }
+        if !touched {
+            return None;
+        }
+        Some(Raster {
+            width,
+            height,
+            left: 0,
+            top: -margin_y,
+            bitmap: match color {
+                Some(rgba) => Bitmap::Color(rgba),
+                None => Bitmap::Mask(mask),
+            },
+        })
+    }
 }
 
 /// Cut a cell bitmap down to the painted box.
@@ -423,6 +542,21 @@ mod tests {
 
     fn renderer() -> FontRenderer {
         FontRenderer::new(16.0, &[])
+    }
+
+    #[test]
+    fn given_an_arabic_phrase_when_shaped_as_a_run_then_it_has_ink_at_the_run_width() {
+        let mut font = renderer();
+        let raster = font
+            .raster_run("التبغ ضار بالصحة.", 200, TextStyle::NORMAL)
+            .expect("a system Arabic face should shape the run");
+        assert_eq!(raster.width, 200);
+        assert!(raster.height >= font.cell().height);
+        let ink: u32 = match &raster.bitmap {
+            Bitmap::Mask(mask) => mask.iter().map(|&a| u32::from(a)).sum(),
+            Bitmap::Color(rgba) => rgba.iter().skip(3).step_by(4).map(|&a| u32::from(a)).sum(),
+        };
+        assert!(ink > 0, "the run raster is blank");
     }
 
     /// Advance of a shaped string, so a face that silently fell back to a

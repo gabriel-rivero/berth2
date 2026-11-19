@@ -275,6 +275,53 @@ fn claude_hook_state<'a>(event: &str, detail: &'a str) -> Option<(&'static str, 
     }
 }
 
+/// Build a resume payload for an agent started outside the wrapper. The hook
+/// runs in the user's shell, so its PATH is the one a restored agent needs.
+/// There is no saved command: restore derives it from the provider and the ref.
+fn resume_payload(session_ref: &str, cwd: &str, path: Option<&str>) -> Value {
+    let mut env = Vec::new();
+    if let Some(path) = path.filter(|path| !path.is_empty()) {
+        env.push(json!(["PATH", path]));
+    }
+    json!({"argv": [], "cwd": cwd, "session_ref": session_ref, "env": env})
+}
+
+/// Give a passively detected agent a resume payload before its session id is
+/// recorded, so the next launch can rebuild the provider command.
+fn ensure_resume_payload(
+    c: &mut Client,
+    agent_id: &str,
+    session_ref: &str,
+    cwd: Option<&str>,
+) -> Result<(), String> {
+    let agent = c.call("agent.get", json!({"agent_id": agent_id}))?;
+    let agent = &agent["agent"];
+    if !agent["resume"].is_null() {
+        return Ok(());
+    }
+    let surface_id = agent["surface_id"]
+        .as_str()
+        .ok_or("agent has no surface")?
+        .to_string();
+    let cwd = cwd
+        .map(str::to_string)
+        .or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .map(|path| path.display().to_string())
+        })
+        .unwrap_or_default();
+    let path = std::env::var("PATH").ok();
+    c.call(
+        "agent.register",
+        json!({
+            "surface_id": surface_id,
+            "resume": resume_payload(session_ref, &cwd, path.as_deref()),
+        }),
+    )?;
+    Ok(())
+}
+
 fn run_claude_hook(c: &mut Client) -> Result<(), String> {
     let mut input = String::new();
     std::io::stdin()
@@ -294,6 +341,7 @@ fn run_claude_hook(c: &mut Client) -> Result<(), String> {
     if event == "SessionStart"
         && let Some(session) = payload["session_id"].as_str()
     {
+        ensure_resume_payload(c, &agent_id, session, payload["cwd"].as_str())?;
         params["session_ref"] = json!(session);
     }
     // A hook can arrive out of order (for example PreToolUse before the prompt
@@ -783,6 +831,7 @@ fn run() -> Result<(), String> {
                 params["progress"] = json!(f);
             }
             if let Some(r) = arg_after(rest, "--session-ref") {
+                ensure_resume_payload(&mut c, &aid, &r, None)?;
                 params["session_ref"] = json!(r);
             }
             if rest.iter().any(|a| a == "--clear-progress") {
@@ -968,6 +1017,28 @@ mod tests {
             Some(("waiting_input", "Claude is waiting for your input"))
         );
         assert_eq!(claude_hook_state("UnknownEvent", ""), None);
+    }
+
+    #[test]
+    fn a_hook_resume_payload_carries_the_ref_and_the_shell_path() {
+        let payload = resume_payload(
+            "sess-9",
+            "/work/project",
+            Some("/opt/homebrew/bin:/Users/me/.local/bin:/usr/bin"),
+        );
+        assert_eq!(payload["argv"], json!([]));
+        assert_eq!(payload["cwd"], "/work/project");
+        assert_eq!(payload["session_ref"], "sess-9");
+        assert_eq!(
+            payload["env"],
+            json!([["PATH", "/opt/homebrew/bin:/Users/me/.local/bin:/usr/bin"]])
+        );
+    }
+
+    #[test]
+    fn a_hook_resume_payload_without_a_path_has_an_empty_env() {
+        let payload = resume_payload("sess-9", "/tmp", None);
+        assert_eq!(payload["env"], json!([]));
     }
 
     #[test]

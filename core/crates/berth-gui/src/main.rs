@@ -1514,6 +1514,15 @@ impl Gui {
         if !mouse::should_report(target.mode, !released) {
             return false;
         }
+        // A program that tracks the mouse consumes the press, so focus has to
+        // move here or the pane never becomes the keyboard target.
+        if needs_focus_before_report(
+            released,
+            self.active_surface().as_deref(),
+            &target.surface_id,
+        ) {
+            self.activate(&target.surface_id);
+        }
         self.send_mouse(
             &target,
             mouse::Report {
@@ -3028,8 +3037,16 @@ impl Gui {
             return;
         };
         let mods = self.modifier_names();
-        // Cmd/Super belongs to the platform shell; don't leak it into the PTY.
+        // Cmd/Super belongs to the platform shell; the window only claims the
+        // line motions macOS terminals provide.
         if self.modifiers.super_key() {
+            if !self.modifiers.control_key()
+                && !self.modifiers.alt_key()
+                && !self.modifiers.shift_key()
+                && let Some(name) = super_arrow_key(&event.logical_key)
+            {
+                let _ = self.host.send_key(&surface_id, name, &[]);
+            }
             return;
         }
 
@@ -3141,6 +3158,21 @@ fn confirm_lines(text: &str) -> Vec<String> {
     lines
 }
 
+/// A press in a pane the program will consume still has to move focus.
+fn needs_focus_before_report(released: bool, active: Option<&str>, target: &str) -> bool {
+    !released && active != Some(target)
+}
+
+/// The named key a Super+arrow maps to, like Terminal and iTerm2: beginning and
+/// end of the prompt line.
+fn super_arrow_key(key: &Key) -> Option<&'static str> {
+    match key {
+        Key::Named(NamedKey::ArrowLeft) => Some("home"),
+        Key::Named(NamedKey::ArrowRight) => Some("end"),
+        _ => None,
+    }
+}
+
 fn mouse_button(button: MouseButton) -> Option<mouse::Button> {
     Some(match button {
         MouseButton::Left => mouse::Button::Left,
@@ -3187,6 +3219,53 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(test)]
+mod press_tests {
+    use super::{needs_focus_before_report, super_arrow_key};
+    use winit::keyboard::{Key, NamedKey};
+
+    #[test]
+    fn given_a_press_in_another_pane_when_it_tracks_the_mouse_then_focus_moves_first() {
+        assert!(needs_focus_before_report(
+            false,
+            Some("srf-right"),
+            "srf-left"
+        ));
+    }
+
+    #[test]
+    fn given_a_press_in_the_focused_pane_then_focus_is_left_alone() {
+        assert!(!needs_focus_before_report(
+            false,
+            Some("srf-left"),
+            "srf-left"
+        ));
+    }
+
+    #[test]
+    fn given_super_with_the_horizontal_arrows_then_it_is_a_line_motion() {
+        assert_eq!(
+            super_arrow_key(&Key::Named(NamedKey::ArrowLeft)),
+            Some("home")
+        );
+        assert_eq!(
+            super_arrow_key(&Key::Named(NamedKey::ArrowRight)),
+            Some("end")
+        );
+        assert_eq!(super_arrow_key(&Key::Named(NamedKey::ArrowUp)), None);
+        assert_eq!(super_arrow_key(&Key::Character("a".into())), None);
+    }
+
+    #[test]
+    fn given_a_release_then_focus_is_not_moved_again() {
+        assert!(!needs_focus_before_report(
+            true,
+            Some("srf-right"),
+            "srf-left"
+        ));
+    }
 }
 
 #[cfg(test)]

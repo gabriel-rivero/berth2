@@ -37,6 +37,13 @@ pub const PROVIDERS: &[Provider] = &[
         resumable: true,
     },
     Provider {
+        id: "copilot",
+        display: "GitHub Copilot",
+        aliases: &["copilot", "copilot-cli"],
+        resume: &["copilot", "--resume", "{ref}"],
+        resumable: true,
+    },
+    Provider {
         id: "custom",
         display: "Custom",
         aliases: &[],
@@ -129,6 +136,7 @@ mod tests {
     fn detects_suffixed_builds() {
         assert_eq!(detect(Some("claude-teams"), &[]).unwrap().id, "claude-code");
         assert_eq!(detect(Some("opencode"), &[]).unwrap().id, "opencode");
+        assert_eq!(detect(Some("copilot"), &[]).unwrap().id, "copilot");
     }
 
     #[test]
@@ -143,6 +151,11 @@ mod tests {
         let p = by_id("claude-code").unwrap();
         let out = resume_argv(p, Some("8f1c"), &["--verbose".to_string()]);
         assert_eq!(out, vec!["claude", "--resume", "8f1c", "--verbose"]);
+        let c = by_id("copilot").unwrap();
+        assert_eq!(
+            resume_argv(c, Some("9a2b"), &[]),
+            vec!["copilot", "--resume", "9a2b"]
+        );
     }
 
     #[test]

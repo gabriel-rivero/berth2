@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.11.2
+
+### Fixes
+
+- Harnesses started by typing `claude` or `opencode` in a shell now resume after
+  a relaunch. Passive detection registered those agents without a resume
+  payload, so the `SessionStart` hook's session id failed with
+  `unsupported: agent … has no resume payload` and the hook command hid the
+  error. The first reported session id now builds a resume payload from the
+  surface's cwd, and the hook adds its own `PATH`, because an app launched from
+  Finder cannot resolve a provider installed under the user's shell path. Agents
+  that still have no resume come back `unknown · not resumed` with no attention
+  instead of carrying stale state onto a plain shell.
+- Clicking a pane whose program tracks the mouse (Claude Code, opencode, vim)
+  now moves keyboard focus to that pane. The press was sent to the program and
+  the handler returned before `surface.activate`, so copy and paste kept using
+  the previously focused pane.
+- `Shift+Enter` sends `ESC CR`, which Claude Code maps to a prompt newline, so a
+  partial prompt is no longer submitted when the text spans two lines.
+- Arabic, Hebrew and other right-to-left phrases render. A cell was shaped on
+  its own, and a right-to-left glyph is placed at the right edge of the shaping
+  buffer, so the ink landed outside the cell and the text appeared blank. Whole
+  runs are now shaped once and drawn at their own width.
+- The opencode plugin's session id now builds a resume payload like the Claude
+  hook does, and `copilot` is a known provider (`copilot --resume <ref>`), so it
+  is detected and resumes once a session id is recorded.
+- `Cmd+Left` and `Cmd+Right` move the prompt caret to the beginning and end of
+  the line by sending Home/End. The window used to drop every Super chord that
+  was not a configured shortcut.
+- Block elements are painted as sub-cell rectangles instead of font glyphs. The
+  fallback face drew `█` 11x16 inside a 10x22 cell, so Claude Code's pixel-art
+  mascot came out as disconnected bars; it now tiles exactly.
+
 ## 0.11.1
 
 ### Fixes

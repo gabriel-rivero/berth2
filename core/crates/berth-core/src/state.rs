@@ -899,9 +899,9 @@ impl AppState {
         Ok(snapshot)
     }
 
-    /// Record the provider session id discovered by an agent hook. The argv
-    /// and environment stay as the wrapper saved them; restore swaps in the
-    /// provider's resume template when a session ref is present.
+    /// Record the provider session id discovered by an agent hook. A passively
+    /// detected agent has no launch payload, so its first session id builds one
+    /// from the surface; a wrapper's argv and environment stay as saved.
     pub fn set_agent_session_ref(
         &mut self,
         agent_id: &str,
@@ -912,12 +912,19 @@ impl AppState {
             .get(agent_id)
             .cloned()
             .ok_or_else(|| CoreError::not_found(format!("no agent {agent_id}")))?;
-        let resume = agent.resume.as_mut().ok_or_else(|| {
-            CoreError::new(
-                ErrorCode::Unsupported,
-                format!("agent {agent_id} has no resume payload"),
-            )
-        })?;
+        if agent.resume.is_none() {
+            let cwd = self
+                .surface(&agent.surface_id)
+                .map(|surface| surface.cwd.clone())
+                .unwrap_or_default();
+            agent.resume = Some(Resume {
+                argv: Vec::new(),
+                cwd,
+                session_ref: None,
+                env: Vec::new(),
+            });
+        }
+        let resume = agent.resume.as_mut().expect("resume set above");
         if resume.session_ref.as_deref() != Some(session_ref) {
             resume.session_ref = Some(session_ref.to_string());
         }

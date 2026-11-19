@@ -381,17 +381,29 @@ pub fn restore(
         }
 
         for mut agent in agents {
-            if failed_resumes.contains(&agent.surface_id) {
+            let has_failed = failed_resumes.contains(&agent.surface_id);
+            let is_resumable = agent.resume.is_some();
+            let now = time::now_ms();
+            if has_failed {
                 agent.state = crate::agent::AgentState::Errored;
                 agent.detail = "resume failed".to_string();
-                agent.since_ms = time::now_ms();
-            } else {
-                agent.last_seen_ms = time::now_ms();
+                agent.since_ms = now;
+            } else if !is_resumable {
+                // A plain shell replaced the harness, so the saved state and
+                // its attention no longer describe anything running.
+                agent.state = crate::agent::AgentState::Unknown;
+                agent.detail = "not resumed".to_string();
+                agent.since_ms = now;
             }
-            agent.attention = if failed_resumes.contains(&agent.surface_id) {
+            if !has_failed {
+                agent.last_seen_ms = now;
+            }
+            agent.attention = if has_failed {
                 crate::agent::Attention::Error
-            } else {
+            } else if is_resumable {
                 crate::agent::derive_attention(agent.state)
+            } else {
+                crate::agent::Attention::None
             };
             state.agents.insert(agent.id.clone(), agent.clone());
             if let Some(s) = state.surface_mut(&agent.surface_id) {
@@ -749,6 +761,66 @@ mod tests {
             env.get("PATH").map(String::as_str),
             Some("/opt/homebrew/bin:/usr/bin")
         );
+    }
+
+    #[test]
+    fn a_session_ref_alone_is_enough_to_resume_after_restore() {
+        let mut st = AppState::default();
+        st.create_workspace(Some("agents"), Some("/work/project"), None, &NullOps)
+            .unwrap();
+        let sid = st.surfaces.keys().next().unwrap().clone();
+        let agent = st
+            .register_agent(
+                &sid,
+                Some("claude-code"),
+                Some("worker"),
+                None,
+                json!({}),
+                &NullOps,
+            )
+            .unwrap();
+        assert!(agent.resume.is_none());
+        st.set_agent_session_ref(&agent.id, "sess-9").unwrap();
+        let snap = st.snapshot();
+
+        let ops = RecordingOps::default();
+        let mut restored = AppState::default();
+        restore(&mut restored, snap, &ops).unwrap();
+        let spawns = ops.spawns.lock().unwrap();
+        assert_eq!(spawns.len(), 1);
+        assert_eq!(spawns[0].argv, vec!["claude", "--resume", "sess-9"]);
+        assert_eq!(spawns[0].cwd.as_deref(), Some("/work/project"));
+    }
+
+    #[test]
+    fn an_agent_without_a_resume_is_marked_not_resumed_on_restore() {
+        let mut st = AppState::default();
+        st.create_workspace(Some("agents"), Some("/tmp"), None, &NullOps)
+            .unwrap();
+        let sid = st.surfaces.keys().next().unwrap().clone();
+        let agent = st
+            .register_agent(
+                &sid,
+                Some("opencode"),
+                Some("worker"),
+                None,
+                json!({}),
+                &NullOps,
+            )
+            .unwrap();
+        {
+            let saved = st.agents.get_mut(&agent.id).unwrap();
+            saved.state = crate::agent::AgentState::Blocked;
+            saved.attention = crate::agent::Attention::Error;
+        }
+        let snap = st.snapshot();
+
+        let mut restored = AppState::default();
+        restore(&mut restored, snap, &RecordingOps::default()).unwrap();
+        let agent = restored.agents.values().next().unwrap();
+        assert_eq!(agent.state, crate::agent::AgentState::Unknown);
+        assert_eq!(agent.attention, crate::agent::Attention::None);
+        assert_eq!(agent.detail, "not resumed");
     }
 
     #[test]

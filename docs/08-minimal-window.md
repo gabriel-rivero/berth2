@@ -63,7 +63,10 @@ the macOS window's 12pt labels.
   cannot flood the loop, because at most one wake is in flight at a time.
 - Real text: bold, italic, dim, underline, inverse, wide characters and 256/RGB
   colours, with a block cursor that blinks and hides when the pane is unfocused
-  or the view is scrolled.
+  or the view is scrolled. Right-to-left phrases are shaped once per run, so
+  Arabic and Hebrew join and read right to left instead of drawing one isolated
+  cell at a time. Block elements (U+2580–U+259F) are filled as exact sub-cell
+  rectangles, so pixel art and TUI mascots tile without seams.
 - Wheel and `Shift+PageUp`/`Shift+PageDown` scroll the 10,000-line scrollback;
   any keystroke returns to the live screen. The cursor disappears while
   scrolled, like Ghostty.
@@ -72,8 +75,10 @@ the macOS window's 12pt labels.
   bracketed paste is honoured when the program enables it, and a multi-line
   paste opens a preview that sends only on Enter.
 - Mouse reporting: a program that enables X10, UTF-8 or SGR tracking receives
-  presses, releases, drags and wheel events with modifier bits. Shift-click
-  always selects locally, so copy still works inside a TUI.
+  presses, releases, drags and wheel events with modifier bits. A press in
+  another pane moves keyboard focus there first, so paste and typing follow the
+  click even when the program consumes the mouse. Shift-click always selects
+  locally, so copy still works inside a TUI.
 - Links: `Super`-click (macOS) or `Ctrl`-click opens a URL or an absolute path
   under the pointer with the platform handler. The pointer changes shape over
   links, dividers, the sidebar edge and terminal text.
@@ -99,14 +104,16 @@ the macOS window's 12pt labels.
   window.
 - Passive agent detection runs once a second over surfaces without an agent,
   using the foreground process group (`tcgetpgrp` plus `/proc` on Linux and `ps`
-  on macOS), then sweeps stale agents every 30 seconds. A `claude`, `codex` or
-  `opencode` started inside a pane becomes a sidebar agent row.
+  on macOS), then sweeps stale agents every 30 seconds. A `claude`, `codex`,
+  `opencode` or `copilot` started inside a pane becomes a sidebar agent row.
 - The session autosaves 500 ms after the last core event, including changes made
   by the CLI or hooks through the socket, so a crash loses at most one
   interaction.
 - Keys go through the headless encoder: printable text, Ctrl/Alt/Shift
   combinations, Enter, Tab, Esc, Backspace, Delete, Insert, arrows, Home/End,
-  Page keys and F1–F12.
+  Page keys and F1–F12. `Shift+Enter` sends `ESC CR`, the sequence Claude Code
+  binds for a prompt newline, and `Cmd+Left`/`Cmd+Right` send Home/End for the
+  beginning and end of the line.
 
 **Panels**
 

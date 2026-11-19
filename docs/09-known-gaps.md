@@ -1,6 +1,6 @@
 # Known gaps and missing behavior
 
-Last audited: 2026-11-18, code at the 0.11.1 release: real text, scrollback,
+Last audited: 2026-11-19, code at the 0.11.2 release: real text, scrollback,
 selection with auto-scroll, clipboard, mouse reporting, IME, links, OSC events,
 divider and sidebar dragging, the palette, attention and settings panels, agent
 detection, autosave, journal, accessibility, logs and per-platform archives. This is the
@@ -39,6 +39,9 @@ app itself has the gaps listed in
   is no high-contrast mode.
 - **No settings window.** `⌘,` prints "no window yet"; font size, font scale,
   sidebar density and shortcuts are edited by hand in `config.json`.
+- **Right-to-left text is shaped in terminal panes only.** Sidebar rows, tab
+  labels and panel text still draw one character at a time, so an RTL workspace
+  name or OSC title is not reordered there.
 - **The palette lists actions only.** It has no workspace or session commands
   beyond the 14 bound actions, and it does not remember recent choices.
 
@@ -70,10 +73,10 @@ app itself has the gaps listed in
 
 ### Session and lifecycle
 
-- **Autosave is debounced, not journaled.** A change is written 500 ms after the
-  last event; a crash inside that window loses the last interaction, and there is
-  still no replayable journal.
-- **No crash journal.** `journal.ndjson` remains a macOS-store behavior.
+- **Autosave is debounced.** A change is written 500 ms after the last event, and
+  the same snapshot is appended to `journal.ndjson` (five kept). A crash inside
+  the debounce loses the last interaction; a corrupt newest entry falls back to
+  the older snapshots, not a replay of structural events.
 - **No single-instance handoff.** A second launch detects the live endpoint and
   exits instead of rebinding it, but it cannot bring the first window forward.
 
@@ -125,7 +128,6 @@ app itself has the gaps listed in
 - **No client library** beyond the Rust crates and the generated Swift bindings.
 - **No protocol version negotiation beyond `protocol: 1`** in hello; mismatches
   are not rejected with a dedicated error path.
-- **No journal writing from portable shells**, as above.
 - **Windows named-pipe path is per-user but still one global name**; multiple
   profiles/instances share the collision risk.
 - **No Windows service, Linux systemd unit, macOS launch agent or autostart.**

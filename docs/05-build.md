@@ -187,9 +187,11 @@ Check:
 - [ ] Kill a saved agent's provider command (or remove it from `PATH`) and
       relaunch: that row must show `errored · resume failed`, not a silent shell.
 
-`berth run` registers the exact argv/cwd as the resume payload. Passive agents
-(just typing `claude` into a shell) get badges but no resume payload, so they
-come back as plain shells by design.
+`berth run` registers the exact argv/cwd as the resume payload. A passively
+detected agent has no launch payload until its first hook reports a session id;
+that hook then builds one from the surface's cwd and the hook's `PATH`, so
+typing `claude` into a shell also resumes. A snapshot saved before that first
+session id has nothing to resume, and the row comes back `unknown · not resumed`.
 
 ## M4 hooks checkpoint (run on the Mac)
 
@@ -216,8 +218,12 @@ Check:
 - [ ] Quit Berth and relaunch: the agent resumes with
       `claude --resume <session-id>` (the session id came from the hook, not a
       fresh `claude`).
-- [ ] Start opencode through `berth run -- opencode`; session idle/error and
-      permission events update the same row.
+- [ ] Type `claude` directly in a shell, with no wrapper. The `SessionStart`
+      hook records the session id, and a relaunch resumes that chat too.
+- [ ] Start opencode directly in a pane with the plugin installed; session
+      idle/error and permission events update the row, and its session id
+      resumes the chat after a relaunch. Copilot is detected but has no hook
+      yet, so it needs `berth agent-set <id> --session-ref <id>`.
 
 If hooks do not fire, check `~/.claude/settings.json` and run the generated
 command by hand with a sample payload:
