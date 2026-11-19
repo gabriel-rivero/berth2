@@ -295,7 +295,15 @@ The wrapper is the recommended default: it makes Tier 2 (and therefore correct r
 
 ```
 berth ls [--json]                     # workspaces, groups, panes, surfaces, agents
+berth new-tab [--pane PANE_ID] [--cwd DIR]
 berth split SURFACE_ID right|left|up|down
+berth select-workspace WORKSPACE_ID
+berth focus-pane PANE_ID
+berth close-pane PANE_ID
+berth close-surface SURFACE_ID
+berth rename SURFACE_ID TITLE
+berth move-tab SURFACE_ID INDEX
+berth save
 berth send SURFACE_ID "text"
 berth send-key SURFACE_ID enter
 berth read SURFACE_ID [--scrollback] [--max-bytes N]

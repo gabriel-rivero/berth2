@@ -4,6 +4,10 @@
 
 ### Changes
 
+- CLI: `new-tab`, `select-workspace`, `focus-pane`, `close-pane`,
+  `close-surface`, `rename`, `move-tab` and `save` join the client, closing the
+  documented tab/pane/session gaps. The portable window warns at launch when the
+  socket runs in `trusted` mode.
 - Agent polish: `muteProviders` silences OS notifications per provider while the
   in-app attention stays, `agent.usage` (and `berth agent-usage`) records tokens
   and cost for the sidebar row, and the opencode plugin handles passive surfaces.

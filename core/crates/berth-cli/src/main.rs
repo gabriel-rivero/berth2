@@ -697,7 +697,15 @@ usage:
   berth agents [--state S]
   berth new [--name N] [--cwd DIR]
   berth close-workspace [WORKSPACE_ID]
+  berth new-tab [--pane PANE_ID] [--cwd DIR]
   berth split SURFACE_ID [--direction right|left|up|down]
+  berth select-workspace WORKSPACE_ID
+  berth focus-pane PANE_ID
+  berth close-pane PANE_ID
+  berth close-surface SURFACE_ID
+  berth rename SURFACE_ID TITLE
+  berth move-tab SURFACE_ID INDEX
+  berth save                    write the session snapshot now
   berth send SURFACE_ID TEXT    type into a surface
   berth send-key SURFACE_ID KEY send a named key (enter, esc, ctrl-c, …)
   berth read SURFACE_ID [--scrollback] [--max-bytes N]
@@ -833,6 +841,70 @@ fn run() -> Result<(), String> {
                 .as_str()
                 .ok_or("surface.split returned no surface id")?;
             println!("{new_id}");
+        }
+
+        "new-tab" | "tab" => {
+            let mut params = json!({});
+            if let Some(pane) = arg_after(rest, "--pane") {
+                params["pane_id"] = json!(pane);
+            }
+            if let Some(cwd) = arg_after(rest, "--cwd") {
+                params["cwd"] = json!(cwd);
+            }
+            let v = c.call("surface.create", params)?;
+            let id = v["surface_id"]
+                .as_str()
+                .ok_or("surface.create returned no surface id")?;
+            println!("{id}");
+        }
+
+        "select-workspace" => {
+            let pos = positional(rest);
+            let wid = pos
+                .first()
+                .ok_or("select-workspace: missing WORKSPACE_ID")?;
+            c.call("workspace.select", json!({"workspace_id": wid}))?;
+        }
+
+        "focus-pane" => {
+            let pos = positional(rest);
+            let pid = pos.first().ok_or("focus-pane: missing PANE_ID")?;
+            c.call("pane.focus", json!({"pane_id": pid}))?;
+        }
+
+        "close-pane" => {
+            let pos = positional(rest);
+            let pid = pos.first().ok_or("close-pane: missing PANE_ID")?;
+            c.call("pane.close", json!({"pane_id": pid}))?;
+        }
+
+        "close-surface" => {
+            let pos = positional(rest);
+            let sid = pos.first().ok_or("close-surface: missing SURFACE_ID")?;
+            c.call("surface.close", json!({"surface_id": sid}))?;
+        }
+
+        "rename" => {
+            let pos = positional(rest);
+            let sid = pos.first().ok_or("rename: missing SURFACE_ID")?;
+            let title = pos.get(1..).map(|t| t.join(" ")).unwrap_or_default();
+            c.call("surface.rename", json!({"surface_id": sid, "title": title}))?;
+        }
+
+        "move-tab" => {
+            let pos = positional(rest);
+            let sid = pos.first().ok_or("move-tab: missing SURFACE_ID")?;
+            let index: usize = pos
+                .get(1)
+                .ok_or("move-tab: missing INDEX")?
+                .parse()
+                .map_err(|_| "move-tab: INDEX must be a number")?;
+            c.call("surface.move", json!({"surface_id": sid, "index": index}))?;
+        }
+
+        "save" => {
+            let v = c.call("session.save", json!({}))?;
+            println!("{}", v["path"].as_str().unwrap_or(""));
         }
 
         "send" => {

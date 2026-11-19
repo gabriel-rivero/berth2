@@ -208,6 +208,11 @@ fn main() {
         SocketMode::Trusted | SocketMode::Off => args.token.clone(),
     };
 
+    if mode == SocketMode::Trusted {
+        let message = "trusted mode: any local process can drive this instance";
+        log::line(message);
+        eprintln!("berth-gui: {message}");
+    }
     let host = Arc::new(PtyHost::with_options(
         config.scrollback_lines,
         config.graphics,
@@ -338,6 +343,7 @@ fn main() {
         selection: HashMap::new(),
         last_selection: None,
         search_highlight: None,
+        hooks_notice: None,
         scroll: HashMap::new(),
         last_meta: HashMap::new(),
         flashes: HashMap::new(),
@@ -573,6 +579,8 @@ struct Gui {
     last_selection: Option<String>,
     /// The search match to highlight in the painted pane.
     search_highlight: Option<SearchHighlight>,
+    /// Last result of the Settings "reinstall hooks" row.
+    hooks_notice: Option<String>,
     scroll: HashMap<String, usize>,
     last_meta: HashMap<String, AppliedMeta>,
     flashes: HashMap<String, Instant>,
@@ -2880,7 +2888,9 @@ impl Gui {
         match overlay {
             Overlay::Palette { query, .. } => Self::palette_entries(query).len(),
             Overlay::Attention { .. } => self.attention_entries().len(),
-            Overlay::Settings { recording, .. } => settings::rows(&self.config, *recording).len(),
+            Overlay::Settings { recording, .. } => {
+                settings::rows(&self.config, *recording, self.hooks_notice.as_deref()).len()
+            }
             Overlay::Confirm { text } => confirm_lines(text).len(),
             Overlay::Rename { .. } => 0,
             Overlay::Search { matches, .. } => matches.len(),
@@ -3064,7 +3074,7 @@ impl Gui {
         selected: &mut usize,
         recording: &mut Option<config::Action>,
     ) {
-        let rows = settings::rows(&self.config, *recording);
+        let rows = settings::rows(&self.config, *recording, self.hooks_notice.as_deref());
         let len = rows.len();
         match &event.logical_key {
             Key::Named(NamedKey::Escape) => {
@@ -3125,6 +3135,31 @@ impl Gui {
             }
         }
         let _ = activate;
+    }
+
+    /// Run the CLI shipped beside the window to refresh the agent hooks.
+    fn reinstall_hooks(&mut self) {
+        let sibling = std::env::current_exe()
+            .ok()
+            .and_then(|exe| {
+                exe.parent()
+                    .map(|dir| dir.join(if cfg!(windows) { "berth.exe" } else { "berth" }))
+            })
+            .filter(|path| path.is_file());
+        let program = sibling.unwrap_or_else(|| "berth".into());
+        let result = std::process::Command::new(&program)
+            .args(["hooks", "install", "all"])
+            .output();
+        self.hooks_notice = Some(match result {
+            Ok(output) if output.status.success() => "installed".to_string(),
+            Ok(output) => format!("failed: {}", String::from_utf8_lossy(&output.stderr).trim()),
+            Err(error) => format!("failed: {error}"),
+        });
+        log::line(&format!(
+            "hooks: {} ({})",
+            self.hooks_notice.as_deref().unwrap_or(""),
+            program.display()
+        ));
     }
 
     fn apply_setting(&mut self, change: settings::Change) {
@@ -3329,7 +3364,7 @@ impl Gui {
             } => Some(PanelContent {
                 title: "Settings".to_string(),
                 query: None,
-                rows: settings::rows(&self.config, *recording)
+                rows: settings::rows(&self.config, *recording, self.hooks_notice.as_deref())
                     .into_iter()
                     .map(|row| panel::PanelRow {
                         label: row.label,
@@ -3417,7 +3452,7 @@ impl Gui {
                 selected,
                 recording,
             }) => {
-                let rows = settings::rows(&self.config, recording);
+                let rows = settings::rows(&self.config, recording, self.hooks_notice.as_deref());
                 let mut next = Overlay::Settings {
                     selected,
                     recording,
@@ -3429,6 +3464,7 @@ impl Gui {
                                 *recording = Some(action);
                             }
                         }
+                        settings::Field::ReinstallHooks => self.reinstall_hooks(),
                         field => {
                             let change = settings::toggle(&mut self.config, field);
                             self.apply_setting(change);

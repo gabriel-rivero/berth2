@@ -131,9 +131,10 @@ app itself has the gaps listed in
   refuses with `AddrInUse` when a live instance answers, and only the handle that
   bound the endpoint unlinks it. Two starts that race inside the probe window can
   still clash; there is no lockfile.
-- **CLI surface is incomplete.** No `tab`/`surface.create`, `session.save`,
-  `workspace.select`, pane focus/close or workspace rename command; those exist
-  only in the protocol. `berth schema` is documentation, not a typed client.
+- **CLI is nearly complete.** Tabs, pane focus/close, surface rename/close,
+  session save, workspace select and tab move now exist. Workspace rename and
+  group commands are still protocol-only, and `berth schema` is documentation,
+  not a typed client.
 - **No client library** beyond the Rust crates and the generated Swift bindings.
 - **No protocol version negotiation beyond `protocol: 1`** in hello; mismatches
   are not rejected with a dedicated error path.

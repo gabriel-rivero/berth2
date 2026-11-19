@@ -19,6 +19,7 @@ pub enum Field {
     RestoreLaunchFlags,
     ClaudeBypass,
     CopyOnSelect,
+    ReinstallHooks,
     SocketMode,
     Shortcut(Action),
 }
@@ -41,7 +42,7 @@ pub enum Change {
 }
 
 /// The rows of the settings panel, in display order.
-pub fn rows(config: &Config, recording: Option<Action>) -> Vec<Row> {
+pub fn rows(config: &Config, recording: Option<Action>, notice: Option<&str>) -> Vec<Row> {
     let mut rows = vec![
         Row {
             field: Field::FontSize,
@@ -96,6 +97,11 @@ pub fn rows(config: &Config, recording: Option<Action>) -> Vec<Row> {
             field: Field::CopyOnSelect,
             label: "Copy on select".into(),
             value: if config.copy_on_select { "on" } else { "off" }.to_string(),
+        },
+        Row {
+            field: Field::ReinstallHooks,
+            label: "Reinstall agent hooks".into(),
+            value: notice.unwrap_or("enter to install").to_string(),
         },
         Row {
             field: Field::SocketMode,
@@ -168,6 +174,7 @@ pub fn adjust(config: &mut Config, field: Field, delta: i32) -> Change {
         | Field::RestoreLaunchFlags
         | Field::ClaudeBypass
         | Field::CopyOnSelect
+        | Field::ReinstallHooks
         | Field::Shortcut(_) => Change::None,
     }
 }
@@ -219,15 +226,15 @@ mod tests {
     #[test]
     fn given_the_settings_rows_when_built_then_every_action_has_a_row() {
         let config = Config::default();
-        let rows = rows(&config, None);
-        assert_eq!(rows.len(), 8 + Action::ALL.len());
+        let rows = rows(&config, None, None);
+        assert_eq!(rows.len(), 9 + Action::ALL.len());
         assert_eq!(rows[0].label, "Font size");
     }
 
     #[test]
     fn given_a_recording_row_when_built_then_it_asks_for_a_chord() {
         let config = Config::default();
-        let rows = rows(&config, Some(Action::NewTab));
+        let rows = rows(&config, Some(Action::NewTab), None);
         let row = rows
             .iter()
             .find(|row| row.field == Field::Shortcut(Action::NewTab))
