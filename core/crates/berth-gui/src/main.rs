@@ -11,6 +11,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -51,6 +52,14 @@ use ui::{Cell, PaneView, Selection};
 const FRAME_INTERVAL: Duration = Duration::from_millis(33);
 const FLASH_DURATION: Duration = Duration::from_millis(1200);
 const BLINK_INTERVAL: Duration = Duration::from_millis(530);
+
+/// The next moment the cursor blink phase flips, in `started`-relative steps.
+/// Always strictly after `now`.
+fn next_blink_edge(started: Instant, now: Instant) -> Instant {
+    let step = BLINK_INTERVAL.as_millis().max(1) as u64;
+    let elapsed = now.saturating_duration_since(started).as_millis() as u64;
+    started + Duration::from_millis((elapsed / step + 1) * step)
+}
 const DIVIDER_EDGE: usize = 4;
 /// Let the first shell prompt (or a restore) arrive before a PNG capture.
 const PNG_DELAY: Duration = Duration::from_millis(700);
@@ -200,6 +209,25 @@ fn main() {
     let host = Arc::new(PtyHost::new());
     host.set_transport(token.clone(), Some(paths::display(&socket)));
 
+    let event_loop = match EventLoop::<UserEvent>::with_user_event().build() {
+        Ok(event_loop) => event_loop,
+        Err(error) => {
+            eprintln!("berth-gui: event loop: {error}");
+            std::process::exit(1);
+        }
+    };
+    let proxy = event_loop.create_proxy();
+    let wake = Arc::new(Wake::new({
+        let proxy = proxy.clone();
+        move || {
+            let _ = proxy.send_event(UserEvent::Redraw);
+        }
+    }));
+    host.set_waker({
+        let wake = Arc::clone(&wake);
+        Arc::new(move || wake.wake())
+    });
+
     let state = Arc::new(Mutex::new(AppState::default()));
     if !args.no_restore {
         match restore_session(&state, host.as_ref()) {
@@ -229,6 +257,10 @@ fn main() {
                     eprintln!("berth-gui: session.save: {error}");
                 }
             }))
+            .on_request({
+                let wake = Arc::clone(&wake);
+                Arc::new(move || wake.wake())
+            })
             .start()
         {
             Ok(handle) => {
@@ -250,14 +282,6 @@ fn main() {
         }
     }
 
-    let event_loop = match EventLoop::<UserEvent>::with_user_event().build() {
-        Ok(event_loop) => event_loop,
-        Err(error) => {
-            eprintln!("berth-gui: event loop: {error}");
-            std::process::exit(1);
-        }
-    };
-    let proxy = event_loop.create_proxy();
     {
         let proxy = proxy.clone();
         if let Err(error) = ctrlc::set_handler(move || {
@@ -267,7 +291,6 @@ fn main() {
         }
     }
     event_loop.set_control_flow(ControlFlow::Wait);
-
     let mut app = Gui {
         state,
         host,
@@ -308,6 +331,9 @@ fn main() {
         a11y_active: false,
         a11y_text: String::new(),
         proxy: proxy.clone(),
+        wake: Arc::clone(&wake),
+        blink_shown: true,
+        ime_cursor: None,
         cursor_icon: CursorIcon::Default,
         last_detect: Instant::now(),
         last_sweep: Instant::now(),
@@ -326,9 +352,41 @@ fn main() {
     }
 }
 
-/// Events the window sends itself: accessibility requests from the platform
-/// adapter, and a clean-quit request from the signal handler.
+/// Ask the event loop for a repaint from any thread, coalescing a burst (a
+/// child printing a screenful) into one wake.
+struct Wake {
+    pending: AtomicBool,
+    notify: Arc<dyn Fn() + Send + Sync>,
+}
+
+impl Wake {
+    fn new(notify: impl Fn() + Send + Sync + 'static) -> Self {
+        Self {
+            pending: AtomicBool::new(false),
+            notify: Arc::new(notify),
+        }
+    }
+
+    fn wake(&self) {
+        if !self.pending.swap(true, Ordering::AcqRel) {
+            (self.notify)();
+        }
+    }
+
+    /// Called once the loop has picked the wake up, so the next change wakes
+    /// it again.
+    fn clear(&self) {
+        self.pending.store(false, Ordering::Release);
+    }
+}
+
+/// Events the window sends itself: a repaint request from a pty thread or the
+/// socket server, accessibility requests, and a clean-quit request from the
+/// signal handler.
 enum UserEvent {
+    /// Something outside the event loop changed: pty output, an exit, or a
+    /// request handled by the socket server.
+    Redraw,
     A11y(accesskit_winit::Event),
     Quit,
 }
@@ -461,6 +519,12 @@ struct Gui {
     a11y_active: bool,
     a11y_text: String,
     proxy: EventLoopProxy<UserEvent>,
+    wake: Arc<Wake>,
+    /// Blink phase of the last frame, so a phase flip is what schedules a
+    /// repaint instead of a fixed frame timer.
+    blink_shown: bool,
+    /// Cursor cell the IME window was last placed at.
+    ime_cursor: Option<(String, u16, u16)>,
     cursor_icon: CursorIcon,
     save_due: Option<Instant>,
     save_seq: u64,
@@ -607,6 +671,10 @@ impl ApplicationHandler<UserEvent> for Gui {
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
+            UserEvent::Redraw => {
+                self.wake.clear();
+                self.request_redraw();
+            }
             UserEvent::Quit => {
                 self.save_and_close();
                 event_loop.exit();
@@ -651,8 +719,19 @@ impl ApplicationHandler<UserEvent> for Gui {
             event_loop.exit();
             return;
         }
-        self.request_redraw();
-        event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + FRAME_INTERVAL));
+        // Repaint only when something changed. A pty read, a child exit or a
+        // socket request arrives as `UserEvent::Redraw`; everything the window
+        // does itself already called `request_redraw`.
+        let blink_on = self.blink_on();
+        if blink_on != self.blink_shown {
+            self.blink_shown = blink_on;
+            self.request_redraw();
+        }
+        self.expire_flashes();
+        event_loop.set_control_flow(match self.next_deadline(Instant::now()) {
+            Some(at) => ControlFlow::WaitUntil(at),
+            None => ControlFlow::Wait,
+        });
     }
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
@@ -661,6 +740,63 @@ impl ApplicationHandler<UserEvent> for Gui {
 }
 
 impl Gui {
+    /// Cursor blink phase: `true` draws the cursor. The loop wakes on the phase
+    /// change, not on a frame timer.
+    fn blink_on(&self) -> bool {
+        let step = BLINK_INTERVAL.as_millis() as u64;
+        (self.started.elapsed().as_millis() as u64 / step.max(1)).is_multiple_of(2)
+    }
+
+    fn cursor_blinks(&self) -> bool {
+        self.window_focused && !lock(&self.state).surfaces.is_empty()
+    }
+
+    /// Drop bells whose flash has finished, repainting once so the pane border
+    /// returns to normal.
+    fn expire_flashes(&mut self) {
+        let before = self.flashes.len();
+        self.flashes.retain(|_, at| at.elapsed() < FLASH_DURATION);
+        if self.flashes.len() != before {
+            self.request_redraw();
+        }
+    }
+
+    /// When the loop next has to run with nothing else waking it: the blink
+    /// edge, a flash ending, the autosave debounce, an agent sweep, or a drag
+    /// that keeps auto-scrolling.
+    fn next_deadline(&self, now: Instant) -> Option<Instant> {
+        let mut next: Option<Instant> = None;
+        let mut consider = |at: Instant| {
+            next = Some(match next {
+                Some(current) => current.min(at),
+                None => at,
+            });
+        };
+        if self.cursor_blinks() {
+            consider(next_blink_edge(self.started, now));
+        }
+        for at in self.flashes.values() {
+            let end = *at + FLASH_DURATION;
+            if end > now {
+                consider(end);
+            }
+        }
+        if let Some(due) = self.save_due
+            && due > now
+        {
+            consider(due);
+        }
+        consider(self.last_detect + Duration::from_secs(1));
+        consider(self.last_sweep + Duration::from_secs(30));
+        if self.smoke.is_some() || (self.smoke_png.is_some() && !self.captured) {
+            consider(now);
+        }
+        if self.mouse_down.is_some() && self.selection.values().any(|sel| sel.dragging) {
+            consider(now + FRAME_INTERVAL);
+        }
+        next
+    }
+
     /// Passive detection, the same cadence as the macOS shell: once a second for
     /// surfaces without an agent, then a stale sweep every 30 seconds.
     fn tick_agents(&mut self) {
@@ -798,7 +934,7 @@ impl Gui {
     fn font(&mut self) -> &mut FontRenderer {
         let pixels = self.config.font_pixels(self.scale);
         if self.font.is_none() {
-            self.font = Some(FontRenderer::new(pixels));
+            self.font = Some(FontRenderer::new(pixels, &self.config.font_family));
         }
         self.font.as_mut().expect("font just created")
     }
@@ -809,7 +945,10 @@ impl Gui {
 
     fn chrome_font(&mut self) -> &mut FontRenderer {
         if self.chrome_font.is_none() {
-            self.chrome_font = Some(FontRenderer::new(CHROME_FONT_SIZE * self.scale as f32));
+            self.chrome_font = Some(FontRenderer::new(
+                CHROME_FONT_SIZE * self.scale as f32,
+                &self.config.font_family,
+            ));
         }
         self.chrome_font.as_mut().expect("chrome font just created")
     }
@@ -822,11 +961,7 @@ impl Gui {
 
     /// The surface the selected workspace wants shown.
     fn active_surface(&self) -> Option<String> {
-        let state = lock(&self.state);
-        let workspace_id = ui::active_workspace(&state)?;
-        state
-            .active_surface_of_workspace(&workspace_id)
-            .or_else(|| state.selected_surface.clone())
+        ui::active_surface(&lock(&self.state))
     }
 
     fn dispatch(
@@ -1145,8 +1280,7 @@ impl Gui {
                     area.w.saturating_sub(24),
                 );
             }
-            let blink_on =
-                (self.started.elapsed().as_millis() / BLINK_INTERVAL.as_millis()).is_multiple_of(2);
+            let blink_on = self.blink_on();
             for pane in &panes {
                 let border = if pane.focused {
                     theme.pane_border_focused
@@ -1635,7 +1769,7 @@ impl Gui {
             }
             if pane.tab_bar.contains(point.0, point.1) {
                 if self.same_click(point, ClickTarget::TabStrip(pane.pane_id.clone())) {
-                    self.new_tab();
+                    self.new_tab_in(&pane.pane_id);
                 } else {
                     self.record_click(point, ClickTarget::TabStrip(pane.pane_id.clone()));
                 }
@@ -2003,18 +2137,25 @@ impl Gui {
     }
 
     fn new_tab(&mut self) {
+        // One lock: `ui::active_surface` reads the state by reference, so this
+        // holds the guard while it asks, instead of locking again inside.
         let pane_id = {
             let state = lock(&self.state);
-            let Some(surface_id) = self.active_surface() else {
+            let Some(surface_id) = ui::active_surface(&state) else {
                 return;
             };
             state
                 .surface(&surface_id)
                 .map(|surface| surface.pane_id.clone())
         };
-        let Some(pane_id) = pane_id else {
-            return;
-        };
+        if let Some(pane_id) = pane_id {
+            self.new_tab_in(&pane_id);
+        }
+    }
+
+    /// Add a tab to one pane: the strip that was double-clicked, or the focused
+    /// pane for `⌘T`.
+    fn new_tab_in(&mut self, pane_id: &str) {
         let params = serde_json::json!({
             "pane_id": pane_id,
             "focus": true,
@@ -2390,14 +2531,19 @@ impl Gui {
     }
 
     fn overlay_len(&self) -> usize {
-        match &self.overlay {
-            Some(Overlay::Palette { query, .. }) => Self::palette_entries(query).len(),
-            Some(Overlay::Attention { .. }) => self.attention_entries().len(),
-            Some(Overlay::Settings { recording, .. }) => {
-                settings::rows(&self.config, *recording).len()
-            }
-            Some(Overlay::Confirm { text }) => confirm_lines(text).len(),
-            None => 0,
+        self.overlay
+            .as_ref()
+            .map_or(0, |overlay| self.overlay_rows_len(overlay))
+    }
+
+    /// Row count for one panel. `overlay_key` takes the overlay out of `self`,
+    /// so it must measure the value it holds, not `self.overlay`.
+    fn overlay_rows_len(&self, overlay: &Overlay) -> usize {
+        match overlay {
+            Overlay::Palette { query, .. } => Self::palette_entries(query).len(),
+            Overlay::Attention { .. } => self.attention_entries().len(),
+            Overlay::Settings { recording, .. } => settings::rows(&self.config, *recording).len(),
+            Overlay::Confirm { text } => confirm_lines(text).len(),
         }
     }
 
@@ -2475,7 +2621,7 @@ impl Gui {
         if let Some(index) = next_selected {
             overlay.select(index);
         }
-        let clamped = panel::clamp_selection(overlay.selected(), self.overlay_len());
+        let clamped = panel::clamp_selection(overlay.selected(), self.overlay_rows_len(&overlay));
         overlay.select(clamped);
         if close {
             return;
@@ -2828,6 +2974,11 @@ impl Gui {
             return;
         };
         let (row, col) = view.cursor;
+        let key = (surface_id.clone(), row, col);
+        if self.ime_cursor.as_ref() == Some(&key) {
+            return;
+        }
+        self.ime_cursor = Some(key);
         let position = PhysicalPosition::new(
             (pane.content.x + usize::from(col) * cell.width) as i32,
             (pane.content.y + usize::from(row) * cell.height) as i32,
@@ -3020,4 +3171,52 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(test)]
+mod loop_tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn given_two_changes_in_a_row_when_the_loop_has_not_woken_then_one_wake_is_sent() {
+        let sent = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&sent);
+        let wake = Wake::new(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+        wake.wake();
+        wake.wake();
+        wake.wake();
+        assert_eq!(sent.load(Ordering::SeqCst), 1);
+        wake.clear();
+        wake.wake();
+        assert_eq!(sent.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn given_a_moment_in_a_blink_phase_when_asking_for_the_next_edge_then_it_is_the_next_multiple()
+    {
+        let started = Instant::now();
+        let step = BLINK_INTERVAL.as_millis() as u64;
+        let now = started + Duration::from_millis(step / 2);
+        assert_eq!(
+            next_blink_edge(started, now),
+            started + Duration::from_millis(step)
+        );
+        let now = started + Duration::from_millis(step + step / 3);
+        assert_eq!(
+            next_blink_edge(started, now),
+            started + Duration::from_millis(step * 2)
+        );
+    }
+
+    #[test]
+    fn given_any_moment_when_asking_for_the_next_blink_edge_then_it_is_in_the_future() {
+        let started = Instant::now();
+        for offset_ms in [0u64, 1, 529, 530, 531, 60_000] {
+            let now = started + Duration::from_millis(offset_ms);
+            assert!(next_blink_edge(started, now) > now, "offset {offset_ms}");
+        }
+    }
 }

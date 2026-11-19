@@ -193,6 +193,16 @@ pub fn active_workspace(state: &AppState) -> Option<String> {
         .or_else(|| state.workspaces.first().map(|w| w.id.clone()))
 }
 
+/// The surface the visible workspace wants shown, else the last selection.
+/// Takes the state by reference so a caller already holding the lock can read
+/// it without locking again.
+pub fn active_surface(state: &AppState) -> Option<String> {
+    let workspace_id = active_workspace(state)?;
+    state
+        .active_surface_of_workspace(&workspace_id)
+        .or_else(|| state.selected_surface.clone())
+}
+
 /// Short, stable tab label. OSC titles win; the cwd's last component and a tab
 /// number are the fallback.
 pub fn tab_title(surface: &Surface, index: usize) -> String {
@@ -617,6 +627,31 @@ mod tests {
         let (panes, dividers) = build_panes(&state, Rect::new(0, 0, 100, 100), 16, 28, None);
         assert!(panes.is_empty());
         assert!(dividers.is_empty());
+    }
+
+    #[test]
+    fn given_no_workspace_when_asking_for_the_active_surface_then_none_is_returned() {
+        assert_eq!(active_surface(&AppState::default()), None);
+    }
+
+    #[test]
+    fn given_a_workspace_with_a_live_surface_when_asking_then_that_surface_is_returned() {
+        let mut state = AppState::default();
+        let workspace = state
+            .create_workspace(Some("main"), None, None, &berth_core::NullOps)
+            .unwrap();
+        assert_eq!(active_surface(&state), workspace.active_surface);
+    }
+
+    #[test]
+    fn given_a_vanished_selection_when_asking_for_the_active_surface_then_it_falls_back() {
+        let mut state = AppState::default();
+        state.selected_surface = Some("srf_gone".to_string());
+        assert_eq!(active_surface(&state), None);
+        let workspace = state
+            .create_workspace(Some("main"), None, None, &berth_core::NullOps)
+            .unwrap();
+        assert_eq!(active_surface(&state), workspace.active_surface);
     }
 
     #[test]

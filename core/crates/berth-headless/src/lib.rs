@@ -284,10 +284,19 @@ struct Surface {
 
 /// Terminal host for a headless shell. Cheap to put behind an `Arc`; all state
 /// is internally synchronised because the server calls from many threads.
+/// A shell's repaint hook. Fired from the pty threads.
+pub type Waker = Arc<dyn Fn() + Send + Sync>;
+
+/// The hook, shared with threads spawned before the shell installs it.
+type SharedWaker = Arc<Mutex<Option<Waker>>>;
+
 pub struct PtyHost {
     surfaces: Mutex<HashMap<String, Arc<Surface>>>,
     transport: Mutex<Transport>,
     scrollback: usize,
+    /// Fired by the read and exit threads. A GUI shell turns this into a
+    /// repaint, so it never has to poll the surfaces for changes.
+    waker: SharedWaker,
 }
 
 #[derive(Default)]
@@ -312,7 +321,14 @@ impl PtyHost {
             surfaces: Mutex::new(HashMap::new()),
             transport: Mutex::new(Transport::default()),
             scrollback,
+            waker: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Install the repaint hook. Surfaces spawned before this call still pick
+    /// it up, because the threads share the slot rather than a copy of it.
+    pub fn set_waker(&self, waker: Waker) {
+        *lock(&self.waker) = Some(waker);
     }
 
     /// Inject connection details into every child so CLI and hooks can
@@ -581,8 +597,9 @@ impl SurfaceOps for PtyHost {
             Arc::clone(&alive),
             Arc::clone(&writer),
             Arc::clone(&meta),
+            Arc::clone(&self.waker),
         );
-        spawn_waiter(child, Arc::clone(&alive));
+        spawn_waiter(child, Arc::clone(&alive), Arc::clone(&self.waker));
 
         let surface = Arc::new(Surface {
             master: Mutex::new(master),
@@ -737,12 +754,22 @@ impl PtyHost {
     }
 }
 
+/// Signal the shell that a surface changed. Called from the reader, so it runs
+/// once per read and must stay cheap; the shell coalesces the burst.
+fn notify(waker: &SharedWaker) {
+    let waker = lock(waker).clone();
+    if let Some(waker) = waker {
+        waker();
+    }
+}
+
 fn spawn_reader(
     mut reader: Box<dyn Read + Send>,
     screen: Arc<Mutex<Parser>>,
     alive: Arc<AtomicBool>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     meta: Arc<Mutex<ScreenMeta>>,
+    waker: SharedWaker,
 ) {
     let _ = thread::Builder::new()
         .name("berth-pty-reader".into())
@@ -754,21 +781,28 @@ fn spawn_reader(
                     Ok(n) => {
                         lock(&screen).process(&buffer[..n]);
                         answer_queries(&meta, &writer);
+                        notify(&waker);
                     }
                     Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
                     Err(_) => break,
                 }
             }
             alive.store(false, Ordering::Relaxed);
+            notify(&waker);
         });
 }
 
-fn spawn_waiter(mut child: Box<dyn portable_pty::Child + Send + Sync>, alive: Arc<AtomicBool>) {
+fn spawn_waiter(
+    mut child: Box<dyn portable_pty::Child + Send + Sync>,
+    alive: Arc<AtomicBool>,
+    waker: SharedWaker,
+) {
     let _ = thread::Builder::new()
         .name("berth-pty-wait".into())
         .spawn(move || {
             let _ = child.wait();
             alive.store(false, Ordering::Relaxed);
+            notify(&waker);
         });
 }
 

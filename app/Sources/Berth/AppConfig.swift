@@ -151,7 +151,11 @@ final class AppConfig {
     }
 
     func load() {
-        guard let data = try? Data(contentsOf: Self.url),
+        load(from: Self.url)
+    }
+
+    func load(from url: URL) {
+        guard let data = try? Data(contentsOf: url),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return }
         if let values = object["shortcuts"] as? [String: String] {
@@ -172,19 +176,32 @@ final class AppConfig {
     }
 
     func save() throws {
+        try save(to: Self.url)
+    }
+
+    /// The portable window reads the same document, so merge into what is
+    /// already there instead of writing only the keys this shell owns.
+    func save(to url: URL) throws {
         try FileManager.default.createDirectory(
-            at: Self.url.deletingLastPathComponent(),
+            at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true)
+        var object = Self.document(at: url)
+        object["shortcuts"] = shortcuts
+        object["fontSize"] = fontSize
+        object["fontScale"] = fontScale
+        object["compactSidebar"] = compactSidebar
+        object["socket"] = socketMode.rawValue
         let data = try JSONSerialization.data(
-            withJSONObject: [
-                "shortcuts": shortcuts,
-                "fontSize": fontSize,
-                "fontScale": fontScale,
-                "compactSidebar": compactSidebar,
-                "socket": socketMode.rawValue,
-            ],
+            withJSONObject: object,
             options: [.prettyPrinted, .sortedKeys])
-        try data.write(to: Self.url, options: .atomic)
+        try data.write(to: url, options: .atomic)
+    }
+
+    private static func document(at url: URL) -> [String: Any] {
+        guard let data = try? Data(contentsOf: url),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return [:] }
+        return object
     }
 
     static var url: URL {

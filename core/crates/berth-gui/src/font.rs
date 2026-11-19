@@ -13,7 +13,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use cosmic_text::{
-    Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Style, SwashCache, SwashContent, Weight,
+    Attrs, Buffer, Family, FamilyOwned, FontSystem, Metrics, Shaping, Stretch, Style, SwashCache,
+    SwashContent, Weight,
 };
 
 /// The uniform grid cell, in physical pixels.
@@ -78,16 +79,77 @@ pub struct FontRenderer {
     buffer: Buffer,
     metrics: Metrics,
     cell: CellSize,
+    /// Shaping order: the configured faces that are installed, in order, then
+    /// the generic families. Text comes from the first, icons and powerline
+    /// glyphs from whichever face actually has them.
+    families: Vec<FamilyOwned>,
     cache: HashMap<CacheKey, Option<Arc<Raster>>>,
 }
 
+/// Every configured name that is installed, in the user's order, then the
+/// generic families. Shaping walks this list, so a Nerd Font later in
+/// `fontFamily` still supplies the icons and powerline separators the first
+/// face lacks. Names are matched case-insensitively; an unknown name is
+/// skipped rather than fatal, so a config copied from another machine opens.
+fn resolve_families(font_system: &FontSystem, names: &[String]) -> Vec<FamilyOwned> {
+    let mut families: Vec<FamilyOwned> = Vec::new();
+    for name in names {
+        let wanted = name.trim();
+        if wanted.is_empty() {
+            continue;
+        }
+        // Keep the database's own spelling: the shaping lookup is not required
+        // to be case-insensitive, so echoing the user's casing can miss.
+        let installed = font_system.db().faces().find_map(|face| {
+            face.families
+                .iter()
+                .find(|(family, _)| family.eq_ignore_ascii_case(wanted))
+                .map(|(family, _)| family.clone())
+        });
+        if let Some(installed) = installed {
+            let family = FamilyOwned::Name(installed.into());
+            if !families.contains(&family) {
+                families.push(family);
+            }
+        }
+    }
+    if families.is_empty() {
+        families.push(FamilyOwned::Monospace);
+    }
+    for generic in [
+        FamilyOwned::Monospace,
+        FamilyOwned::SansSerif,
+        FamilyOwned::Serif,
+    ] {
+        if !families.contains(&generic) {
+            families.push(generic);
+        }
+    }
+    families
+}
+
+/// Styled attributes for one cell. `family` is passed in because the caller
+/// owns the name; the renderer must stay free to borrow itself mutably.
+fn attrs_for(family: Family<'_>, style: TextStyle) -> Attrs<'_> {
+    let mut attrs = Attrs::new().family(family);
+    if style.bold {
+        attrs = attrs.weight(Weight::BOLD);
+    }
+    if style.italic {
+        attrs = attrs.style(Style::Italic);
+    }
+    attrs
+}
+
 impl FontRenderer {
-    /// Build a renderer from the system monospace face at `font_size` pixels.
+    /// Build a renderer at `font_size` pixels. Text comes from the first
+    /// configured name the system knows; the rest supply what it lacks.
     /// `font_size` is already scaled for the display, not points.
-    pub fn new(font_size: f32) -> Self {
+    pub fn new(font_size: f32, families: &[String]) -> Self {
         let font_size = font_size.max(4.0);
         let metrics = Metrics::relative(font_size, 1.35);
         let mut font_system = FontSystem::new();
+        let resolved = resolve_families(&font_system, families);
         let mut buffer = Buffer::new(&mut font_system, metrics);
         buffer.set_size(Some(f32::MAX), Some(metrics.line_height * 2.0));
 
@@ -100,9 +162,16 @@ impl FontRenderer {
                 width: 1,
                 height: 1,
             },
+            families: resolved,
             cache: HashMap::new(),
         };
         renderer.cell = renderer.measure_cell();
+        // Which face the config actually resolved to; the first thing to check
+        // when a window looks like it ignored `fontFamily`.
+        crate::log::line(&format!(
+            "font: {:?} at {font_size:.1}px cell {}x{}",
+            renderer.families, renderer.cell.width, renderer.cell.height
+        ));
         renderer
     }
 
@@ -113,7 +182,12 @@ impl FontRenderer {
     /// Width of one cell's advance and height of one line, from the font's own
     /// metrics for a shaped sample.
     fn measure_cell(&mut self) -> CellSize {
-        let attrs = self.attrs(TextStyle::NORMAL);
+        let primary = self
+            .families
+            .first()
+            .cloned()
+            .unwrap_or(FamilyOwned::Monospace);
+        let attrs = attrs_for(primary.as_family(), TextStyle::NORMAL);
         self.buffer
             .set_size(Some(f32::MAX), Some(self.metrics.line_height * 2.0));
         self.buffer
@@ -137,17 +211,6 @@ impl FontRenderer {
         }
     }
 
-    fn attrs(&self, style: TextStyle) -> Attrs<'static> {
-        let mut attrs = Attrs::new().family(Family::Monospace);
-        if style.bold {
-            attrs = attrs.weight(Weight::BOLD);
-        }
-        if style.italic {
-            attrs = attrs.style(Style::Italic);
-        }
-        attrs
-    }
-
     /// Shaped bitmap for one cell, or `None` when the text has no visible
     /// pixels (a space, a control character, a missing glyph in every face).
     pub fn raster(&mut self, text: &str, style: TextStyle) -> Option<Arc<Raster>> {
@@ -167,23 +230,62 @@ impl FontRenderer {
         raster
     }
 
-    /// Try the monospace face first, then a proportional one. Some platforms
-    /// answer a missing CJK character with a monospace bitmap face that swash
-    /// cannot rasterise; the second shaping finds a real outline.
+    /// Walk the shaping order until a face draws the glyph. Later faces supply
+    /// what the first lacks: icons and powerline separators from a Nerd Font,
+    /// CJK from a system face. Some platforms answer a missing CJK character
+    /// with a monospace bitmap face swash cannot rasterise, so a later face is
+    /// tried rather than giving up.
     fn render_cell(&mut self, text: &str, style: TextStyle) -> Option<Raster> {
-        for family in [Family::Monospace, Family::SansSerif, Family::Serif] {
-            let attrs = self.attrs(style).family(family);
-            if let Some(raster) = self.shape_cell(text, &attrs) {
+        let families = self.families.clone();
+        for family in &families {
+            let attrs = attrs_for(family.as_family(), style);
+            // A named face must draw the glyph itself. cosmic-text otherwise
+            // substitutes another installed font, which is how a powerline
+            // separator ended up as a 6x7 box from an unrelated face.
+            let required = self.face_id(family, style);
+            if let Some(raster) = self.shape_cell(text, &attrs, required) {
                 return Some(raster);
             }
         }
         None
     }
 
-    fn shape_cell(&mut self, text: &str, attrs: &Attrs<'_>) -> Option<Raster> {
+    /// The face `family` resolves to for this style, or `None` for the generic
+    /// families, which are the fallback of last resort.
+    fn face_id(&self, family: &FamilyOwned, style: TextStyle) -> Option<fontdb::ID> {
+        if !matches!(family, FamilyOwned::Name(_)) {
+            return None;
+        }
+        self.font_system.db().query(&fontdb::Query {
+            families: &[family.as_family()],
+            weight: if style.bold {
+                Weight::BOLD
+            } else {
+                Weight::NORMAL
+            },
+            stretch: Stretch::Normal,
+            style: if style.italic {
+                Style::Italic
+            } else {
+                Style::Normal
+            },
+        })
+    }
+
+    fn shape_cell(
+        &mut self,
+        text: &str,
+        attrs: &Attrs<'_>,
+        required: Option<fontdb::ID>,
+    ) -> Option<Raster> {
         let line_height = self.metrics.line_height;
-        let width = self.cell.width * 2;
-        let height = self.cell.height;
+        // Icons and powerline separators reach outside the cell: a separator
+        // fills the whole line height and an icon can sit left of the pen. Pad
+        // the box and keep the cell origin, so no ink is dropped.
+        let margin_x = self.cell.width as i32;
+        let margin_y = (self.cell.height / 2) as i32;
+        let width = self.cell.width * 2 + (margin_x * 2) as usize;
+        let height = self.cell.height + (margin_y * 2) as usize;
         self.buffer
             .set_size(Some(width as f32), Some(line_height * 2.0));
         self.buffer.set_text(text, attrs, Shaping::Advanced, None);
@@ -198,6 +300,13 @@ impl FontRenderer {
         let mut bottom = 0i32;
 
         let run = self.buffer.layout_runs().next()?;
+        if let Some(required) = required
+            && run.glyphs.iter().any(|glyph| glyph.font_id != required)
+        {
+            // The face we asked for does not have this character; a later
+            // family in the list should draw it instead.
+            return None;
+        }
         {
             for glyph in run.glyphs {
                 let physical = glyph.physical((0.0, run.line_y), 1.0);
@@ -223,8 +332,8 @@ impl FontRenderer {
                 let stride = image.placement.width as usize;
                 for row in 0..image.placement.height as i32 {
                     for col in 0..stride as i32 {
-                        let x = origin_x + col;
-                        let y = origin_y + row;
+                        let x = origin_x + col + margin_x;
+                        let y = origin_y + row + margin_y;
                         if x < 0 || y < 0 || x >= width as i32 || y >= height as i32 {
                             continue;
                         }
@@ -251,12 +360,15 @@ impl FontRenderer {
         if !touched {
             return None;
         }
-        Some(crop(
+        let mut raster = crop(
             (left, top, right - left, bottom - top),
             (width, height),
             color.unwrap_or_default(),
             mask,
-        ))
+        );
+        raster.left -= margin_x;
+        raster.top -= margin_y;
+        Some(raster)
     }
 }
 
@@ -310,7 +422,43 @@ mod tests {
     use super::*;
 
     fn renderer() -> FontRenderer {
-        FontRenderer::new(16.0)
+        FontRenderer::new(16.0, &[])
+    }
+
+    /// Advance of a shaped string, so a face that silently fell back to a
+    /// proportional one can be told apart from the configured monospace.
+    fn advance_of(font: &mut FontRenderer, text: &str) -> f32 {
+        let primary = font
+            .families
+            .first()
+            .cloned()
+            .unwrap_or(FamilyOwned::Monospace);
+        let attrs = attrs_for(primary.as_family(), TextStyle::NORMAL);
+        font.buffer
+            .set_size(Some(f32::MAX), Some(font.metrics.line_height * 2.0));
+        font.buffer.set_text(text, &attrs, Shaping::Advanced, None);
+        font.buffer.shape_until_scroll(&mut font.font_system, false);
+        font.buffer
+            .layout_runs()
+            .next()
+            .map(|run| run.glyphs.iter().map(|glyph| glyph.w).sum())
+            .unwrap_or(0.0)
+    }
+
+    #[test]
+    fn given_a_configured_face_when_shaped_then_every_glyph_advances_equally() {
+        let mut font = FontRenderer::new(16.0, &["VictorMono NFM".to_string()]);
+        assert_eq!(
+            advance_of(&mut font, "M"),
+            advance_of(&mut font, "i"),
+            "the resolved face is not monospaced"
+        );
+        let mut fallback = renderer();
+        assert_eq!(
+            advance_of(&mut fallback, "M"),
+            advance_of(&mut fallback, "i"),
+            "the system monospace face is not monospaced"
+        );
     }
 
     #[test]
@@ -370,5 +518,79 @@ mod tests {
     fn given_an_emoji_when_rasterised_then_colour_or_mask_pixels_exist() {
         let mut font = renderer();
         assert!(font.raster("🦀", TextStyle::NORMAL).is_some());
+    }
+
+    #[test]
+    fn given_no_family_names_when_resolved_then_the_system_monospace_leads() {
+        let system = FontSystem::new();
+        assert_eq!(
+            resolve_families(&system, &[]).first(),
+            Some(&FamilyOwned::Monospace)
+        );
+    }
+
+    #[test]
+    fn given_an_uninstalled_family_name_when_resolved_then_it_falls_back_to_monospace() {
+        let system = FontSystem::new();
+        let names = vec!["No Such Face 12345".to_string()];
+        assert_eq!(
+            resolve_families(&system, &names).first(),
+            Some(&FamilyOwned::Monospace)
+        );
+    }
+
+    #[test]
+    fn given_an_installed_family_name_when_resolved_then_that_face_leads_ignoring_case() {
+        let system = FontSystem::new();
+        let installed = system
+            .db()
+            .faces()
+            .find_map(|face| face.families.first().map(|(name, _)| name.clone()))
+            .expect("the font database is never empty");
+        let shouted = vec![installed.to_uppercase()];
+        match resolve_families(&system, &shouted).first() {
+            Some(FamilyOwned::Name(name)) => assert_eq!(name.as_str(), installed),
+            other => panic!("expected {installed}, resolved {other:?}"),
+        }
+    }
+
+    #[test]
+    fn given_two_installed_names_when_resolved_then_both_are_kept_in_order() {
+        let system = FontSystem::new();
+        let mut names: Vec<String> = Vec::new();
+        for face in system.db().faces() {
+            if let Some((family, _)) = face.families.first()
+                && !names.contains(family)
+            {
+                names.push(family.clone());
+            }
+            if names.len() == 2 {
+                break;
+            }
+        }
+        let resolved = resolve_families(&system, &names);
+        assert!(resolved.len() >= 2);
+        match (&resolved[0], &resolved[1]) {
+            (FamilyOwned::Name(first), FamilyOwned::Name(second)) => {
+                assert_eq!(first.as_str(), names[0]);
+                assert_eq!(second.as_str(), names[1]);
+            }
+            other => panic!("expected two named faces, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn given_a_configured_family_when_the_renderer_shapes_a_glyph_then_it_still_draws() {
+        let installed = {
+            let system = FontSystem::new();
+            system
+                .db()
+                .faces()
+                .find_map(|face| face.families.first().map(|(name, _)| name.clone()))
+                .expect("the font database is never empty")
+        };
+        let mut font = FontRenderer::new(16.0, &[installed]);
+        assert!(font.raster("M", TextStyle::NORMAL).is_some());
+        assert!(font.cell().width >= 4);
     }
 }

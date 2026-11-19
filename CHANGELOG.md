@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.11.1
+
+### Fixes
+
+- The portable window no longer deadlocks when a tab strip is double-clicked or
+  `⌘T` is pressed. `new_tab` held the state lock and then called a helper that
+  took the same non-reentrant lock, so the main thread blocked forever and the
+  window beachballed. The helper now reads a borrowed state.
+- Double-clicking a pane's tab strip opens the tab in **that** pane. The click
+  used to resolve the workspace's active surface, which is usually the other
+  pane after a split.
+- Arrow keys move the settings, palette and attention selection. `overlay_key`
+  took the overlay out of `self` and then measured the row count through
+  `self.overlay_len()`, which saw `None` and clamped every key press back to the
+  first row.
+- The portable window repaints when something changes instead of on a 30 Hz
+  timer. Pty output, child exits and socket requests wake the loop, and the only
+  scheduled wake is the 530 ms cursor blink (plus bell flashes and autosave
+  debounce). Idle CPU went from a full core to under 1 %.
+- The macOS shell's config save merges into the file instead of rewriting it
+  with only the keys it owns, so `fontFamily` and the portable window's keys
+  survive a font-size change.
+
+### Portable window
+
+- `fontFamily` in `config.json` takes one name or a list, like Ghostty's
+  `font-family`. The first installed name draws the text and the rest fill in
+  the glyphs it lacks, so a Nerd Font listed after the text face supplies prompt
+  icons and powerline separators. The system monospace stays the last resort.
+  The resolved list is logged at startup, with the cell size.
+- Glyphs are rasterised into a padded box, so icons and powerline separators are
+  no longer clipped at the cell edge, and a face that lacks a character hands
+  over to the next family instead of silently borrowing an unrelated font.
+
 ## 0.11.0
 
 The portable window closes the remaining daily-use parity with the AppKit shell

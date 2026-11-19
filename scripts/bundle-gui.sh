@@ -24,6 +24,22 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/berth-gui"
 
+# A Finder launch has no terminal and no environment, and the macOS app already
+# owns the default socket. The wrapper gives the portable window its own data
+# directory so it can run at the same time, and drops Finder's -psn argument.
+cat > "$APP/Contents/MacOS/BerthGui" <<'LAUNCHER'
+#!/bin/sh
+# Run the portable window with its own endpoint, next to the macOS app.
+if [ -n "${1:-}" ] && [ "$1" != "${1#-psn_}" ]; then shift; fi
+dir="$HOME/Library/Application Support/Berth-Portable"
+mkdir -p "$dir"
+: "${BERTH_DATA_DIR:=$dir}"
+: "${BERTH_SOCKET_PATH:=$dir/berth.sock}"
+export BERTH_DATA_DIR BERTH_SOCKET_PATH
+exec "$(dirname "$0")/berth-gui" "$@"
+LAUNCHER
+chmod +x "$APP/Contents/MacOS/BerthGui"
+
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -32,7 +48,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleName</key><string>Berth Portable</string>
   <key>CFBundleDisplayName</key><string>Berth Portable</string>
   <key>CFBundleIdentifier</key><string>dev.berth.gui</string>
-  <key>CFBundleExecutable</key><string>berth-gui</string>
+  <key>CFBundleExecutable</key><string>BerthGui</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
   <key>CFBundleVersion</key><string>${BUILD}</string>

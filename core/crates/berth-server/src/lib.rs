@@ -86,12 +86,17 @@ impl ServerConfig {
 /// Shell policy invoked by `session.save` before the core dispatches it.
 pub type SessionHook = Arc<dyn Fn() + Send + Sync>;
 
+/// Shell policy invoked after every request, so a GUI can repaint on state that
+/// arrived over the socket instead of polling.
+pub type RequestHook = Arc<dyn Fn() + Send + Sync>;
+
 /// Builder + owner of the accept thread.
 pub struct Server {
     config: ServerConfig,
     state: Arc<Mutex<AppState>>,
     ops: Arc<dyn SurfaceOps>,
     on_session_save: Option<SessionHook>,
+    on_request: Option<RequestHook>,
 }
 
 impl Server {
@@ -105,6 +110,7 @@ impl Server {
             state,
             ops,
             on_session_save: None,
+            on_request: None,
         }
     }
 
@@ -112,6 +118,13 @@ impl Server {
     /// journal, so persistence is a shell callback, not a core concern.
     pub fn on_session_save(mut self, hook: SessionHook) -> Self {
         self.on_session_save = Some(hook);
+        self
+    }
+
+    /// Called after each request is dispatched. Must be cheap: the shell
+    /// coalesces it into one repaint.
+    pub fn on_request(mut self, hook: RequestHook) -> Self {
+        self.on_request = Some(hook);
         self
     }
 
@@ -144,6 +157,7 @@ impl Server {
             mode: self.config.mode,
             token,
             on_session_save: self.on_session_save,
+            on_request: self.on_request,
             fanout: Mutex::new(Fanout {
                 ring: EventRing::new(self.config.replay_capacity),
                 clients: std::collections::HashMap::new(),
@@ -276,6 +290,7 @@ struct Shared {
     mode: SocketMode,
     token: Option<String>,
     on_session_save: Option<SessionHook>,
+    on_request: Option<RequestHook>,
     fanout: Mutex<Fanout>,
     /// Serializes request dispatch so event sequence order matches response
     /// order across connections (normally the shell's main thread).
@@ -369,6 +384,9 @@ impl Shared {
             response
         };
         self.flush_events_locked();
+        if let Some(hook) = &self.on_request {
+            hook();
+        }
         Some(response)
     }
 

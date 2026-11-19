@@ -251,6 +251,9 @@ pub struct Config {
     pub font_size: f32,
     /// `0` means automatic: `2 / backing scale`, clamped to `0.75..=2`.
     pub font_scale: f32,
+    /// Preferred terminal faces, first installed one wins. Empty keeps the
+    /// system monospace.
+    pub font_family: Vec<String>,
     pub compact_sidebar: bool,
     pub sidebar_width: f64,
     pub socket: Option<String>,
@@ -262,11 +265,34 @@ impl Default for Config {
         Self {
             font_size: DEFAULT_FONT_SIZE,
             font_scale: 0.0,
+            font_family: Vec::new(),
             compact_sidebar: false,
             sidebar_width: 200.0,
             socket: None,
             shortcuts: Shortcuts::build(&HashMap::new()),
         }
+    }
+}
+
+/// `fontFamily` takes one name or a list, the same shape Ghostty accepts.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum FamilyNames {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl FamilyNames {
+    fn into_names(self) -> Vec<String> {
+        let names = match self {
+            Self::One(name) => vec![name],
+            Self::Many(names) => names,
+        };
+        names
+            .into_iter()
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .collect()
     }
 }
 
@@ -276,6 +302,7 @@ impl Default for Config {
 struct FileConfig {
     font_size: Option<f32>,
     font_scale: Option<f32>,
+    font_family: Option<FamilyNames>,
     compact_sidebar: Option<bool>,
     sidebar_width: Option<f64>,
     socket: Option<String>,
@@ -319,6 +346,10 @@ impl Config {
                 .font_scale
                 .unwrap_or(defaults.font_scale)
                 .clamp(0.0, 3.0),
+            font_family: file
+                .font_family
+                .map(FamilyNames::into_names)
+                .unwrap_or_default(),
             compact_sidebar: file.compact_sidebar.unwrap_or(defaults.compact_sidebar),
             sidebar_width: file
                 .sidebar_width
@@ -368,6 +399,9 @@ impl Config {
         })?;
         object.insert("fontSize".into(), serde_json::json!(self.font_size));
         object.insert("fontScale".into(), serde_json::json!(self.font_scale));
+        if !self.font_family.is_empty() {
+            object.insert("fontFamily".into(), serde_json::json!(self.font_family));
+        }
         object.insert(
             "compactSidebar".into(),
             serde_json::json!(self.compact_sidebar),
@@ -397,6 +431,19 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A unique path under the temp directory, so parallel tests cannot share
+    /// a config file.
+    fn temp_path(prefix: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "berth-config-{prefix}-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
 
     #[test]
     fn given_a_missing_file_when_loaded_then_defaults_apply() {
@@ -503,14 +550,7 @@ mod tests {
 
     #[test]
     fn given_a_file_with_unknown_keys_when_saved_then_they_survive() {
-        let path = std::env::temp_dir().join(format!(
-            "berth-config-{}-{}.json",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let path = temp_path("unknown");
         std::fs::write(&path, r#"{"fontSize": 10, "futureKey": {"a": 1}}"#).unwrap();
         let mut config = Config::parse(r#"{"fontSize": 10}"#).unwrap();
         config.font_size = 18.0;
@@ -529,5 +569,56 @@ mod tests {
     fn given_a_socket_key_when_parsed_then_it_is_exposed() {
         let config = Config::parse(r#"{"socket": "off"}"#).unwrap();
         assert_eq!(config.socket_mode(), Some("off"));
+    }
+
+    #[test]
+    fn given_one_font_family_when_parsed_then_it_is_a_single_entry_list() {
+        let config = Config::parse(r#"{"fontFamily": "Victor Mono"}"#).unwrap();
+        assert_eq!(config.font_family, vec!["Victor Mono".to_string()]);
+    }
+
+    #[test]
+    fn given_a_font_family_list_when_parsed_then_the_order_is_kept_and_blanks_dropped() {
+        let config =
+            Config::parse(r#"{"fontFamily": ["MesloLGS NF", "  ", " JetBrains Mono "]}"#).unwrap();
+        assert_eq!(
+            config.font_family,
+            vec!["MesloLGS NF".to_string(), "JetBrains Mono".to_string()]
+        );
+    }
+
+    #[test]
+    fn given_no_font_family_when_parsed_then_the_system_face_is_kept() {
+        assert!(Config::parse("{}").unwrap().font_family.is_empty());
+    }
+
+    #[test]
+    fn given_a_font_family_when_saved_then_it_round_trips() {
+        let path = temp_path("family");
+        let config = Config {
+            font_family: vec!["Fira Code".to_string()],
+            ..Config::default()
+        };
+        config.save_to(&path).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved["fontFamily"][0], "Fira Code");
+        assert_eq!(
+            Config::parse(&std::fs::read_to_string(&path).unwrap())
+                .unwrap()
+                .font_family,
+            vec!["Fira Code".to_string()]
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn given_no_font_family_when_saved_then_the_key_is_not_written() {
+        let path = temp_path("nofamily");
+        Config::default().save_to(&path).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(saved.get("fontFamily").is_none());
+        let _ = std::fs::remove_file(&path);
     }
 }

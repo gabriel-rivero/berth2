@@ -1,6 +1,6 @@
 # Known gaps and missing behavior
 
-Last audited: 2026-11-18, code at the 0.11.0 release: real text, scrollback,
+Last audited: 2026-11-18, code at the 0.11.1 release: real text, scrollback,
 selection with auto-scroll, clipboard, mouse reporting, IME, links, OSC events,
 divider and sidebar dragging, the palette, attention and settings panels, agent
 detection, autosave, journal, accessibility, logs and per-platform archives. This is the
@@ -16,9 +16,10 @@ app itself has the gaps listed in
 
 ### Terminal rendering
 
-- **One font family.** The system monospace face at `fontSize` × `fontScale`;
-  there is no family, weight, line-height or zoom control, and no per-font
-  metric tuning.
+- **One font family, no ligatures.** `fontFamily` picks the face (first
+  installed name wins, else system monospace) at `fontSize` × `fontScale`. There
+  is no weight, line-height or zoom control, and no per-font metric tuning.
+  Ligatures cannot render: each cell is shaped and cached on its own.
 - **No text effects beyond bold/italic/dim/underline.** No strikethrough, blink,
   underline colour, hyperlinks or per-cell font changes.
 - **No scrollbar.** Wheel and Shift+Page keys scroll, but nothing shows how far

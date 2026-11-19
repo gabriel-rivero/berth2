@@ -21,6 +21,7 @@ socket mode is read at launch.
   },
   "fontSize": 14,
   "fontScale": 0,
+  "fontFamily": ["MesloLGS NF", "JetBrains Mono"],
   "compactSidebar": false,
   "socket": "local"
 }
@@ -37,10 +38,21 @@ socket mode is read at launch.
   surfaces immediately (`ghostty_surface_update_config`), so no relaunch is
   needed. Each surface re-evaluates when it moves between screens.
 
-The portable window reads `fontSize` and `fontScale` with the same rule, rasterises
-the system monospace face with cosmic-text, and redraws with the new metrics when
-the window moves to a display with a different scale factor. It does not read the
-Ghostty config, so `font-family`, opacity and padding do not apply there.
+The portable window reads `fontSize` and `fontScale` with the same rule,
+rasterises the configured face with cosmic-text, and redraws with the new metrics
+when the window moves to a display with a different scale factor.
+- `fontFamily` takes one name or a list, the shape Ghostty accepts. The first
+  installed name draws the text; the rest fill in what it lacks, in order, so a
+  Nerd Font later in the list supplies prompt icons and powerline separators.
+  An unknown name is skipped, and an empty list or no installed match keeps the
+  system monospace. Terminal and chrome (tabs, sidebar) use the same list. It
+  applies at startup and when the window rebuilds its fonts, so restart after
+  editing it.
+
+It does not read the Ghostty config, so `font-family` set only in
+`~/.config/ghostty/config` does not apply there, and neither do opacity or
+padding. Ligatures do not render: the portable window shapes and caches one cell
+at a time, so a face with ligatures draws them as separate glyphs.
 
 ## Portable window shortcuts
 

@@ -11,7 +11,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.11.0"
+version = "0.11.1"
 edition = "2024"
 rust-version = "1.89"
 license = "MIT"
@@ -34,6 +34,8 @@ font8x8 = "0.3"
 # Real text: system font discovery, shaping and glyph rasterisation in-process.
 # No fontconfig: fontdb scans the platform font directories itself.
 cosmic-text = { version = "0.19", default-features = false, features = ["std", "swash"] }
+# Face identity, to tell a real hit from cosmic-text's fallback substitution.
+fontdb = "0.23"
 # System clipboard, text only.
 arboard = "3"
 # Screen-reader support for the window.
