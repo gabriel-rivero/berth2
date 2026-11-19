@@ -143,14 +143,13 @@ autosave, journal, accessibility, a desktop notification path, and per-platform
 release archives. What remains is tracked here rather than in the
 Swift gaps list, because several items are new to both shells.
 
-- **In-terminal search** (new; the macOS app has no search UI either). Find text
-  in the 10k-line scrollback, highlight matches, `Enter`/`⇧Enter` for
-  next/previous, `Esc` to clear. Ships in the portable window first, then the
-  AppKit surface through the same core helper.
-- **Tab rename and drag-reorder** (new). Both need protocol work before UI:
-  a per-surface user title that an OSC 0/2 update does not clobber, and a
-  `surface.move` method for order. Then a rename affordance (double-click or
-  context) and drag in the strip, in both shells.
+- ~~In-terminal search~~ shipped in 0.12.0 in the portable window: find text in
+  the 10k-line scrollback, highlight matches, `Enter`/`⇧Enter` for
+  next/previous, `Esc` to clear. The AppKit surface still needs it.
+- ~~Tab rename and drag-reorder~~ shipped in 0.12.0 with `surface.rename`,
+  `surface.move` and a user title that OSC does not clobber. Double-click
+  renames; dragging reorders. Workspaces and groups rename from the sidebar.
+  The AppKit surface still needs the UI.
 - ~~Accessibility tree~~: shipped in 0.11 as an AccessKit tree with the focused
   terminal as a `Terminal` node; sidebar and panels are still outside it.
 - **Packaging**: 0.11 publishes the portable window binaries next to the macOS

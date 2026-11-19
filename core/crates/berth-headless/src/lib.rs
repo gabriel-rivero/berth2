@@ -480,6 +480,38 @@ impl PtyHost {
             .contents_between(start_row, start_col, end_row, end_col))
     }
 
+    /// The whole scrollback plus the live screen, oldest line first. Reading
+    /// it walks the view once per screenful and restores the caller's offset.
+    pub fn scrollback_lines(&self, surface_id: &str) -> Result<Vec<String>, CoreError> {
+        let surface = self.surface(surface_id)?;
+        let mut parser = lock(&surface.screen);
+        let (rows, _) = parser.screen().size();
+        let rows = rows.get() as usize;
+        let len = parser.screen().scrollback_len();
+        let offset = parser.screen().scrollback();
+        let mut lines = vec![String::new(); len + rows];
+        let mut at = 0;
+        loop {
+            parser.screen_mut().set_scrollback(at);
+            let text = parser.screen().contents();
+            let start = len - at.min(len);
+            for (index, line) in text.lines().enumerate().take(rows) {
+                if start + index < lines.len() {
+                    lines[start + index] = line.to_string();
+                }
+            }
+            if at >= len {
+                break;
+            }
+            at = (at + rows).min(len);
+        }
+        parser.screen_mut().set_scrollback(offset);
+        while lines.last().is_some_and(|line| line.is_empty()) {
+            lines.pop();
+        }
+        Ok(lines)
+    }
+
     /// One visible row as text, for word selection.
     pub fn line_text(&self, surface_id: &str, row: u16) -> Result<String, CoreError> {
         let surface = self.surface(surface_id)?;

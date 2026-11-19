@@ -71,7 +71,10 @@ the macOS window's 12pt labels.
   any keystroke returns to the live screen. The cursor disappears while
   scrolled, like Ghostty.
 - Drag, shift-drag and double-click selection over the visible view or
-  scrollback, with auto-scroll when the drag passes the top or bottom; `Super+C`/`Ctrl+Shift+C` copies, `Super+V`/`Ctrl+Shift+V` pastes,
+  scrollback, with auto-scroll when the drag passes the top or bottom. Releasing
+  a selection of more than one cell copies it (`copyOnSelect`, on by default);
+  `Super+C`/`Ctrl+Shift+C` copies the focused pane's selection or the last pane
+  that had one, `Super+V`/`Ctrl+Shift+V` pastes,
   bracketed paste is honoured when the program enables it, and a multi-line
   paste opens a preview that sends only on Enter.
 - Mouse reporting: a program that enables X10, UTF-8 or SGR tracking receives
@@ -85,7 +88,10 @@ the macOS window's 12pt labels.
 - A thin scrollbar appears in a pane while its view is scrolled, so the position
   in the scrollback is visible.
 - OSC 0/2 titles reach the core as `surface.title_changed` and become tab labels
-  and the window title. OSC 7 sets the cwd, BEL and the visual bell increment
+  and the window title. Double-click a tab to give it a user title that OSC does
+  not overwrite; an empty title falls back to the OSC one. Dragging a tab
+  reorders it inside its pane (`surface.move`), and double-clicking a sidebar
+  workspace or group row renames it. OSC 7 sets the cwd, BEL and the visual bell increment
   `surface.bell`, OSC 9;4 reports progress, OSC 52 writes the clipboard, and
   OSC 9/777 create a core notification.
 - A pane closes when its process exits, so `Ctrl+D` removes the tab and the
@@ -117,6 +123,10 @@ the macOS window's 12pt labels.
 - The session autosaves 500 ms after the last core event, including changes made
   by the CLI or hooks through the socket, so a crash loses at most one
   interaction.
+- `Super+F`/`Ctrl+Shift+F` searches the focused pane's 10,000-line scrollback
+  case-insensitively. The panel shows the match count; Enter and Shift+Enter
+  walk the matches, scrolling each into view and highlighting it, and Escape
+  closes and clears the highlight.
 - Keys go through the headless encoder: printable text, Ctrl/Alt/Shift
   combinations, Enter, Tab, Esc, Backspace, Delete, Insert, arrows, Home/End,
   Page keys and F1–F12. `Shift+Enter` sends `ESC CR`, the sequence Claude Code
@@ -125,14 +135,14 @@ the macOS window's 12pt labels.
 
 **Panels**
 
-- `⌘⇧P` opens the command palette: a fuzzy-matched list of all 14 configurable
+- `⌘⇧P` opens the command palette: a fuzzy-matched list of all 15 configurable
   actions with their current chord, arrow keys to move, Enter to run, Escape to
   close. `Ctrl+Shift+P` outside macOS.
 - `⌘I` opens the attention list: unacknowledged notifications newest first, with
   the level colour, body and workspace. Enter acknowledges the notification,
   selects its workspace and focuses the surface that raised it.
 - `⌘,` opens settings: font size, display scale, compact sidebar, close on exit,
-  socket mode, and all 14 shortcuts. Arrows adjust or cycle a value, Enter
+  socket mode, and all 15 shortcuts. Arrows adjust or cycle a value, Enter
   toggles or starts recording a chord, Backspace unbinds. Every change applies
   live and is written to `config.json` with the keys the window does not own
   preserved.

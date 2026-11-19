@@ -32,10 +32,11 @@ pub enum Action {
     ShowAttention,
     ToggleSidebar,
     Settings,
+    Search,
 }
 
 impl Action {
-    pub const ALL: [Action; 14] = [
+    pub const ALL: [Action; 15] = [
         Action::SplitRight,
         Action::SplitDown,
         Action::NewTab,
@@ -50,6 +51,7 @@ impl Action {
         Action::ShowAttention,
         Action::ToggleSidebar,
         Action::Settings,
+        Action::Search,
     ];
 
     /// How the palette spells the action.
@@ -69,6 +71,7 @@ impl Action {
             Action::ShowAttention => "Attention List",
             Action::ToggleSidebar => "Toggle Sidebar",
             Action::Settings => "Settings",
+            Action::Search => "Search Scrollback",
         }
     }
 
@@ -89,6 +92,7 @@ impl Action {
             Action::ShowAttention => "showAttention",
             Action::ToggleSidebar => "toggleSidebar",
             Action::Settings => "settings",
+            Action::Search => "search",
         }
     }
 
@@ -109,6 +113,7 @@ impl Action {
             Action::ShowAttention => "cmd+i",
             Action::ToggleSidebar => "cmd+opt+s",
             Action::Settings => "cmd+,",
+            Action::Search => "cmd+f",
         }
     }
 
@@ -131,6 +136,7 @@ impl Action {
             Action::ShowAttention => "ctrl+shift+i",
             Action::ToggleSidebar => "ctrl+alt+s",
             Action::Settings => "ctrl+,",
+            Action::Search => "ctrl+shift+f",
         }
     }
 }
@@ -264,6 +270,8 @@ pub struct Config {
     /// Start a restored Claude session with permissions bypassed. On by
     /// default; the injected mode is not written back into the saved payload.
     pub claude_bypass_permissions: bool,
+    /// Copy a mouse selection when the button is released. On by default.
+    pub copy_on_select: bool,
     pub sidebar_width: f64,
     pub socket: Option<String>,
     pub shortcuts: Shortcuts,
@@ -279,6 +287,7 @@ impl Default for Config {
             close_exited_panes: true,
             restore_launch_flags: true,
             claude_bypass_permissions: true,
+            copy_on_select: true,
             sidebar_width: 200.0,
             socket: None,
             shortcuts: Shortcuts::build(&HashMap::new()),
@@ -319,6 +328,7 @@ struct FileConfig {
     close_exited_panes: Option<bool>,
     restore_launch_flags: Option<bool>,
     claude_bypass_permissions: Option<bool>,
+    copy_on_select: Option<bool>,
     sidebar_width: Option<f64>,
     socket: Option<String>,
     shortcuts: HashMap<String, String>,
@@ -375,6 +385,7 @@ impl Config {
             claude_bypass_permissions: file
                 .claude_bypass_permissions
                 .unwrap_or(defaults.claude_bypass_permissions),
+            copy_on_select: file.copy_on_select.unwrap_or(defaults.copy_on_select),
             sidebar_width: file
                 .sidebar_width
                 .unwrap_or(defaults.sidebar_width)
@@ -442,6 +453,10 @@ impl Config {
             "claudeBypassPermissions".into(),
             serde_json::json!(self.claude_bypass_permissions),
         );
+        object.insert(
+            "copyOnSelect".into(),
+            serde_json::json!(self.copy_on_select),
+        );
         object.insert("sidebarWidth".into(), serde_json::json!(self.sidebar_width));
         if let Some(socket) = &self.socket {
             object.insert("socket".into(), serde_json::json!(socket));
@@ -490,6 +505,7 @@ mod tests {
         assert!(config.close_exited_panes);
         assert!(config.restore_launch_flags);
         assert!(config.claude_bypass_permissions);
+        assert!(config.copy_on_select);
     }
 
     #[test]
@@ -642,6 +658,18 @@ mod tests {
         let saved: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(saved["claudeBypassPermissions"], false);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn given_copy_on_select_false_when_parsed_then_it_is_kept() {
+        let config = Config::parse(r#"{"copyOnSelect": false}"#).unwrap();
+        assert!(!config.copy_on_select);
+        let path = temp_path("copy-on-select");
+        config.save_to(&path).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved["copyOnSelect"], false);
         let _ = std::fs::remove_file(&path);
     }
 

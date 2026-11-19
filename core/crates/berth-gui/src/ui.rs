@@ -206,6 +206,9 @@ pub fn active_surface(state: &AppState) -> Option<String> {
 /// Short, stable tab label. OSC titles win; the cwd's last component and a tab
 /// number are the fallback.
 pub fn tab_title(surface: &Surface, index: usize) -> String {
+    if let Some(title) = &surface.user_title {
+        return title.clone();
+    }
     if !surface.title.is_empty() {
         return surface.title.clone();
     }
@@ -609,6 +612,7 @@ mod tests {
             workspace_id: "wsp_test".into(),
             kind: berth_core::model::SurfaceKind::Terminal,
             title: title.into(),
+            user_title: None,
             cwd: cwd.into(),
             pid: None,
             tty: None,

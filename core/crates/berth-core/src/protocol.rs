@@ -122,6 +122,8 @@ pub mod names {
     pub const SURFACE_CREATED: &str = "surface.created";
     pub const SURFACE_CLOSED: &str = "surface.closed";
     pub const SURFACE_TITLE_CHANGED: &str = "surface.title_changed";
+    pub const SURFACE_RENAMED: &str = "surface.renamed";
+    pub const SURFACE_MOVED: &str = "surface.moved";
     pub const SURFACE_PWD_CHANGED: &str = "surface.pwd_changed";
     pub const SURFACE_BELL: &str = "surface.bell";
     pub const SURFACE_PROGRESS: &str = "surface.progress";

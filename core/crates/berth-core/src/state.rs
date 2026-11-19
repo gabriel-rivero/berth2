@@ -241,6 +241,7 @@ impl AppState {
             workspace_id: ws.id.clone(),
             kind: SurfaceKind::Terminal,
             title: String::new(),
+            user_title: None,
             cwd: cwd.unwrap_or_default().to_string(),
             pid: if spawned.pid == 0 {
                 None

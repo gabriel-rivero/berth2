@@ -28,6 +28,7 @@ pub enum Command {
     ShowAttention,
     ToggleSidebar,
     Settings,
+    Search,
     /// Select the nth workspace, one-based.
     Workspace(usize),
     Copy,
@@ -55,6 +56,7 @@ impl Command {
             Action::ShowAttention => Command::ShowAttention,
             Action::ToggleSidebar => Command::ToggleSidebar,
             Action::Settings => Command::Settings,
+            Action::Search => Command::Search,
         }
     }
 }

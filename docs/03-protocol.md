@@ -113,6 +113,8 @@ Event:
 | `surface.cycle` | `{surface_id, direction:"next"\|"prev"}` | `{surface_id}` |
 | `surface.close` | `{surface_id}` | `{}` |
 | `surface.update` | `{surface_id, title?, cwd?, progress?, clear_progress?, bell?, exited?}` | `{}` |
+| `surface.rename` | `{surface_id, title}` | `{}` — sets the user title; an empty string clears it |
+| `surface.move` | `{surface_id, index}` | `{}` — reorders the tab inside its pane |
 | `surface.send_text` | `{surface_id, text}` | `{}` |
 | `surface.send_key` | `{surface_id, key:"enter"\|"ctrl-c"\|"esc"\|…, mods?:[…]}` | `{}` |
 | `surface.read_text` | `{surface_id, scope:"screen"\|"scrollback", max_bytes?}` | `{text, truncated}` |
@@ -160,6 +162,15 @@ provider's session id, without re-registering or losing the saved argv, and
 fills the payload when the agent had none. A shell that saved no command
 captures the live foreground argv at that moment, so launch flags such as
 `--allow-dangerously-skip-permissions` survive a restore.
+
+A surface has two titles. `title` is the program's OSC 0/2 title and changes
+whenever the program does; `user_title` is set by `surface.rename` and is never
+overwritten by OSC. Tab labels and the window use `user_title` when present,
+then `title`, then the cwd's last component.
+
+`surface.move` reorders a tab inside its own pane by zero-based `index`, clamped
+to the end. The pane's active index follows the moved surface, and the change is
+part of the next snapshot.
 
 ### notification
 | method | params | result |

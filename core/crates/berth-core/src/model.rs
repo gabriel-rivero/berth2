@@ -275,6 +275,9 @@ pub struct Surface {
     pub kind: SurfaceKind,
     #[serde(default)]
     pub title: String,
+    /// A name the user set with `surface.rename`. OSC titles never overwrite it.
+    #[serde(default)]
+    pub user_title: Option<String>,
     #[serde(default)]
     pub cwd: String,
     #[serde(default)]

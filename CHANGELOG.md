@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.12.0
+
+### Features
+
+- Copy on select: releasing a multi-cell selection writes it to the clipboard,
+  and `Super+C` falls back to the last pane that had a selection. Configurable
+  with `copyOnSelect` and a Settings row.
+- Tabs can be renamed with a user title that OSC does not overwrite, and dragged
+  to reorder inside their pane (`surface.rename`, `surface.move`). Workspaces
+  and groups rename from the sidebar with a double-click.
+- Scrollback search (`Super+F` / `Ctrl+Shift+F`): case-insensitive, with a match
+  count, Enter/Shift+Enter to walk matches, scrolling and highlighting each.
+
 ## 0.11.4
 
 ### Changes

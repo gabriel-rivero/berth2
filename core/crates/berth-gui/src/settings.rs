@@ -18,6 +18,7 @@ pub enum Field {
     CloseExitedPanes,
     RestoreLaunchFlags,
     ClaudeBypass,
+    CopyOnSelect,
     SocketMode,
     Shortcut(Action),
 }
@@ -92,6 +93,11 @@ pub fn rows(config: &Config, recording: Option<Action>) -> Vec<Row> {
             .to_string(),
         },
         Row {
+            field: Field::CopyOnSelect,
+            label: "Copy on select".into(),
+            value: if config.copy_on_select { "on" } else { "off" }.to_string(),
+        },
+        Row {
             field: Field::SocketMode,
             label: "Automation socket".into(),
             value: match config.socket_mode() {
@@ -161,6 +167,7 @@ pub fn adjust(config: &mut Config, field: Field, delta: i32) -> Change {
         | Field::CloseExitedPanes
         | Field::RestoreLaunchFlags
         | Field::ClaudeBypass
+        | Field::CopyOnSelect
         | Field::Shortcut(_) => Change::None,
     }
 }
@@ -182,6 +189,10 @@ pub fn toggle(config: &mut Config, field: Field) -> Change {
         }
         Field::ClaudeBypass => {
             config.claude_bypass_permissions = !config.claude_bypass_permissions;
+            Change::View
+        }
+        Field::CopyOnSelect => {
+            config.copy_on_select = !config.copy_on_select;
             Change::View
         }
         _ => Change::None,
@@ -209,7 +220,7 @@ mod tests {
     fn given_the_settings_rows_when_built_then_every_action_has_a_row() {
         let config = Config::default();
         let rows = rows(&config, None);
-        assert_eq!(rows.len(), 7 + Action::ALL.len());
+        assert_eq!(rows.len(), 8 + Action::ALL.len());
         assert_eq!(rows[0].label, "Font size");
     }
 
@@ -292,6 +303,13 @@ mod tests {
         let mut config = Config::default();
         assert_eq!(toggle(&mut config, Field::ClaudeBypass), Change::View);
         assert!(!config.claude_bypass_permissions);
+    }
+
+    #[test]
+    fn given_copy_on_select_when_toggled_then_it_flips() {
+        let mut config = Config::default();
+        assert_eq!(toggle(&mut config, Field::CopyOnSelect), Change::View);
+        assert!(!config.copy_on_select);
     }
 
     #[test]

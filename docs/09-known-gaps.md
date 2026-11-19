@@ -1,6 +1,6 @@
 # Known gaps and missing behavior
 
-Last audited: 2026-11-19, code at the 0.11.4 release: real text, scrollback,
+Last audited: 2026-11-19, code at the 0.12.0 release: real text, scrollback,
 selection with auto-scroll, clipboard, mouse reporting, IME, links, OSC events,
 divider and sidebar dragging, the palette, attention and settings panels, agent
 detection, autosave, journal, accessibility, logs and per-platform archives. This is the
@@ -26,8 +26,8 @@ app itself has the gaps listed in
   into the scrollback the view is.
 - **No audible bell, dock badge or per-provider mute.** Bells flash a pane ring;
   OSC 9/777 notifications also reach the desktop on macOS and Linux.
-- **No search**, no graphics protocols (sixel/kitty/iTerm images), and no
-  hyperlink (`OSC 8`) hover styling beyond the text scan.
+- **No graphics protocols** (sixel/kitty/iTerm images) and no hyperlink
+  (`OSC 8`) hover styling beyond the text scan.
 
 
 ### Input and clipboard
@@ -49,10 +49,10 @@ app itself has the gaps listed in
 
 - **One window, one visible workspace.** No multiple windows, detachable
   surfaces or overview.
-- **Sidebar has no colours, icons or filter.** Groups can only be collapsed, not
-  created, renamed or coloured from the window.
-- **Tabs cannot be renamed or reordered.** No overflow menu; a very large number
-  of tabs squeezes every label.
+- **Sidebar has no colours, icons or filter.** Groups can be renamed and
+  collapsed, but there is no create/colour picker.
+- **No tab overflow menu.** Tabs resize down to a minimum label; a very large
+  number of tabs squeezes every label. Rename and drag-reorder are in.
 - **No pane maximize/zoom, swap or move.** Splits and closes are created by
   chords or the protocol; there is no context menu.
 - **No divider cursor change.** The grab band is 7 px and the pointer stays an

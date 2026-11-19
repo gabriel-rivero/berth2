@@ -297,7 +297,11 @@ impl<'a> Painter<'a> {
                     fg = options.theme.inactive(fg);
                 }
                 self.fill(Rect::new(origin.0, origin.1, cell.width, cell.height), bg);
-                if selected {
+                let search_hit = options.search.is_some_and(|(line, start, len)| {
+                    let absolute = view.scrollback_len - view.scrollback + row;
+                    absolute == line && col >= start && col < start + len
+                });
+                if selected || search_hit {
                     self.blend(
                         Rect::new(origin.0, origin.1, cell.width, cell.height),
                         options.theme.selection,
@@ -697,6 +701,8 @@ pub struct ScreenOptions<'a> {
     pub cursor_visible: bool,
     pub selection: Option<&'a Selection>,
     pub exited: bool,
+    /// Absolute line, column and length of a search match to highlight.
+    pub search: Option<(usize, usize, usize)>,
 }
 
 fn rgb(color: [u8; 3]) -> u32 {

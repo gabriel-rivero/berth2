@@ -327,6 +327,8 @@ fn main() {
         sidebar_scroll: 0,
         drag: Drag::None,
         selection: HashMap::new(),
+        last_selection: None,
+        search_highlight: None,
         scroll: HashMap::new(),
         last_meta: HashMap::new(),
         flashes: HashMap::new(),
@@ -407,6 +409,21 @@ impl From<accesskit_winit::Event> for UserEvent {
     }
 }
 
+#[derive(Clone, Debug)]
+struct SearchMatch {
+    line: usize,
+    col: usize,
+    len: usize,
+}
+
+#[derive(Clone, Debug)]
+struct SearchHighlight {
+    surface_id: String,
+    line: usize,
+    col: usize,
+    len: usize,
+}
+
 /// A modal panel over the window. Both variants are lists driven by the core.
 enum Overlay {
     Palette {
@@ -425,6 +442,26 @@ enum Overlay {
     Confirm {
         text: String,
     },
+    /// A tab, workspace or group name being edited.
+    Rename {
+        target: RenameTarget,
+        value: String,
+    },
+    /// Case-insensitive search through one pane's scrollback.
+    Search {
+        surface_id: String,
+        lines: Vec<String>,
+        query: String,
+        matches: Vec<SearchMatch>,
+        selected: usize,
+    },
+}
+
+#[derive(Clone, Debug)]
+enum RenameTarget {
+    Tab(String),
+    Workspace(String),
+    Group(String),
 }
 
 impl Overlay {
@@ -433,7 +470,8 @@ impl Overlay {
             Overlay::Palette { selected, .. }
             | Overlay::Attention { selected }
             | Overlay::Settings { selected, .. } => *selected,
-            Overlay::Confirm { .. } => 0,
+            Overlay::Rename { .. } | Overlay::Confirm { .. } => 0,
+            Overlay::Search { selected, .. } => *selected,
         }
     }
 
@@ -441,8 +479,9 @@ impl Overlay {
         match self {
             Overlay::Palette { selected, .. }
             | Overlay::Attention { selected }
-            | Overlay::Settings { selected, .. } => *selected = index,
-            Overlay::Confirm { .. } => {}
+            | Overlay::Settings { selected, .. }
+            | Overlay::Search { selected, .. } => *selected = index,
+            Overlay::Rename { .. } | Overlay::Confirm { .. } => {}
         }
     }
 }
@@ -460,6 +499,12 @@ enum Drag {
         start_x: f64,
         start_width: f64,
     },
+    /// A tab being dragged along its strip.
+    Tab {
+        surface_id: String,
+        pane_id: String,
+        start_x: usize,
+    },
 }
 
 struct Click {
@@ -474,6 +519,8 @@ enum ClickTarget {
     Tab(String),
     TabStrip(String),
     SidebarEmpty,
+    WorkspaceRow(String),
+    GroupRow(String),
 }
 
 /// The metadata last applied to the core, so a frame only emits changes.
@@ -512,6 +559,11 @@ struct Gui {
     sidebar_scroll: usize,
     drag: Drag,
     selection: HashMap<String, Selection>,
+    /// The surface that last held a selection, so copy still works when focus
+    /// and the selection disagree.
+    last_selection: Option<String>,
+    /// The search match to highlight in the painted pane.
+    search_highlight: Option<SearchHighlight>,
     scroll: HashMap<String, usize>,
     last_meta: HashMap<String, AppliedMeta>,
     flashes: HashMap<String, Instant>,
@@ -666,12 +718,21 @@ impl ApplicationHandler<UserEvent> for Gui {
                     self.request_redraw();
                     return;
                 }
-                self.drag = Drag::None;
+                if let Drag::Tab {
+                    surface_id,
+                    pane_id,
+                    start_x,
+                } = std::mem::replace(&mut self.drag, Drag::None)
+                {
+                    let end_x = self.pointer.0.max(0.0) as usize;
+                    self.finish_tab_drag(&surface_id, &pane_id, start_x, end_x);
+                }
                 if let Some(surface_id) = self.active_surface()
                     && let Some(selection) = self.selection.get_mut(&surface_id)
                 {
                     selection.dragging = false;
                 }
+                self.copy_on_select();
                 self.request_redraw();
             }
             WindowEvent::MouseWheel { delta, .. } => self.wheel(delta),
@@ -1343,12 +1404,18 @@ impl Gui {
                 };
                 let selection = self.selection.get(surface_id).copied();
                 let exited = !self.host.is_alive(surface_id);
+                let search = self
+                    .search_highlight
+                    .as_ref()
+                    .filter(|hit| &hit.surface_id == surface_id)
+                    .map(|hit| (hit.line, hit.col, hit.len));
                 let options = ScreenOptions {
                     theme: &theme,
                     focused: pane.focused,
                     cursor_visible: pane.focused && self.window_focused && blink_on,
                     selection: selection.as_ref(),
                     exited,
+                    search,
                 };
                 let font = self.font();
                 painter.screen(font, &screen, pane.content, &options);
@@ -1810,11 +1877,20 @@ impl Gui {
                 .find(|tab| tab.rect.contains(point.0, point.1))
             {
                 if self.same_click(point, ClickTarget::Tab(tab.id.clone())) {
-                    self.close_surface(&tab.id);
+                    let value = lock(&self.state)
+                        .surface(&tab.id)
+                        .and_then(|surface| surface.user_title.clone())
+                        .unwrap_or_default();
+                    self.open_rename(RenameTarget::Tab(tab.id.clone()), value);
                     return;
                 }
                 self.record_click(point, ClickTarget::Tab(tab.id.clone()));
                 self.activate(&tab.id);
+                self.drag = Drag::Tab {
+                    surface_id: tab.id.clone(),
+                    pane_id: pane.pane_id.clone(),
+                    start_x: point.0,
+                };
                 return;
             }
             if pane.tab_bar.contains(point.0, point.1) {
@@ -1853,6 +1929,7 @@ impl Gui {
         {
             selection.extend(target);
             selection.dragging = true;
+            self.last_selection = Some(surface_id.clone());
             return;
         }
         if self.same_click(point, ClickTarget::Pane(surface_id.clone())) {
@@ -1861,11 +1938,13 @@ impl Gui {
             };
             let selection = Selection::word_at(target, &line);
             self.selection.insert(surface_id.clone(), selection);
+            self.last_selection = Some(surface_id.clone());
             return;
         }
         self.record_click(point, ClickTarget::Pane(surface_id.clone()));
         self.selection
             .insert(surface_id.clone(), Selection::new(target));
+        self.last_selection = Some(surface_id.clone());
     }
 
     fn sidebar_pressed(&mut self, point: (usize, usize), nav: Nav) {
@@ -1903,6 +1982,17 @@ impl Gui {
         };
         match &row.kind {
             ui::RowKind::Group { id, collapsed, .. } => {
+                if self.same_click(point, ClickTarget::GroupRow(id.clone())) {
+                    let name = lock(&self.state)
+                        .groups
+                        .iter()
+                        .find(|group| &group.id == id)
+                        .map(|group| group.name.clone())
+                        .unwrap_or_default();
+                    self.open_rename(RenameTarget::Group(id.clone()), name);
+                    return;
+                }
+                self.record_click(point, ClickTarget::GroupRow(id.clone()));
                 let params = serde_json::json!({
                     "group_id": id,
                     "collapsed": !*collapsed,
@@ -1912,6 +2002,15 @@ impl Gui {
                 }
             }
             ui::RowKind::Workspace(workspace) => {
+                if self.same_click(point, ClickTarget::WorkspaceRow(workspace.id.clone())) {
+                    let name = lock(&self.state)
+                        .workspace(&workspace.id)
+                        .map(|workspace| workspace.name.clone())
+                        .unwrap_or_default();
+                    self.open_rename(RenameTarget::Workspace(workspace.id.clone()), name);
+                    return;
+                }
+                self.record_click(point, ClickTarget::WorkspaceRow(workspace.id.clone()));
                 self.select_workspace(&workspace.id);
                 self.drag = Drag::Workspace {
                     id: workspace.id.clone(),
@@ -2055,9 +2154,11 @@ impl Gui {
                     if let Some(selection) = self.selection.get_mut(&surface_id) {
                         selection.extend(cell);
                     }
+                    self.last_selection = Some(surface_id.clone());
                     self.request_redraw();
                 }
             }
+            Drag::Tab { .. } => {}
             Drag::Divider(divider) => {
                 let axis = match divider.orientation {
                     Orientation::Horizontal => point.0,
@@ -2350,8 +2451,22 @@ impl Gui {
         }
     }
 
+    /// The surface with a selection to copy: the focused one when it has one,
+    /// else the last surface that held a selection.
+    fn selection_surface(&self) -> Option<String> {
+        if let Some(id) = self.active_surface()
+            && self.selection.contains_key(&id)
+        {
+            return Some(id);
+        }
+        self.last_selection
+            .as_ref()
+            .filter(|id| self.selection.contains_key(*id))
+            .cloned()
+    }
+
     fn copy_selection(&mut self) {
-        let Some(surface_id) = self.active_surface() else {
+        let Some(surface_id) = self.selection_surface() else {
             return;
         };
         let Some(selection) = self.selection.get(&surface_id).copied() else {
@@ -2377,6 +2492,26 @@ impl Gui {
         {
             eprintln!("berth-gui: clipboard: {error}");
         }
+    }
+
+    /// Copy the finished selection without a chord, like a terminal with
+    /// copy-on-select. A single cell (a plain click) never replaces the
+    /// clipboard.
+    fn copy_on_select(&mut self) {
+        if !self.config.copy_on_select {
+            return;
+        }
+        let Some(surface_id) = self.selection_surface() else {
+            return;
+        };
+        let Some(selection) = self.selection.get(&surface_id) else {
+            return;
+        };
+        let (start, end) = selection.span();
+        if start == end {
+            return;
+        }
+        self.copy_selection();
     }
 
     fn paste(&mut self) {
@@ -2518,6 +2653,7 @@ impl Gui {
                     recording: None,
                 });
             }
+            Command::Search => self.open_search(),
         }
         self.request_redraw();
     }
@@ -2598,6 +2734,8 @@ impl Gui {
             Overlay::Attention { .. } => self.attention_entries().len(),
             Overlay::Settings { recording, .. } => settings::rows(&self.config, *recording).len(),
             Overlay::Confirm { text } => confirm_lines(text).len(),
+            Overlay::Rename { .. } => 0,
+            Overlay::Search { matches, .. } => matches.len(),
         }
     }
 
@@ -2609,6 +2747,7 @@ impl Gui {
         let mut next_selected: Option<usize> = None;
         let mut close = false;
         let mut activate = false;
+        let mut rename_commit: Option<(RenameTarget, String)> = None;
         match &mut overlay {
             Overlay::Palette { query, .. } => match &event.logical_key {
                 Key::Named(NamedKey::Escape) => close = true,
@@ -2666,11 +2805,90 @@ impl Gui {
             } => {
                 self.settings_key(event, &mut close, &mut activate, selected, recording);
             }
+            Overlay::Search {
+                surface_id,
+                lines,
+                query,
+                matches,
+                selected,
+            } => {
+                let mut changed = false;
+                let mut jump = false;
+                match &event.logical_key {
+                    Key::Named(NamedKey::Escape) => {
+                        self.search_highlight = None;
+                        close = true;
+                    }
+                    Key::Named(NamedKey::Enter) => {
+                        if !matches.is_empty() {
+                            let delta = if self.modifiers.shift_key() { -1 } else { 1 };
+                            let next = (*selected as i32 + delta).rem_euclid(matches.len() as i32)
+                                as usize;
+                            *selected = next;
+                            jump = true;
+                        }
+                    }
+                    Key::Named(NamedKey::ArrowDown) => {
+                        if !matches.is_empty() {
+                            *selected = (*selected + 1) % matches.len();
+                            jump = true;
+                        }
+                    }
+                    Key::Named(NamedKey::ArrowUp) => {
+                        if !matches.is_empty() {
+                            *selected = (*selected + matches.len() - 1) % matches.len();
+                            jump = true;
+                        }
+                    }
+                    Key::Named(NamedKey::Backspace) => {
+                        query.pop();
+                        changed = true;
+                    }
+                    Key::Character(text)
+                        if !self.modifiers.control_key()
+                            && !self.modifiers.super_key()
+                            && !self.modifiers.alt_key() =>
+                    {
+                        query.push_str(text);
+                        changed = true;
+                    }
+                    _ => {}
+                }
+                if changed {
+                    *matches = Self::search_matches(lines, query);
+                    *selected = 0;
+                    jump = true;
+                }
+                if jump && let Some(hit) = matches.get(*selected) {
+                    self.jump_to_match(surface_id, hit);
+                }
+            }
+            Overlay::Rename { target, value } => match &event.logical_key {
+                Key::Named(NamedKey::Escape) => close = true,
+                Key::Named(NamedKey::Enter) => {
+                    rename_commit = Some((target.clone(), value.clone()));
+                    close = true;
+                }
+                Key::Named(NamedKey::Backspace) => {
+                    value.pop();
+                }
+                Key::Character(text)
+                    if !self.modifiers.control_key()
+                        && !self.modifiers.super_key()
+                        && !self.modifiers.alt_key() =>
+                {
+                    value.push_str(text);
+                }
+                _ => {}
+            },
             Overlay::Confirm { .. } => match &event.logical_key {
                 Key::Named(NamedKey::Escape) => close = true,
                 Key::Named(NamedKey::Enter) => activate = true,
                 _ => close = true,
             },
+        }
+        if let Some((target, value)) = rename_commit {
+            self.commit_rename(&target, &value);
         }
         if let Some(index) = next_selected {
             overlay.select(index);
@@ -2777,6 +2995,121 @@ impl Gui {
         self.request_redraw();
     }
 
+    fn open_search(&mut self) {
+        let Some(surface_id) = self.active_surface() else {
+            return;
+        };
+        let lines = match self.host.scrollback_lines(&surface_id) {
+            Ok(lines) => lines,
+            Err(error) => {
+                eprintln!("berth-gui: scrollback: {error}");
+                return;
+            }
+        };
+        self.overlay = Some(Overlay::Search {
+            surface_id,
+            lines,
+            query: String::new(),
+            matches: Vec::new(),
+            selected: 0,
+        });
+        self.request_redraw();
+    }
+
+    fn search_matches(lines: &[String], query: &str) -> Vec<SearchMatch> {
+        if query.is_empty() {
+            return Vec::new();
+        }
+        let needle = query.to_lowercase();
+        let mut matches = Vec::new();
+        for (line, text) in lines.iter().enumerate() {
+            let haystack = text.to_lowercase();
+            let mut from = 0;
+            while let Some(found) = haystack[from..].find(&needle) {
+                let col = from + found;
+                matches.push(SearchMatch {
+                    line,
+                    col: haystack[..col].chars().count(),
+                    len: needle.chars().count(),
+                });
+                from = col + needle.len().max(1);
+                if matches.len() >= 500 {
+                    return matches;
+                }
+            }
+        }
+        matches
+    }
+
+    fn jump_to_match(&mut self, surface_id: &str, hit: &SearchMatch) {
+        let Ok(view) = self.host.screen_view(surface_id) else {
+            return;
+        };
+        let target = view.scrollback_len.saturating_sub(hit.line);
+        if let Ok(applied) = self.host.set_scrollback(surface_id, target) {
+            self.scroll.insert(surface_id.to_string(), applied);
+        }
+        self.search_highlight = Some(SearchHighlight {
+            surface_id: surface_id.to_string(),
+            line: hit.line,
+            col: hit.col,
+            len: hit.len,
+        });
+        self.request_redraw();
+    }
+
+    fn open_rename(&mut self, target: RenameTarget, value: String) {
+        self.overlay = Some(Overlay::Rename { target, value });
+        self.request_redraw();
+    }
+
+    fn commit_rename(&mut self, target: &RenameTarget, value: &str) {
+        let name = value.trim().to_string();
+        let result = match target {
+            RenameTarget::Tab(surface_id) => self.dispatch(
+                "surface.rename",
+                serde_json::json!({"surface_id": surface_id, "title": name}),
+            ),
+            RenameTarget::Workspace(workspace_id) => self.dispatch(
+                "workspace.update",
+                serde_json::json!({"workspace_id": workspace_id, "name": name}),
+            ),
+            RenameTarget::Group(group_id) => self.dispatch(
+                "group.update",
+                serde_json::json!({"group_id": group_id, "name": name}),
+            ),
+        };
+        if let Err(error) = result {
+            eprintln!("berth-gui: rename: {error}");
+        }
+    }
+
+    /// Finish a tab drag: move the tab to the slot under the pointer.
+    fn finish_tab_drag(&mut self, surface_id: &str, pane_id: &str, start_x: usize, end_x: usize) {
+        if start_x.abs_diff(end_x) < 6 {
+            return;
+        }
+        let nav = self.nav();
+        let (panes, _) = {
+            let state = lock(&self.state);
+            ui::build_panes(&state, nav.area, nav.cell.height, nav.tab_height, None)
+        };
+        let Some(pane) = panes.iter().find(|pane| pane.pane_id == pane_id) else {
+            return;
+        };
+        let target = pane
+            .tabs
+            .iter()
+            .position(|tab| end_x < tab.rect.x + tab.rect.w)
+            .unwrap_or(pane.tabs.len().saturating_sub(1));
+        if let Err(error) = self.dispatch(
+            "surface.move",
+            serde_json::json!({"surface_id": surface_id, "index": target}),
+        ) {
+            eprintln!("berth-gui: surface.move: {error}");
+        }
+    }
+
     /// Title, optional query, rows, selection and footer hint for the panel.
     fn panel_data(&self) -> Option<PanelContent> {
         match self.overlay.as_ref()? {
@@ -2797,6 +3130,40 @@ impl Gui {
                     .collect(),
                 selected: *selected,
                 hint: "↑↓ move · enter jump and acknowledge · esc close".to_string(),
+            }),
+            Overlay::Search {
+                lines,
+                query,
+                matches,
+                selected,
+                ..
+            } => Some(PanelContent {
+                title: if matches.is_empty() {
+                    "Search".to_string()
+                } else {
+                    format!("Search {}/{}", selected + 1, matches.len())
+                },
+                query: Some(query.clone()),
+                rows: matches
+                    .iter()
+                    .map(|hit| panel::PanelRow {
+                        label: lines
+                            .get(hit.line)
+                            .map(|line| line.trim().to_string())
+                            .unwrap_or_default(),
+                        detail: format!("line {}", hit.line + 1),
+                        color: None,
+                    })
+                    .collect(),
+                selected: *selected,
+                hint: "enter next · shift+enter prev · esc close".to_string(),
+            }),
+            Overlay::Rename { value, .. } => Some(PanelContent {
+                title: "Rename".to_string(),
+                query: Some(value.clone()),
+                rows: Vec::new(),
+                selected: 0,
+                hint: "enter save · esc cancel".to_string(),
             }),
             Overlay::Confirm { text } => Some(PanelContent {
                 title: format!("Paste {} lines?", confirm_lines(text).len()),
@@ -2841,7 +3208,10 @@ impl Gui {
                 (size.width as usize, size.height as usize)
             })
             .unwrap_or((0, 0));
-        let has_query = matches!(self.overlay, Some(Overlay::Palette { .. }));
+        let has_query = matches!(
+            self.overlay,
+            Some(Overlay::Palette { .. } | Overlay::Rename { .. } | Overlay::Search { .. })
+        );
         panel::geometry(Rect::new(0, 0, width, height), self.scale, has_query)
     }
 
@@ -2895,6 +3265,7 @@ impl Gui {
                     }
                 }
             }
+            Some(Overlay::Rename { .. }) | Some(Overlay::Search { .. }) => {}
             Some(Overlay::Confirm { text }) => {
                 self.send_paste(&text);
             }
@@ -3247,6 +3618,29 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(test)]
+mod search_tests {
+    use super::Gui;
+
+    #[test]
+    fn given_a_query_then_matches_are_case_insensitive_and_keep_order() {
+        let lines = vec![
+            "alpha beta".to_string(),
+            "BETA gamma".to_string(),
+            "nothing".to_string(),
+        ];
+        let hits = Gui::search_matches(&lines, "beta");
+        assert_eq!(hits.len(), 2);
+        assert_eq!((hits[0].line, hits[0].col, hits[0].len), (0, 6, 4));
+        assert_eq!((hits[1].line, hits[1].col), (1, 0));
+    }
+
+    #[test]
+    fn given_an_empty_query_then_there_are_no_matches() {
+        assert!(Gui::search_matches(&["alpha".to_string()], "").is_empty());
+    }
 }
 
 #[cfg(test)]

@@ -436,6 +436,55 @@ fn handle(
             }
             Ok(json!({"surface": state.surface(&id)}))
         }
+        "surface.rename" => {
+            let p: SurfaceRename = params(raw)?;
+            let title = p.title.trim().to_string();
+            let surface = state
+                .surface_mut(&p.surface_id)
+                .ok_or_else(|| CoreError::not_found(format!("no surface {}", p.surface_id)))?;
+            surface.user_title = if title.is_empty() { None } else { Some(title) };
+            let surface_id = surface.id.clone();
+            let user_title = surface.user_title.clone();
+            state.emit(
+                names::SURFACE_RENAMED,
+                json!({"surface_id": surface_id, "user_title": user_title}),
+            );
+            Ok(json!({}))
+        }
+        "surface.move" => {
+            let p: SurfaceMove = params(raw)?;
+            let surface = state
+                .surface(&p.surface_id)
+                .cloned()
+                .ok_or_else(|| CoreError::not_found(format!("no surface {}", p.surface_id)))?;
+            let pane = state
+                .panes
+                .get_mut(&surface.pane_id)
+                .ok_or_else(|| CoreError::not_found("pane for surface"))?;
+            let from = pane
+                .surfaces
+                .iter()
+                .position(|id| id == &p.surface_id)
+                .ok_or_else(|| CoreError::not_found("surface not in its pane"))?;
+            let active = pane.active_surface().map(str::to_string);
+            let to = p.index.min(pane.surfaces.len().saturating_sub(1));
+            if from != to {
+                let id = pane.surfaces.remove(from);
+                pane.surfaces.insert(to, id);
+                if let Some(active) = active {
+                    pane.active = pane
+                        .surfaces
+                        .iter()
+                        .position(|id| *id == active)
+                        .unwrap_or(pane.active);
+                }
+            }
+            state.emit(
+                names::SURFACE_MOVED,
+                json!({"surface_id": p.surface_id, "index": to}),
+            );
+            Ok(json!({}))
+        }
         "surface.send_text" => {
             let p: SendText = params(raw)?;
             state
@@ -871,6 +920,16 @@ struct SurfaceUpdate {
     exited: Option<bool>,
 }
 #[derive(Debug, Deserialize)]
+struct SurfaceRename {
+    surface_id: String,
+    title: String,
+}
+#[derive(Debug, Deserialize)]
+struct SurfaceMove {
+    surface_id: String,
+    index: usize,
+}
+#[derive(Debug, Deserialize)]
 struct SendText {
     surface_id: String,
     text: String,
@@ -998,6 +1057,8 @@ pub const METHODS: &[&str] = &[
     "surface.cycle",
     "surface.close",
     "surface.update",
+    "surface.rename",
+    "surface.move",
     "surface.send_text",
     "surface.send_key",
     "surface.read_text",
@@ -1378,6 +1439,85 @@ mod tests {
         assert_eq!(updated["agent"]["resume"]["session_ref"], "sess-9");
         assert_eq!(updated["agent"]["resume"]["cwd"], "/work/project");
         assert_eq!(updated["agent"]["resume"]["argv"], json!([]));
+    }
+
+    #[test]
+    fn given_a_user_title_when_an_osc_title_arrives_then_the_user_title_wins() {
+        let mut st = AppState::default();
+        call(&mut st, "workspace.create", json!({}));
+        let sid = call(&mut st, "surface.list", json!({}))["surfaces"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        call(
+            &mut st,
+            "surface.rename",
+            json!({"surface_id": sid, "title": "build"}),
+        );
+        call(
+            &mut st,
+            "surface.update",
+            json!({"surface_id": sid, "title": "vim README.md"}),
+        );
+        let surface = call(&mut st, "surface.list", json!({}))["surfaces"][0].clone();
+        assert_eq!(surface["title"], "vim README.md");
+        assert_eq!(surface["user_title"], "build");
+
+        call(
+            &mut st,
+            "surface.rename",
+            json!({"surface_id": sid, "title": "  "}),
+        );
+        let surface = call(&mut st, "surface.list", json!({}))["surfaces"][0].clone();
+        assert!(surface["user_title"].is_null());
+    }
+
+    #[test]
+    fn given_three_tabs_when_one_moves_then_the_pane_order_and_active_tab_follow() {
+        let mut st = AppState::default();
+        let ws = call(&mut st, "workspace.create", json!({}));
+        let wsid = ws["workspace"]["id"].as_str().unwrap().to_string();
+        let first = call(&mut st, "surface.list", json!({}))["surfaces"][0].clone();
+        let pane = first["pane_id"].as_str().unwrap().to_string();
+        let first = first["id"].as_str().unwrap().to_string();
+        let second = call(
+            &mut st,
+            "surface.create",
+            json!({"pane_id": pane, "focus": true}),
+        )["surface_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let third = call(
+            &mut st,
+            "surface.create",
+            json!({"pane_id": pane, "focus": true}),
+        )["surface_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        // second was active before third was created; move the first tab last.
+        call(&mut st, "surface.activate", json!({"surface_id": second}));
+        call(
+            &mut st,
+            "surface.move",
+            json!({"surface_id": first, "index": 2}),
+        );
+        let layout = call(&mut st, "workspace.layout", json!({"workspace_id": wsid}));
+        let surfaces: Vec<&str> = layout["panes"][0]["surfaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|id| id.as_str().unwrap())
+            .collect();
+        assert_eq!(
+            surfaces,
+            vec![second.as_str(), third.as_str(), first.as_str()]
+        );
+        assert_eq!(
+            layout["panes"][0]["active_surface"].as_str(),
+            Some(second.as_str())
+        );
     }
 
     #[test]

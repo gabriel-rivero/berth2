@@ -26,6 +26,7 @@ socket mode is read at launch.
   "closeExitedPanes": true,
   "restoreLaunchFlags": true,
   "claudeBypassPermissions": true,
+  "copyOnSelect": true,
   "socket": "local"
 }
 ```
@@ -79,6 +80,7 @@ capture, so the window ships a Ctrl-based default table instead:
 | `showAttention` | `cmd+i` | `ctrl+shift+i` |
 | `toggleSidebar` | `cmd+opt+s` | `ctrl+alt+s` |
 | `settings` | `cmd+,` | `ctrl+,` |
+| `search` | `cmd+f` | `ctrl+shift+f` |
 
 A value overrides the default for that action; an empty string unbinds it. The
 settings panel (`⌘,` / `Ctrl+,`) edits this table, the font size, the display
@@ -95,6 +97,16 @@ the macOS shell ignores that key.
 
 - `compactSidebar: true` reduces row height from 62 to 52 points and hides the
   metadata line (workspace name, cwd, git branch, listening ports).
+
+## Selection and search
+
+- `copyOnSelect` defaults to `true`: releasing the mouse after selecting more
+  than one cell writes the selection to the clipboard. A single-cell click
+  never replaces it. `Super+C`/`Ctrl+Shift+C` still copies the selection of the
+  focused pane, or of the last pane that had one.
+- `search` opens the scrollback search for the focused pane. Enter moves to the
+  next match, Shift+Enter to the previous one, Escape closes and clears the
+  highlight.
 
 ## Panes on exit
 
