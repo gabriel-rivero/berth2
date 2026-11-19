@@ -118,21 +118,52 @@ jobs:
           path: berth-gui-*
           retention-days: 7
 
-  # Attach the portable archives to the release the app job published.
+  # One publish step, only after the app and every portable archive built. A
+  # tag that loses a runner must not publish a release missing a platform.
   portable-release:
     needs: [app, portable]
     runs-on: ubuntu-latest
-    if: always() && startsWith(github.ref, 'refs/tags/v') && needs.app.result == 'success'
+    if: startsWith(github.ref, 'refs/tags/v')
     steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: Berth-*
+          merge-multiple: true
+          path: dist
       - uses: actions/download-artifact@v4
         with:
           pattern: portable-*
           merge-multiple: true
-          path: portable
+          path: dist
+      - name: release notes
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          {
+            echo "Berth ${GITHUB_REF_NAME} — macOS 14+, Apple Silicon."
+            echo
+            echo "Download \`Berth-*.zip\`, unzip, and right-click → Open the first"
+            echo "time (the app is ad-hoc signed, not notarized)."
+            echo
+            echo "The portable window is in \`berth-gui-*\` (Linux/Windows/macOS,"
+            echo "unsigned, one binary, run it from a terminal)."
+            echo
+          } > release-notes.md
+          awk -v ver="$version" '
+            $0 ~ "^## " ver "$" { capture = 1; next }
+            capture && /^## / { exit }
+            capture { print }
+          ' CHANGELOG.md >> release-notes.md
+          if ! grep -q "^### " release-notes.md; then
+            echo "::error::CHANGELOG.md has no section for $version"
+            exit 1
+          fi
       - uses: softprops/action-gh-release@v2
         with:
-          files: portable/*
+          files: dist/*
           prerelease: true
+          name: Berth ${{ github.ref_name }}
+          body_path: release-notes.md
 
   # The real product: pinned Ghostty engine + AppKit shell, built into a .app.
   app:
@@ -244,39 +275,3 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      # Release notes are the tagged CHANGELOG section, so a tag cannot ship a
-      # body that still describes the previous release.
-      - name: release notes
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          version="${GITHUB_REF_NAME#v}"
-          {
-            echo "Berth ${GITHUB_REF_NAME} — macOS 14+, Apple Silicon."
-            echo
-            echo "Download \`Berth-*.zip\`, unzip, and right-click → Open the first"
-            echo "time (the app is ad-hoc signed, not notarized)."
-            echo
-            echo "The portable window is in \`berth-gui-*\` (Linux/Windows/macOS,"
-            echo "unsigned, one binary, run it from a terminal)."
-            echo
-          } > release-notes.md
-          awk -v ver="$version" '
-            $0 ~ "^## " ver "$" { capture = 1; next }
-            capture && /^## / { exit }
-            capture { print }
-          ' CHANGELOG.md >> release-notes.md
-          if ! grep -q "^### " release-notes.md; then
-            echo "::error::CHANGELOG.md has no section for $version"
-            exit 1
-          fi
-
-      # A tag is the release trigger. The app is ad-hoc signed and not
-      # notarized, so it ships as a pre-release that people opt into.
-      - name: publish release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: Berth-*.zip
-          prerelease: true
-          name: Berth ${{ github.ref_name }}
-          body_path: release-notes.md
