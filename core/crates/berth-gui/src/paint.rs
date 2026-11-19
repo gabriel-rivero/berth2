@@ -202,6 +202,54 @@ impl<'a> Painter<'a> {
         }
     }
 
+    /// Draw a decoded RGBA image scaled into a box, clipped to a pane.
+    #[allow(clippy::too_many_arguments)]
+    pub fn image(
+        &mut self,
+        x: i32,
+        y: i32,
+        width: usize,
+        height: usize,
+        pixels: &[u8],
+        source_width: u32,
+        source_height: u32,
+        clip: Rect,
+    ) {
+        if width == 0 || height == 0 || source_width == 0 || source_height == 0 {
+            return;
+        }
+        if pixels.len() < source_width as usize * source_height as usize * 4 {
+            return;
+        }
+        let Some(clip) = Rect::new(x.max(0) as usize, y.max(0) as usize, width, height)
+            .intersect(clip)
+            .and_then(|rect| rect.intersect(self.bounds()))
+        else {
+            return;
+        };
+        for gy in clip.y..clip.bottom() {
+            let sy = ((gy as i32 - y) as usize * source_height as usize / height)
+                .min(source_height as usize - 1);
+            for gx in clip.x..clip.right() {
+                let sx = ((gx as i32 - x) as usize * source_width as usize / width)
+                    .min(source_width as usize - 1);
+                let index = (sy * source_width as usize + sx) * 4;
+                let alpha = pixels[index + 3];
+                if alpha == 0 {
+                    continue;
+                }
+                self.blend_pixel(
+                    gx,
+                    gy,
+                    pixels[index],
+                    pixels[index + 1],
+                    pixels[index + 2],
+                    alpha,
+                );
+            }
+        }
+    }
+
     /// Draw a single line of text, clipped to `max_width` pixels. Returns the
     /// width used.
     pub fn text(

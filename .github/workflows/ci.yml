@@ -91,7 +91,7 @@ jobs:
         with:
           workspaces: core
       - name: build
-        run: cargo build --release -p berth-gui
+        run: cargo build --release -p berth-gui -p berth-cli
         working-directory: core
       - name: package
         shell: bash
@@ -99,11 +99,16 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           mkdir -p dist
           if [ "$RUNNER_OS" = "Windows" ]; then
-            cp core/target/release/berth-gui.exe dist/
-            (cd dist && 7z a "../berth-gui-${version}-${{ matrix.target }}.zip" berth-gui.exe >/dev/null)
+            cp core/target/release/berth-gui.exe core/target/release/berth.exe dist/
+            (cd dist && 7z a "../berth-gui-${version}-${{ matrix.target }}.zip" \
+              berth-gui.exe berth.exe >/dev/null)
           else
-            cp core/target/release/berth-gui dist/
-            tar -czf "berth-gui-${version}-${{ matrix.target }}.tar.gz" -C dist berth-gui
+            cp core/target/release/berth-gui core/target/release/berth dist/
+            tar -czf "berth-gui-${version}-${{ matrix.target }}.tar.gz" \
+              -C dist berth-gui berth
+          fi
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            ./packaging/debian/build-deb.sh "$version" core/target/release dist
           fi
           if [ "$RUNNER_OS" = "macOS" ]; then
             if [[ "$GITHUB_REF" == refs/tags/* ]]; then export VERSION="$version"; fi
@@ -111,11 +116,13 @@ jobs:
             ditto -c -k --keepParent build/BerthGui.app \
               "berth-gui-${version}-${{ matrix.target }}.app.zip"
           fi
-          ls -la berth-gui-*
+          ls -la berth-gui-* berth_*.deb 2>/dev/null || true
       - uses: actions/upload-artifact@v4
         with:
           name: portable-${{ matrix.target }}
-          path: berth-gui-*
+          path: |
+            berth-gui-*
+            berth_*.deb
           retention-days: 7
 
   # One publish step, only after the app and every portable archive built. A

@@ -23,6 +23,12 @@ echo "==> assembling $APP ($VERSION build $BUILD)"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/berth-gui"
+# The hook and wrapper commands need the CLI beside the window. Build it with
+# `make cli` (or `make gui-app`); a bare window build simply omits it.
+CLI="core/target/$CONFIG/berth"
+if [[ -x "$CLI" ]]; then
+  cp "$CLI" "$APP/Contents/MacOS/berth"
+fi
 
 # A Finder launch has no terminal and no environment, and the macOS app already
 # owns the default socket. The wrapper gives the portable window its own data

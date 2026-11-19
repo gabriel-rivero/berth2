@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Berth
+GenericName=Terminal Workspace
+Comment=Terminal workspace for running coding agents side by side
+Exec=berth-gui
+Icon=berth
+Terminal=false
+Categories=System;TerminalEmulator;
+Keywords=terminal;workspace;agent;claude;codex;opencode;copilot;
+StartupWMClass=berth-gui

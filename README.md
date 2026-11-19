@@ -36,6 +36,7 @@ cmux proved the shape (sidebar of workspaces next to a split grid of terminals) 
 | [docs/07-headless-shell.md](docs/07-headless-shell.md) | Linux/Windows shell spike: portable PTY host, VT readback, protocol acceptance |
 | [docs/08-minimal-window.md](docs/08-minimal-window.md) | Portable window: real text, scrollback, selection, clipboard, dividers, tabs, sidebar |
 | [docs/09-known-gaps.md](docs/09-known-gaps.md) | Audited inventory: portable GUI, headless shell, core/server/CLI, macOS gaps, non-goals |
+| [docs/10-graphics.md](docs/10-graphics.md) | Terminal graphics design: side-channel parser, image store, protocol order |
 | [docs/config.md](docs/config.md) | `config.json`, font/display scale, sidebar density, socket and env vars, logs |
 | [CHANGELOG.md](CHANGELOG.md) | Release notes, including 0.8.4 |
 

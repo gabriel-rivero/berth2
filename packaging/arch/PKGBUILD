@@ -1,0 +1,29 @@
+# Maintainer: Gabriel Rivero <gabriel.rivero.sa@gmail.com>
+pkgname=berth
+pkgver=0.13.0
+pkgrel=1
+pkgdesc="Terminal workspace for running coding agents side by side"
+arch=('x86_64' 'aarch64')
+url="https://github.com/gabriel-rivero/berth2"
+license=('MIT')
+depends=('glibc' 'gcc-libs')
+makedepends=('cargo' 'rust>=1.89')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+# Replace SKIP with the tag tarball's sha256 before submitting to the AUR.
+sha256sums=('SKIP')
+
+build() {
+  cd "$pkgname-$pkgver/core"
+  cargo build --release -p berth-cli -p berth-gui
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm755 core/target/release/berth "$pkgdir/usr/bin/berth"
+  install -Dm755 core/target/release/berth-gui "$pkgdir/usr/bin/berth-gui"
+  install -Dm644 packaging/berth.desktop \
+    "$pkgdir/usr/share/applications/berth.desktop"
+  install -Dm644 packaging/berth.svg \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/berth.svg"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

@@ -27,6 +27,8 @@ socket mode is read at launch.
   "restoreLaunchFlags": true,
   "claudeBypassPermissions": true,
   "copyOnSelect": true,
+  "scrollbackLines": 4000,
+  "graphics": true,
   "socket": "local"
 }
 ```
@@ -117,6 +119,22 @@ the macOS shell ignores that key.
 - Set it to `false` to keep the final screen with the red "process exited"
   banner and close the tab yourself. The key is read by the portable window;
   the macOS app keeps its own surfaces until you close them.
+
+## Scrollback
+
+- `scrollbackLines` is how many rows of history each surface keeps, with a
+  default of `10000` and a ceiling of `100000`. It is read at launch and applies
+  to every surface spawned after it, including restored ones.
+- The scrollback lives in memory in the terminal parser, per surface. It is not
+  written to disk and is not part of the session snapshot, so a relaunch starts
+  with an empty history. Budget roughly the row count times the columns times
+  the cell size: 10,000 rows at 200 columns is on the order of tens of MB per
+  busy surface, so lower it if you run many surfaces on a small machine.
+- `0` disables history; the view still shows the live screen.
+- `graphics` (default `true`) decodes terminal image protocols. It is read at
+  launch and applies to new surfaces. Images are bounded to 4096 px per axis,
+  eight per surface and 32 MB per surface; set it to `false` on memory-tight
+  machines.
 
 ## Agent resumes
 

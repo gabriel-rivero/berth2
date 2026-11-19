@@ -63,7 +63,7 @@ headless:
 gui:
 	cd core && cargo build --release -p berth-gui
 
-gui-app: gui
+gui-app: gui cli
 	./scripts/bundle-gui.sh release
 
 gui-smoke: gui

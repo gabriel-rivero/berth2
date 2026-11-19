@@ -529,6 +529,7 @@ dependencies = [
  "berth-server",
  "berth-transport",
  "libc",
+ "png 0.17.16",
  "portable-pty",
  "serde_json",
  "vt100",

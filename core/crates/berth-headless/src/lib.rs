@@ -48,6 +48,27 @@ pub struct CellView {
 }
 
 /// A snapshot of the visible screen. Safe to hand to a renderer thread.
+/// How an iTerm2 image asked to be sized.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Dimension {
+    #[default]
+    Auto,
+    Cells(usize),
+    Pixels(u32),
+}
+
+/// One decoded inline image, anchored to an absolute grid line.
+#[derive(Clone, Debug)]
+pub struct ImageView {
+    pub anchor_line: usize,
+    pub col: usize,
+    pub width: u32,
+    pub height: u32,
+    pub target_width: Dimension,
+    pub target_height: Dimension,
+    pub pixels: Arc<Vec<u8>>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ScreenView {
     pub cols: u16,
@@ -65,6 +86,7 @@ pub struct ScreenView {
     /// Wire encoding for mouse reports.
     pub mouse_encoding: MouseEncoding,
     pub cells: Vec<CellView>,
+    pub images: Vec<ImageView>,
 }
 
 /// How much pointer traffic the program wants. Mirrors `vt100`.
@@ -119,14 +141,27 @@ pub struct ScreenMeta {
 }
 
 /// Callbacks handed to `vt100`, writing into the surface's [`ScreenMeta`].
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct ScreenEvents {
     meta: Arc<Mutex<ScreenMeta>>,
+    images: Arc<Mutex<Vec<ImageView>>>,
+    graphics: bool,
+    scrollback: usize,
 }
 
 impl ScreenEvents {
-    pub fn new(meta: Arc<Mutex<ScreenMeta>>) -> Self {
-        Self { meta }
+    pub fn new(
+        meta: Arc<Mutex<ScreenMeta>>,
+        images: Arc<Mutex<Vec<ImageView>>>,
+        graphics: bool,
+        scrollback: usize,
+    ) -> Self {
+        Self {
+            meta,
+            images,
+            graphics,
+            scrollback,
+        }
     }
 }
 
@@ -186,7 +221,20 @@ impl vt100::Callbacks for ScreenEvents {
         }
     }
 
-    fn unhandled_osc(&mut self, _: &mut vt100::Screen, params: &[&[u8]]) {
+    fn unhandled_osc(&mut self, screen: &mut vt100::Screen, params: &[&[u8]]) {
+        if self.graphics && params.first().is_some_and(|param| *param == b"1337") {
+            // vte splits the OSC body on ';', and the iTerm2 metadata uses
+            // those too, so put the body back together before parsing it.
+            let mut payload = Vec::new();
+            for (index, part) in params.iter().enumerate().skip(1) {
+                if index > 1 {
+                    payload.push(b';');
+                }
+                payload.extend_from_slice(part);
+            }
+            store_iterm_image(screen, &payload, &self.images, self.scrollback);
+            return;
+        }
         let text = |bytes: &[u8]| String::from_utf8_lossy(bytes).into_owned();
         let mut meta = lock(&self.meta);
         match params {
@@ -204,6 +252,110 @@ impl vt100::Callbacks for ScreenEvents {
             _ => {}
         }
     }
+}
+
+/// Largest image accepted in either axis, and the per-surface cache budget.
+const MAX_IMAGE_AXIS: u32 = 4096;
+const MAX_IMAGES: usize = 8;
+const MAX_IMAGE_BYTES: usize = 32 * 1024 * 1024;
+
+/// OSC 1337 File=... : iTerm2's inline image. The data is base64 PNG.
+fn store_iterm_image(
+    screen: &vt100::Screen,
+    payload: &[u8],
+    images: &Arc<Mutex<Vec<ImageView>>>,
+    scrollback: usize,
+) {
+    let text = String::from_utf8_lossy(payload);
+    let Some(rest) = text.strip_prefix("File=") else {
+        return;
+    };
+    let Some((metadata, data)) = rest.split_once(':') else {
+        return;
+    };
+    let mut inline = false;
+    let mut target_width = Dimension::Auto;
+    let mut target_height = Dimension::Auto;
+    for pair in metadata.split(';') {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        match key {
+            "inline" => inline = value == "1",
+            "width" => target_width = parse_dimension(value),
+            "height" => target_height = parse_dimension(value),
+            _ => {}
+        }
+    }
+    if !inline {
+        return;
+    }
+    let Some(bytes) = decode_base64_bytes(data.as_bytes()) else {
+        return;
+    };
+    let Some((width, height, pixels)) = decode_png(&bytes) else {
+        return;
+    };
+    let (row, col) = screen.cursor_position();
+    let anchor_line = screen.scrollback_len() + usize::from(row);
+    let mut list = lock(images);
+    list.push(ImageView {
+        anchor_line,
+        col: usize::from(col),
+        width,
+        height,
+        target_width,
+        target_height,
+        pixels: Arc::new(pixels),
+    });
+    let oldest = screen.scrollback_len().saturating_sub(scrollback);
+    list.retain(|image| image.anchor_line >= oldest);
+    while list.len() > MAX_IMAGES {
+        list.remove(0);
+    }
+    let mut total: usize = list.iter().map(|image| image.pixels.len()).sum();
+    while total > MAX_IMAGE_BYTES && list.len() > 1 {
+        total -= list.remove(0).pixels.len();
+    }
+}
+
+fn parse_dimension(value: &str) -> Dimension {
+    if let Some(pixels) = value.strip_suffix("px") {
+        return pixels.parse().map(Dimension::Pixels).unwrap_or_default();
+    }
+    value.parse().map(Dimension::Cells).unwrap_or_default()
+}
+
+fn decode_png(bytes: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+    let mut reader = decoder.read_info().ok()?;
+    let width = reader.info().width;
+    let height = reader.info().height;
+    if width == 0 || height == 0 || width > MAX_IMAGE_AXIS || height > MAX_IMAGE_AXIS {
+        return None;
+    }
+    let mut buffer = vec![0u8; reader.output_buffer_size()];
+    let frame = reader.next_frame(&mut buffer).ok()?;
+    let data = &buffer[..frame.buffer_size()];
+    let pixels = match reader.info().color_type {
+        png::ColorType::Rgba => data.to_vec(),
+        png::ColorType::Rgb => data
+            .chunks(3)
+            .flat_map(|pixel| [pixel[0], pixel[1], pixel[2], 255])
+            .collect(),
+        png::ColorType::Grayscale => data
+            .iter()
+            .flat_map(|&gray| [gray, gray, gray, 255])
+            .collect(),
+        png::ColorType::GrayscaleAlpha => data
+            .chunks(2)
+            .flat_map(|pixel| [pixel[0], pixel[0], pixel[0], pixel[1]])
+            .collect(),
+        png::ColorType::Indexed => return None,
+    };
+    if pixels.len() != width as usize * height as usize * 4 {
+        return None;
+    }
+    Some((width, height, pixels))
 }
 
 fn parse_file_url(url: &str) -> Option<String> {
@@ -242,6 +394,10 @@ fn hex(byte: u8) -> Option<u8> {
 
 /// Decode the payload of an OSC 52 clipboard write.
 fn decode_base64(data: &[u8]) -> Option<String> {
+    String::from_utf8(decode_base64_bytes(data)?).ok()
+}
+
+fn decode_base64_bytes(data: &[u8]) -> Option<Vec<u8>> {
     let mut out = Vec::with_capacity(data.len() * 3 / 4);
     let mut accumulator = 0u32;
     let mut bits = 0u8;
@@ -264,7 +420,7 @@ fn decode_base64(data: &[u8]) -> Option<String> {
             accumulator &= (1 << bits) - 1;
         }
     }
-    String::from_utf8(out).ok()
+    Some(out)
 }
 
 type Parser = vt100::Parser<ScreenEvents>;
@@ -276,6 +432,7 @@ struct Surface {
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     screen: Arc<Mutex<Parser>>,
     meta: Arc<Mutex<ScreenMeta>>,
+    images: Arc<Mutex<Vec<ImageView>>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     pid: u32,
     tty: String,
@@ -294,6 +451,7 @@ pub struct PtyHost {
     surfaces: Mutex<HashMap<String, Arc<Surface>>>,
     transport: Mutex<Transport>,
     scrollback: usize,
+    graphics: bool,
     /// Fired by the read and exit threads. A GUI shell turns this into a
     /// repaint, so it never has to poll the surfaces for changes.
     waker: SharedWaker,
@@ -317,10 +475,15 @@ impl PtyHost {
     }
 
     pub fn with_scrollback(scrollback: usize) -> Self {
+        Self::with_options(scrollback, true)
+    }
+
+    pub fn with_options(scrollback: usize, graphics: bool) -> Self {
         Self {
             surfaces: Mutex::new(HashMap::new()),
             transport: Mutex::new(Transport::default()),
             scrollback,
+            graphics,
             waker: Arc::new(Mutex::new(None)),
         }
     }
@@ -389,6 +552,7 @@ impl PtyHost {
                 });
             }
         }
+        let images = lock(&surface.images).clone();
         Ok(ScreenView {
             cols,
             rows,
@@ -410,6 +574,7 @@ impl PtyHost {
                 vt100::MouseProtocolEncoding::Sgr => MouseEncoding::Sgr,
             },
             cells,
+            images,
         })
     }
 
@@ -614,7 +779,13 @@ impl SurfaceOps for PtyHost {
         let killer = child.clone_killer();
 
         let meta = Arc::new(Mutex::new(ScreenMeta::default()));
-        let events = ScreenEvents::new(Arc::clone(&meta));
+        let images = Arc::new(Mutex::new(Vec::new()));
+        let events = ScreenEvents::new(
+            Arc::clone(&meta),
+            Arc::clone(&images),
+            self.graphics,
+            self.scrollback,
+        );
         let screen = Arc::new(Mutex::new(Parser::new_with_callbacks(
             std::num::NonZeroU16::new(rows).expect("rows > 0"),
             std::num::NonZeroU16::new(cols).expect("cols > 0"),
@@ -638,6 +809,7 @@ impl SurfaceOps for PtyHost {
             writer,
             screen,
             meta,
+            images,
             killer: Mutex::new(killer),
             pid,
             tty: tty.clone(),
@@ -1190,7 +1362,8 @@ mod meta_tests {
 
     fn parser() -> (Arc<Mutex<ScreenMeta>>, Parser) {
         let meta = Arc::new(Mutex::new(ScreenMeta::default()));
-        let events = ScreenEvents::new(Arc::clone(&meta));
+        let images = Arc::new(Mutex::new(Vec::new()));
+        let events = ScreenEvents::new(Arc::clone(&meta), Arc::clone(&images), true, 10_000);
         let parser = Parser::new_with_callbacks(
             std::num::NonZeroU16::new(24).unwrap(),
             std::num::NonZeroU16::new(80).unwrap(),
@@ -1198,6 +1371,46 @@ mod meta_tests {
             events,
         );
         (meta, parser)
+    }
+
+    fn parser_with_images() -> (Arc<Mutex<Vec<ImageView>>>, Parser) {
+        let meta = Arc::new(Mutex::new(ScreenMeta::default()));
+        let images = Arc::new(Mutex::new(Vec::new()));
+        let events = ScreenEvents::new(
+            Arc::clone(&meta),
+            Arc::clone(&images),
+            true,
+            DEFAULT_SCROLLBACK,
+        );
+        let parser = Parser::new_with_callbacks(
+            std::num::NonZeroU16::new(24).unwrap(),
+            std::num::NonZeroU16::new(80).unwrap(),
+            DEFAULT_SCROLLBACK,
+            events,
+        );
+        (images, parser)
+    }
+
+    #[test]
+    fn given_an_iterm2_inline_png_then_the_image_is_stored_at_the_cursor() {
+        // 1x1 PNG, base64.
+        let data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+        let (images, mut parser) = parser_with_images();
+        parser.process(format!("\x1b]1337;File=inline=1;width=2:{data}\x07").as_bytes());
+        let list = images.lock().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!((list[0].width, list[0].height), (1, 1));
+        assert_eq!(list[0].target_width, Dimension::Cells(2));
+        assert_eq!((list[0].anchor_line, list[0].col), (0, 0));
+        assert_eq!(list[0].pixels.len(), 4);
+    }
+
+    #[test]
+    fn given_malformed_or_non_inline_iterm2_then_nothing_is_stored() {
+        let (images, mut parser) = parser_with_images();
+        parser.process(b"\x1b]1337;File=inline=0:AAAA\x07");
+        parser.process(b"\x1b]1337;File=inline=1:not-base64!\x07");
+        assert!(images.lock().unwrap().is_empty());
     }
 
     #[test]

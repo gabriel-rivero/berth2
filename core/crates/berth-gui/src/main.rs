@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use berth_core::model::Orientation;
 use berth_core::{AppState, CoreError, ReadScope, Request, Response, SurfaceOps, paths};
 use berth_headless::{
-    MouseEncoding, MouseMode, PtyHost, RestorePolicy, restore_session_with, save_session,
+    Dimension, MouseEncoding, MouseMode, PtyHost, RestorePolicy, restore_session_with, save_session,
 };
 use berth_server::{Server, ServerConfig, ServerHandle, SocketMode, auth};
 use winit::application::ApplicationHandler;
@@ -208,7 +208,10 @@ fn main() {
         SocketMode::Trusted | SocketMode::Off => args.token.clone(),
     };
 
-    let host = Arc::new(PtyHost::new());
+    let host = Arc::new(PtyHost::with_options(
+        config.scrollback_lines,
+        config.graphics,
+    ));
     host.set_transport(token.clone(), Some(paths::display(&socket)));
 
     let event_loop = match EventLoop::<UserEvent>::with_user_event().build() {
@@ -1419,6 +1422,56 @@ impl Gui {
                 };
                 let font = self.font();
                 painter.screen(font, &screen, pane.content, &options);
+                let cell = font.cell();
+                let first_line = screen.scrollback_len.saturating_sub(screen.scrollback);
+                for image in &screen.images {
+                    let row = image.anchor_line as isize - first_line as isize;
+                    let x = pane.content.x as isize + (image.col * cell.width) as isize;
+                    let y = pane.content.y as isize + row * cell.height as isize;
+                    let mut width = image.width as usize;
+                    let mut height = image.height as usize;
+                    let mut sized_width = false;
+                    let mut sized_height = false;
+                    match image.target_width {
+                        Dimension::Cells(cells) => {
+                            width = cells * cell.width;
+                            sized_width = true;
+                        }
+                        Dimension::Pixels(pixels) => {
+                            width = pixels as usize;
+                            sized_width = true;
+                        }
+                        Dimension::Auto => {}
+                    }
+                    match image.target_height {
+                        Dimension::Cells(cells) => {
+                            height = cells * cell.height;
+                            sized_height = true;
+                        }
+                        Dimension::Pixels(pixels) => {
+                            height = pixels as usize;
+                            sized_height = true;
+                        }
+                        Dimension::Auto => {}
+                    }
+                    if sized_width && !sized_height {
+                        height =
+                            (width * image.height as usize / image.width.max(1) as usize).max(1);
+                    } else if sized_height && !sized_width {
+                        width =
+                            (height * image.width as usize / image.height.max(1) as usize).max(1);
+                    }
+                    painter.image(
+                        x as i32,
+                        y as i32,
+                        width,
+                        height,
+                        image.pixels.as_slice(),
+                        image.width,
+                        image.height,
+                        pane.content,
+                    );
+                }
                 if pane.focused
                     && let Some(preedit) = self.preedit.clone()
                 {

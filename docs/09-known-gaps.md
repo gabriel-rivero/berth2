@@ -84,9 +84,10 @@ app itself has the gaps listed in
 
 - **Linux/X11 is the only scripted path.** Wayland, Windows and macOS are compile
   and test coverage; punch-through to a real desktop is manual.
-- **No installers.** Releases publish the portable window as single-binary
-  archives (plus the macOS `.app`); there is no `.deb`/AppImage/Flatpak, Windows
-  installer, signing or auto-update.
+- **Only two packages.** Releases attach a Debian `.deb` and ship an Arch
+  `PKGBUILD` in the tree, both installing the window and the CLI with a desktop
+  entry; there is no AppImage, Flatpak, rpm, Windows installer, signing or
+  auto-update. The AUR submission is manual.
 - **HiDPI and multi-monitor** are exercised through winit's scale factor and the
   font rebuild on scale change; mixed-DPI hotplug is untested.
 

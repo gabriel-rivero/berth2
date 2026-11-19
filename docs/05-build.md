@@ -235,6 +235,21 @@ If hooks do not fire, check `~/.claude/settings.json` and run the generated
 command by hand with a sample payload:
 `echo '{"hook_event_name":"Stop"}' | ./core/target/release/berth hook claude`.
 
+## Packaging Linux
+
+Every release archive contains both `berth-gui` and the `berth` CLI; the CLI is
+what `berth run`, `hooks install` and the socket scripts call.
+
+- **Debian/Ubuntu:** the tagged CI Linux job builds `berth_<version>_amd64.deb`
+  with `packaging/debian/build-deb.sh`, installing both binaries, the desktop
+  entry and icon under `/usr`. The binary needs only `libc6` and `libgcc-s1`;
+  X11 and Wayland libraries are opened at runtime.
+- **Arch:** `packaging/arch/PKGBUILD` builds both binaries from the tag and
+  installs the same files. Add the tag tarball's sha256 before submitting it to
+  the AUR; the tree copy uses `SKIP`.
+- **Local check:** `packaging/debian/build-deb.sh VERSION` after building both
+  Linux binaries, or `makepkg -si` from `packaging/arch` on Arch.
+
 ## M4 crash and restore checkpoint (run on the Mac)
 
 ```sh

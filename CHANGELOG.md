@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Changes
+
+- Linux packaging: every archive now contains the `berth` CLI beside
+  `berth-gui`, and releases attach a Debian `.deb` (both binaries, desktop
+  entry, icon) built in CI. An Arch `PKGBUILD` builds both from the tag.
+- `scrollbackLines` configures how many rows of history each surface keeps
+  (default 4,000, ceiling 100,000). The history lives in memory in the terminal
+  parser and is not part of the snapshot.
+- iTerm2 inline images (`OSC 1337 File=...`) render at the cursor cell, scaled to
+  the requested cell or pixel size and clipped to the pane. `graphics` (default
+  on) controls decoding; the per-surface cache is capped at eight images and
+  32 MB. Kitty graphics is next.
+
 ## 0.12.1
 
 ### Fixes

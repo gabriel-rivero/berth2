@@ -13,6 +13,7 @@ serde_json = { workspace = true }
 portable-pty = { workspace = true }
 vt100 = { workspace = true }
 libc = { workspace = true }
+png = "0.17"
 
 [dev-dependencies]
 berth-transport = { path = "../berth-transport" }

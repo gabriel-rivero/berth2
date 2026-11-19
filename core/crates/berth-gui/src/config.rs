@@ -272,6 +272,10 @@ pub struct Config {
     pub claude_bypass_permissions: bool,
     /// Copy a mouse selection when the button is released. On by default.
     pub copy_on_select: bool,
+    /// Rows of history kept in memory per surface. Read at launch.
+    pub scrollback_lines: usize,
+    /// Decode terminal image protocols and paint them. Read at launch.
+    pub graphics: bool,
     pub sidebar_width: f64,
     pub socket: Option<String>,
     pub shortcuts: Shortcuts,
@@ -288,6 +292,8 @@ impl Default for Config {
             restore_launch_flags: true,
             claude_bypass_permissions: true,
             copy_on_select: true,
+            scrollback_lines: 4_000,
+            graphics: true,
             sidebar_width: 200.0,
             socket: None,
             shortcuts: Shortcuts::build(&HashMap::new()),
@@ -329,6 +335,8 @@ struct FileConfig {
     restore_launch_flags: Option<bool>,
     claude_bypass_permissions: Option<bool>,
     copy_on_select: Option<bool>,
+    scrollback_lines: Option<usize>,
+    graphics: Option<bool>,
     sidebar_width: Option<f64>,
     socket: Option<String>,
     shortcuts: HashMap<String, String>,
@@ -386,6 +394,11 @@ impl Config {
                 .claude_bypass_permissions
                 .unwrap_or(defaults.claude_bypass_permissions),
             copy_on_select: file.copy_on_select.unwrap_or(defaults.copy_on_select),
+            scrollback_lines: file
+                .scrollback_lines
+                .unwrap_or(defaults.scrollback_lines)
+                .min(100_000),
+            graphics: file.graphics.unwrap_or(defaults.graphics),
             sidebar_width: file
                 .sidebar_width
                 .unwrap_or(defaults.sidebar_width)
@@ -457,6 +470,11 @@ impl Config {
             "copyOnSelect".into(),
             serde_json::json!(self.copy_on_select),
         );
+        object.insert(
+            "scrollbackLines".into(),
+            serde_json::json!(self.scrollback_lines),
+        );
+        object.insert("graphics".into(), serde_json::json!(self.graphics));
         object.insert("sidebarWidth".into(), serde_json::json!(self.sidebar_width));
         if let Some(socket) = &self.socket {
             object.insert("socket".into(), serde_json::json!(socket));
@@ -506,6 +524,8 @@ mod tests {
         assert!(config.restore_launch_flags);
         assert!(config.claude_bypass_permissions);
         assert!(config.copy_on_select);
+        assert!(config.graphics);
+        assert_eq!(config.scrollback_lines, 4000);
     }
 
     #[test]
@@ -670,6 +690,32 @@ mod tests {
         let saved: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(saved["copyOnSelect"], false);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn given_scrollback_lines_when_parsed_then_they_are_clamped_and_saved() {
+        assert_eq!(
+            Config::parse(r#"{"scrollbackLines": 2500}"#)
+                .unwrap()
+                .scrollback_lines,
+            2_500
+        );
+        assert_eq!(
+            Config::parse(r#"{"scrollbackLines": 900000}"#)
+                .unwrap()
+                .scrollback_lines,
+            100_000
+        );
+        let path = temp_path("scrollback");
+        let config = Config {
+            scrollback_lines: 4_096,
+            ..Config::default()
+        };
+        config.save_to(&path).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved["scrollbackLines"], 4_096);
         let _ = std::fs::remove_file(&path);
     }
 

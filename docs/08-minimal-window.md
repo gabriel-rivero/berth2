@@ -67,7 +67,7 @@ the macOS window's 12pt labels.
   Arabic and Hebrew join and read right to left instead of drawing one isolated
   cell at a time. Block elements (U+2580–U+259F) are filled as exact sub-cell
   rectangles, so pixel art and TUI mascots tile without seams.
-- Wheel and `Shift+PageUp`/`Shift+PageDown` scroll the 10,000-line scrollback;
+- Wheel and `Shift+PageUp`/`Shift+PageDown` scroll the configured scrollback (`scrollbackLines`, 4,000 by default);
   any keystroke returns to the live screen. The cursor disappears while
   scrolled, like Ghostty.
 - Drag, shift-drag and double-click selection over the visible view or
@@ -87,6 +87,10 @@ the macOS window's 12pt labels.
   links, dividers, the sidebar edge and terminal text.
 - A thin scrollbar appears in a pane while its view is scrolled, so the position
   in the scrollback is visible.
+- iTerm2 inline images (`OSC 1337 File=...`) render at the cursor cell, scaled to
+  their requested cell or pixel size, clipped to the pane, and scroll with the
+  text. `graphics` turns decoding off; each surface keeps at most eight images
+  within 32 MB. Kitty graphics is next, then sixel.
 - OSC 0/2 titles reach the core as `surface.title_changed` and become tab labels
   and the window title. Double-click a tab to give it a user title that OSC does
   not overwrite; an empty title falls back to the OSC one. Dragging a tab
@@ -123,7 +127,7 @@ the macOS window's 12pt labels.
 - The session autosaves 500 ms after the last core event, including changes made
   by the CLI or hooks through the socket, so a crash loses at most one
   interaction.
-- `Super+F`/`Ctrl+Shift+F` searches the focused pane's 10,000-line scrollback
+- `Super+F`/`Ctrl+Shift+F` searches the focused pane's configured scrollback
   case-insensitively. The panel shows the match count; Enter and Shift+Enter
   walk the matches, scrolling each into view and highlighting it, and Escape
   closes and clears the highlight.
