@@ -2,27 +2,30 @@
 # Cut a Berth release: bump versions, run the checks, commit, tag, and build
 # the local platform's artifacts into ~/Downloads.
 #
-# Usage: scripts/release.sh <version> [--no-build] [--push]
+# Usage: scripts/release.sh <version> [--no-build] [--build-only] [--push]
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 usage() {
   cat >&2 <<'EOF'
-usage: scripts/release.sh <version> [--no-build] [--push]
+usage: scripts/release.sh <version> [--no-build] [--build-only] [--push]
 
   version      semver, for example 0.15.1
   --no-build   bump, test, commit and tag only
+  --build-only build and copy artifacts for the current version
   --push       push HEAD and the tag to origin
 EOF
 }
 
 VERSION=""
 DO_BUILD=1
+BUILD_ONLY=0
 DO_PUSH=0
 for arg in "$@"; do
   case "$arg" in
     --no-build) DO_BUILD=0 ;;
+    --build-only) BUILD_ONLY=1 ;;
     --push) DO_PUSH=1 ;;
     -h|--help)
       usage
@@ -43,66 +46,93 @@ for arg in "$@"; do
   esac
 done
 
-if [ -z "$VERSION" ]; then
-  usage
-  exit 2
-fi
-if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "release: '$VERSION' is not semver (for example 0.15.1)" >&2
-  exit 2
-fi
-
-if [ -n "$(git status --porcelain)" ]; then
-  echo "release: commit or stash the worktree first" >&2
-  git status --short >&2
-  exit 1
-fi
-if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
-  echo "release: tag v$VERSION already exists" >&2
-  exit 1
-fi
-
 CURRENT="$(sed -n 's/^version = "\([0-9][0-9.]*\)"$/\1/p' core/Cargo.toml | head -n 1)"
 if [ -z "$CURRENT" ]; then
   echo "release: could not read the workspace version" >&2
   exit 1
 fi
-if [ "$CURRENT" = "$VERSION" ]; then
-  echo "release: the workspace is already at $VERSION" >&2
-  exit 1
+
+if [ "$BUILD_ONLY" -eq 1 ]; then
+  VERSION="${VERSION:-$CURRENT}"
+  if [ "$VERSION" != "$CURRENT" ]; then
+    echo "release: --build-only builds $CURRENT, not $VERSION" >&2
+    exit 1
+  fi
+else
+  if [ -z "$VERSION" ]; then
+    usage
+    exit 2
+  fi
+  if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "release: '$VERSION' is not semver (for example 0.15.1)" >&2
+    exit 2
+  fi
+  if [ -n "$(git status --porcelain)" ]; then
+    echo "release: commit or stash the worktree first" >&2
+    git status --short >&2
+    exit 1
+  fi
+  if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+    echo "release: tag v$VERSION already exists" >&2
+    exit 1
+  fi
+  if [ "$CURRENT" = "$VERSION" ]; then
+    echo "release: the workspace is already at $VERSION" >&2
+    exit 1
+  fi
+  if ! awk '/^## Unreleased$/{found=1; next} found && /^## /{exit} found' CHANGELOG.md |
+    grep -q '^### '; then
+    echo "release: CHANGELOG.md has no Unreleased section with content" >&2
+    exit 1
+  fi
+
+  echo "==> $CURRENT -> $VERSION"
+  perl -pi -e "s/^version = \"\Q$CURRENT\E\"/version = \"$VERSION\"/" core/Cargo.toml
+  perl -pi -e "s/^pkgver=.*/pkgver=$VERSION/" packaging/arch/PKGBUILD
+  DATE="$(date +%Y-%m-%d)"
+  perl -0pi -e "s/^## Unreleased$/## $VERSION — $DATE/m" CHANGELOG.md
+
+  echo "==> updating Cargo.lock"
+  (cd core && cargo check --workspace --quiet)
+
+  echo "==> formatting"
+  (cd core && cargo fmt --all -- --check)
+
+  echo "==> tests"
+  (cd core && cargo test --workspace)
+
+  echo "==> lint"
+  (cd core && cargo clippy --workspace --all-targets)
+
+  git add CHANGELOG.md core/Cargo.toml core/Cargo.lock packaging/arch/PKGBUILD
+  git commit -m "release: $VERSION"
+  git tag -a "v$VERSION" -m "Berth $VERSION"
+  echo "==> tagged v$VERSION"
 fi
-
-if ! awk '/^## Unreleased$/{found=1; next} found && /^## /{exit} found' CHANGELOG.md |
-  grep -q '^### '; then
-  echo "release: CHANGELOG.md has no Unreleased section with content" >&2
-  exit 1
-fi
-
-echo "==> $CURRENT -> $VERSION"
-perl -pi -e "s/^version = \"\Q$CURRENT\E\"/version = \"$VERSION\"/" core/Cargo.toml
-perl -pi -e "s/^pkgver=.*/pkgver=$VERSION/" packaging/arch/PKGBUILD
-DATE="$(date +%Y-%m-%d)"
-perl -0pi -e "s/^## Unreleased$/## $VERSION — $DATE/m" CHANGELOG.md
-
-echo "==> updating Cargo.lock"
-(cd core && cargo check --workspace --quiet)
-
-echo "==> formatting"
-(cd core && cargo fmt --all -- --check)
-
-echo "==> tests"
-(cd core && cargo test --workspace)
-
-echo "==> lint"
-(cd core && cargo clippy --workspace --all-targets)
-
-git add CHANGELOG.md core/Cargo.toml core/Cargo.lock packaging/arch/PKGBUILD
-git commit -m "release: $VERSION"
-git tag -a "v$VERSION" -m "Berth $VERSION"
-echo "==> tagged v$VERSION"
 
 DOWNLOADS="$HOME/Downloads"
 mkdir -p "$DOWNLOADS"
+
+stage_engine() {
+  local framework="vendor/ghostty/macos/GhosttyKit.xcframework"
+  local resources="vendor/ghostty/zig-out/share/ghostty"
+  if [ -f "$framework/Info.plist" ] && [ -d "$resources" ]; then
+    return
+  fi
+  local primary
+  primary="$(git worktree list --porcelain | sed -n '1s/^worktree //p')"
+  if [ -n "$primary" ] && [ -f "$primary/$framework/Info.plist" ] &&
+    [ -d "$primary/$resources" ]; then
+    echo "==> staging the Ghostty engine from $primary"
+    mkdir -p "$(dirname "$framework")" "$(dirname "$resources")"
+    rm -rf "$framework" "$resources"
+    ditto "$primary/$framework" "$framework"
+    ditto "$primary/$resources" "$resources"
+    return
+  fi
+  echo "release: the Ghostty engine is missing; run scripts/fetch-engine.sh" >&2
+  return 1
+}
 
 copy_bundle() {
   local src="$1" name="$2" exe="$3"
@@ -124,6 +154,7 @@ copy_bundle() {
 }
 
 build_macos() {
+  stage_engine
   make app
   make gui-app
   copy_bundle build/Berth.app Berth.app Berth
@@ -166,6 +197,11 @@ build_windows() {
   echo "ok: $zip"
 }
 
+if [ "$BUILD_ONLY" -eq 1 ] && [ "$DO_BUILD" -ne 1 ]; then
+  echo "release: --build-only always builds" >&2
+  exit 2
+fi
+
 if [ "$DO_BUILD" -eq 1 ]; then
   case "$(uname -s)" in
     Darwin) build_macos ;;
@@ -176,6 +212,10 @@ if [ "$DO_BUILD" -eq 1 ]; then
       exit 1
       ;;
   esac
+fi
+
+if [ "$BUILD_ONLY" -eq 1 ]; then
+  exit 0
 fi
 
 if [ "$DO_PUSH" -eq 1 ]; then

@@ -47,9 +47,15 @@ It does the whole mechanical sequence:
      binaries in `~/Downloads`.
 
 Use `--no-build` when only the version bump, commit, and tag are wanted (for
-example in CI). Use `--push` only when the user asked to publish; it pushes
-`HEAD` and the tag, and CI turns a `v*` tag into a GitHub release. A local tag
-is not a published release.
+example in CI). Use `--build-only` to rebuild and copy artifacts for the
+current version after a failed build; it skips the bump, commit, and tag. Use
+`--push` only when the user asked to publish; it pushes `HEAD` and the tag, and
+CI turns a `v*` tag into a GitHub release. A local tag is not a published
+release.
+
+On macOS the app build needs the Ghostty engine. A fresh worktree does not
+contain it, so the script stages it from the primary checkout; if that copy is
+missing too, run `scripts/fetch-engine.sh` first.
 
 ## Verify, then report
 
