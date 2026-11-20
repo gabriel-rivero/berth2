@@ -20,11 +20,11 @@ app itself has the gaps listed in
 
 ### Terminal rendering
 
-- **The protocol floor is incomplete.** Synchronized output (DECSET 2026) and the Kitty
-  keyboard protocol are in. The remaining gaps are focus in/out (CSI ?1004), cursor
-  shapes (DECSCUSR), OSC 8 hyperlink spans (link clicking is a text heuristic,
-  `links.rs`), OSC 52 read, and OSC 133 shell integration. Modern TUIs and agents
-  degrade without these. The AppKit shell inherits all of them from Ghostty.
+- **The protocol floor is incomplete.** Synchronized output (DECSET 2026), the Kitty
+  keyboard protocol, styled text and OSC 8 hyperlinks are in. The remaining gaps are
+  focus in/out (CSI ?1004), cursor shapes (DECSCUSR), OSC 52 read, and OSC 133 shell
+  integration. Modern TUIs and agents degrade without these. The AppKit shell inherits
+  all of them from Ghostty.
 - **One font family, no ligatures.** `fontFamily` picks the face (first
   installed name wins, else system monospace) at `fontSize` × `fontScale`. There
   is no weight, line-height or zoom control, and no per-font metric tuning.
@@ -32,8 +32,9 @@ app itself has the gaps listed in
 - **One palette.** The window ships a hard-coded dark theme and a fixed ANSI table; there
   is no theme selection or light mode. The AppKit shell reads the user's Ghostty config
   instead.
-- **No text effects beyond bold/italic/dim/underline.** No strikethrough, blink,
-  underline colour, styled underlines or per-cell font changes.
+- **Text effects stop short of blink.** Strikethrough, underline colour, and single,
+  double, curly, dotted and dashed underlines are in. There is no blink, and no
+  per-cell font change.
 - **No audio bell.** Bells flash a pane ring; OSC 9/777 notifications also reach the
   desktop on macOS and Linux.
 - **Partial graphics protocols.** iTerm2 inline images, kitty graphics and

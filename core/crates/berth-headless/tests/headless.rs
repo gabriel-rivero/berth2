@@ -415,3 +415,53 @@ fn given_a_kitty_keyboard_query_then_the_flags_are_answered_on_the_pty() {
         std::thread::sleep(Duration::from_millis(20));
     }
 }
+
+/// Extended SGR and OSC 8 must reach the cells the window renders.
+#[cfg(unix)]
+#[test]
+fn given_styled_text_and_a_hyperlink_then_the_screen_view_carries_them() {
+    use berth_core::SpawnRequest;
+    use berth_headless::style::indexed_rgb;
+
+    let host = PtyHost::new();
+    let surface_id = format!("surf-styled-text-{}", std::process::id());
+    host.spawn(SpawnRequest {
+        cwd: None,
+        argv: vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            "printf '\\033[4:3;58;5;196;9mstyled\\033[0m \
+             \\033]8;;https://example.com\\007link\\033]8;;\\007'; sleep 1"
+                .into(),
+        ],
+        env: vec![("BERTH_SURFACE_ID".into(), surface_id.clone())],
+        cols: 80,
+        rows: 24,
+    })
+    .expect("spawn a writer of styled text");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let view = host.screen_view(&surface_id).expect("screen view");
+        if view.cells.len() > 7 && view.cells[0].contents == "s" && view.cells[7].contents == "l" {
+            let styled = &view.cells[0];
+            assert_eq!(
+                styled.underline_style,
+                berth_headless::style::UnderlineStyle::Curly
+            );
+            assert_eq!(styled.underline_color, Some(indexed_rgb(196)));
+            assert!(styled.strikethrough);
+            assert!(styled.hyperlink.is_none());
+            assert_eq!(
+                view.cells[7].hyperlink.as_deref(),
+                Some("https://example.com")
+            );
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the styled text never reached the grid"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}

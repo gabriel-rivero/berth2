@@ -10,6 +10,7 @@
 
 pub mod keys;
 pub mod kitty;
+pub mod style;
 
 use std::collections::HashMap;
 use std::fs;
@@ -46,6 +47,14 @@ pub struct CellView {
     /// First half of a double-width character; the next cell is the tail.
     pub wide: bool,
     pub wide_continuation: bool,
+    /// SGR 9: a line through the cell.
+    pub strikethrough: bool,
+    /// The SGR 4:x underline, or single when `vt100` only saw SGR 4.
+    pub underline_style: style::UnderlineStyle,
+    /// SGR 58 underline colour, when the program set one.
+    pub underline_color: Option<[u8; 3]>,
+    /// The OSC 8 hyperlink the cell belongs to.
+    pub hyperlink: Option<Arc<str>>,
 }
 
 /// A snapshot of the visible screen. Safe to hand to a renderer thread.
@@ -84,6 +93,7 @@ mod sixel;
 
 use csi::{Csi, CsiScanner};
 use kitty::KittyKeyboard;
+use style::{GridSnapshot, StyleState};
 
 #[derive(Debug, Clone, Default)]
 pub struct ScreenView {
@@ -505,6 +515,7 @@ struct Surface {
     meta: Arc<Mutex<ScreenMeta>>,
     images: Arc<Mutex<Vec<ImageView>>>,
     kitty: Arc<Mutex<HashMap<u32, KittyImage>>>,
+    style: Arc<Mutex<StyleState>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     pid: u32,
     tty: String,
@@ -609,23 +620,41 @@ impl PtyHost {
         let rows = rows.get();
         let cols = cols.get();
         let cursor = screen.cursor_position();
+        let first_line = screen.scrollback_len().saturating_sub(screen.scrollback());
+        let styles = lock(&surface.style);
         let mut cells = Vec::with_capacity(usize::from(rows) * usize::from(cols));
         for row in 0..rows {
             for col in 0..cols {
                 let cell = screen.cell(row, col);
                 cells.push(match cell {
-                    Some(cell) => CellView {
-                        contents: cell.contents().to_string(),
-                        fg: ansi_rgb(cell.fgcolor()),
-                        bg: ansi_rgb(cell.bgcolor()),
-                        bold: cell.bold(),
-                        dim: cell.dim(),
-                        italic: cell.italic(),
-                        underline: cell.underline(),
-                        inverse: cell.inverse(),
-                        wide: cell.is_wide(),
-                        wide_continuation: cell.is_wide_continuation(),
-                    },
+                    Some(cell) => {
+                        let extended = styles.get(first_line + usize::from(row), col);
+                        let underline_style = extended
+                            .map(|style| style.underline)
+                            .filter(|style| *style != style::UnderlineStyle::None)
+                            .unwrap_or(if cell.underline() {
+                                style::UnderlineStyle::Single
+                            } else {
+                                style::UnderlineStyle::None
+                            });
+                        CellView {
+                            contents: cell.contents().to_string(),
+                            fg: ansi_rgb(cell.fgcolor()),
+                            bg: ansi_rgb(cell.bgcolor()),
+                            bold: cell.bold(),
+                            dim: cell.dim(),
+                            italic: cell.italic(),
+                            underline: cell.underline()
+                                || underline_style != style::UnderlineStyle::None,
+                            inverse: cell.inverse(),
+                            wide: cell.is_wide(),
+                            wide_continuation: cell.is_wide_continuation(),
+                            strikethrough: extended.is_some_and(|style| style.strikethrough),
+                            underline_style,
+                            underline_color: extended.and_then(|style| style.underline_color),
+                            hyperlink: extended.and_then(|style| style.hyperlink.clone()),
+                        }
+                    }
                     None => CellView {
                         contents: " ".into(),
                         ..CellView::default()
@@ -878,6 +907,7 @@ impl SurfaceOps for PtyHost {
         let meta = Arc::new(Mutex::new(ScreenMeta::default()));
         let images = Arc::new(Mutex::new(Vec::new()));
         let kitty = Arc::new(Mutex::new(HashMap::new()));
+        let style = Arc::new(Mutex::new(StyleState::default()));
         let events = ScreenEvents::new(
             Arc::clone(&meta),
             Arc::clone(&images),
@@ -901,6 +931,7 @@ impl SurfaceOps for PtyHost {
                 meta: Arc::clone(&meta),
                 images: Arc::clone(&images),
                 kitty: Arc::clone(&kitty),
+                style: Arc::clone(&style),
                 graphics: self.graphics,
                 scrollback: self.scrollback,
             },
@@ -915,6 +946,7 @@ impl SurfaceOps for PtyHost {
             meta,
             images,
             kitty,
+            style,
             killer: Mutex::new(killer),
             pid,
             tty: tty.clone(),
@@ -1007,6 +1039,7 @@ impl SurfaceOps for PtyHost {
             std::num::NonZeroU16::new(rows).expect("rows > 0"),
             std::num::NonZeroU16::new(cols).expect("cols > 0"),
         );
+        lock(&surface.style).clear();
         if let Some((pixel_width, pixel_height)) = pixels {
             let width = (pixel_width / u32::from(cols)).min(u32::from(u16::MAX)) as u16;
             let height = (pixel_height / u32::from(rows)).min(u32::from(u16::MAX)) as u16;
@@ -1111,6 +1144,7 @@ struct ReaderShare {
     meta: Arc<Mutex<ScreenMeta>>,
     images: Arc<Mutex<Vec<ImageView>>>,
     kitty: Arc<Mutex<HashMap<u32, KittyImage>>>,
+    style: Arc<Mutex<StyleState>>,
     graphics: bool,
     scrollback: usize,
 }
@@ -1529,36 +1563,7 @@ fn ansi_rgb(color: vt100::Color) -> Option<[u8; 3]> {
     match color {
         vt100::Color::Default => None,
         vt100::Color::Rgb(r, g, b) => Some([r, g, b]),
-        vt100::Color::Idx(index) => Some(match index {
-            0 => [0x1c, 0x1c, 0x22],
-            1 => [0xd7, 0x5f, 0x5f],
-            2 => [0x8f, 0xb3, 0x5f],
-            3 => [0xd7, 0xa5, 0x5f],
-            4 => [0x6c, 0x99, 0xc9],
-            5 => [0xb0, 0x7c, 0xc9],
-            6 => [0x5f, 0xb3, 0xb3],
-            7 => [0xc9, 0xc9, 0xd0],
-            8 => [0x5c, 0x5c, 0x66],
-            9 => [0xff, 0x7a, 0x7a],
-            10 => [0xa9, 0xd4, 0x6a],
-            11 => [0xff, 0xd7, 0x66],
-            12 => [0x82, 0xbb, 0xff],
-            13 => [0xd7, 0x9a, 0xff],
-            14 => [0x7a, 0xdb, 0xdb],
-            15 => [0xff, 0xff, 0xff],
-            n if n < 232 => {
-                let n = n - 16;
-                let r = n / 36;
-                let g = (n % 36) / 6;
-                let b = n % 6;
-                let level = |v: u8| if v == 0 { 0 } else { 55 + v * 40 };
-                [level(r), level(g), level(b)]
-            }
-            n => {
-                let level = 8 + (n - 232) * 10;
-                [level, level, level]
-            }
-        }),
+        vt100::Color::Idx(index) => Some(style::indexed_rgb(index)),
     }
 }
 
@@ -1602,6 +1607,7 @@ mod meta_tests {
         images: Arc<Mutex<Vec<ImageView>>>,
         screen: Arc<Mutex<Parser>>,
         kitty: Arc<Mutex<HashMap<u32, KittyImage>>>,
+        style: Arc<Mutex<StyleState>>,
     }
 
     impl ScannerFixture {
@@ -1625,6 +1631,7 @@ mod meta_tests {
                 images,
                 screen,
                 kitty: Arc::new(Mutex::new(HashMap::new())),
+                style: Arc::new(Mutex::new(StyleState::default())),
             }
         }
 
@@ -1648,6 +1655,7 @@ mod meta_tests {
                 meta: Arc::clone(&self.meta),
                 images: Arc::clone(&self.images),
                 kitty: Arc::clone(&self.kitty),
+                style: Arc::clone(&self.style),
                 graphics: true,
                 scrollback: DEFAULT_SCROLLBACK,
             }
@@ -1827,6 +1835,88 @@ mod meta_tests {
         assert_eq!(fixture.kitty_flags().bits(), 2);
         fixture.feed(&mut scanner, b"\x1b[?1049l");
         assert_eq!(fixture.kitty_flags().bits(), 1);
+    }
+
+    #[test]
+    fn given_an_extended_underline_then_it_is_recorded_on_the_text() {
+        let fixture = ScannerFixture::new();
+        let mut scanner = SideChannelScanner::default();
+        fixture.feed(&mut scanner, b"\x1b[4:3;58;5;196mab");
+        let style = lock(&fixture.style);
+        let cell = style.get(0, 0).expect("styled cell");
+        assert_eq!(cell.underline, style::UnderlineStyle::Curly);
+        assert_eq!(cell.underline_color, Some(style::indexed_rgb(196)));
+        assert!(style.get(0, 1).is_some());
+        assert!(style.get(0, 2).is_none());
+    }
+
+    #[test]
+    fn given_text_before_a_style_then_only_the_later_cells_carry_it() {
+        let fixture = ScannerFixture::new();
+        let mut scanner = SideChannelScanner::default();
+        fixture.feed(&mut scanner, b"ab\x1b[9mcd");
+        let style = lock(&fixture.style);
+        assert!(style.get(0, 0).is_none());
+        assert!(style.get(0, 2).is_some_and(|cell| cell.strikethrough));
+        assert!(style.get(0, 3).is_some_and(|cell| cell.strikethrough));
+    }
+
+    #[test]
+    fn given_a_reset_then_the_next_text_loses_the_style() {
+        let fixture = ScannerFixture::new();
+        let mut scanner = SideChannelScanner::default();
+        fixture.feed(&mut scanner, b"\x1b[4:1ma\x1b[0mb");
+        let style = lock(&fixture.style);
+        assert_eq!(
+            style.get(0, 0).map(|cell| cell.underline),
+            Some(style::UnderlineStyle::Single)
+        );
+        assert!(style.get(0, 1).is_none());
+    }
+
+    #[test]
+    fn given_an_osc8_hyperlink_then_it_spans_the_text_until_it_closes() {
+        let fixture = ScannerFixture::new();
+        let mut scanner = SideChannelScanner::default();
+        fixture.feed(
+            &mut scanner,
+            b"\x1b]8;;https://example.com\x1b\\ab\x1b]8;;\x1b\\cd",
+        );
+        let style = lock(&fixture.style);
+        assert_eq!(
+            style.get(0, 0).and_then(|cell| cell.hyperlink.as_deref()),
+            Some("https://example.com")
+        );
+        assert_eq!(
+            style.get(0, 1).and_then(|cell| cell.hyperlink.as_deref()),
+            Some("https://example.com")
+        );
+        assert!(style.get(0, 2).is_none());
+    }
+
+    #[test]
+    fn given_a_colour_index_nine_then_strikethrough_is_not_set() {
+        let fixture = ScannerFixture::new();
+        let mut scanner = SideChannelScanner::default();
+        fixture.feed(&mut scanner, b"\x1b[38;5;9mab");
+        let style = lock(&fixture.style);
+        assert!(style.get(0, 0).is_none_or(|cell| !cell.strikethrough));
+    }
+
+    #[test]
+    fn given_the_alternate_screen_then_styles_do_not_leak_between_screens() {
+        let fixture = ScannerFixture::new();
+        let mut scanner = SideChannelScanner::default();
+        fixture.feed(&mut scanner, b"\x1b[4:1ma\x1b[?1049h\x1b[4:3mb");
+        assert_eq!(
+            lock(&fixture.style).get(0, 0).map(|cell| cell.underline),
+            Some(style::UnderlineStyle::Curly)
+        );
+        fixture.feed(&mut scanner, b"\x1b[?1049l");
+        assert_eq!(
+            lock(&fixture.style).get(0, 0).map(|cell| cell.underline),
+            Some(style::UnderlineStyle::Single)
+        );
     }
 
     #[test]
@@ -2028,6 +2118,7 @@ struct SideChannelScanner {
     capture_esc: bool,
     capture_overflow: bool,
     csi: CsiScanner,
+    csi_start: Option<usize>,
     keyboard: KittyKeyboard,
     esc: bool,
     pending: KittyPending,
@@ -2036,6 +2127,7 @@ struct SideChannelScanner {
 enum Capture {
     Apc(Vec<u8>),
     Dcs(Vec<u8>),
+    Osc(Vec<u8>),
 }
 
 /// Images are bounded by the same byte budget as the store; a sequence past
@@ -2055,10 +2147,12 @@ impl SideChannelScanner {
         for &byte in chunk {
             if self.capture.is_some() {
                 let mut complete = false;
+                let is_osc = matches!(self.capture, Some(Capture::Osc(_)));
                 {
                     let buffer = match self.capture.as_mut().expect("capture") {
                         Capture::Apc(buffer) => buffer,
                         Capture::Dcs(buffer) => buffer,
+                        Capture::Osc(buffer) => buffer,
                     };
                     if self.capture_esc {
                         self.capture_esc = false;
@@ -2070,6 +2164,8 @@ impl SideChannelScanner {
                         }
                     } else if byte == 0x1b {
                         self.capture_esc = true;
+                    } else if is_osc && byte == 0x07 {
+                        complete = true;
                     } else {
                         buffer.push(byte);
                     }
@@ -2096,6 +2192,7 @@ impl SideChannelScanner {
                             share.graphics,
                             share.scrollback,
                         ),
+                        Capture::Osc(payload) if !overflow => handle_osc(&payload, share),
                         _ => {}
                     }
                 }
@@ -2105,14 +2202,19 @@ impl SideChannelScanner {
                 self.esc = false;
                 match byte {
                     b'_' => {
-                        flush_normal(&share.screen, &mut self.normal);
+                        flush_normal(share, &mut self.normal, true);
                         self.capture = Some(Capture::Apc(Vec::new()));
                     }
                     b'P' => {
-                        flush_normal(&share.screen, &mut self.normal);
+                        flush_normal(share, &mut self.normal, true);
                         self.capture = Some(Capture::Dcs(Vec::new()));
                     }
+                    b']' => {
+                        flush_normal(share, &mut self.normal, true);
+                        self.capture = Some(Capture::Osc(Vec::new()));
+                    }
                     b'[' => {
+                        self.csi_start = Some(self.normal.len());
                         self.csi.begin();
                         self.normal.push(0x1b);
                         self.normal.push(byte);
@@ -2127,11 +2229,32 @@ impl SideChannelScanner {
             if self.csi.is_active() {
                 if byte == 0x1b {
                     self.csi.abort();
+                    self.csi_start = None;
                     self.esc = true;
                 } else {
                     self.normal.push(byte);
                     if let Some(sequence) = self.csi.feed(byte) {
-                        observe_csi(&mut self.keyboard, &sequence, &share.meta);
+                        let start = self.csi_start.take().unwrap_or(0);
+                        let is_sgr = sequence.final_byte == b'm';
+                        let is_alt_screen = sequence.private_mode_change().is_some_and(|change| {
+                            change
+                                .modes
+                                .iter()
+                                .any(|mode| matches!(mode, 47 | 1047 | 1049))
+                        });
+                        if is_alt_screen {
+                            let sequence_bytes =
+                                self.normal.split_off(start.min(self.normal.len()));
+                            flush_normal(share, &mut self.normal, true);
+                            self.normal = sequence_bytes;
+                            flush_normal(share, &mut self.normal, false);
+                        } else if is_sgr {
+                            flush_normal(share, &mut self.normal, true);
+                        }
+                        observe_csi(&mut self.keyboard, &sequence, &share.meta, &share.style);
+                        if is_sgr {
+                            lock(&share.style).apply_sgr(&sequence.body);
+                        }
                     }
                 }
                 continue;
@@ -2143,21 +2266,56 @@ impl SideChannelScanner {
             }
         }
         if self.capture.is_none() {
-            flush_normal(&share.screen, &mut self.normal);
+            flush_normal(share, &mut self.normal, true);
+            if self.csi.is_active() {
+                self.csi_start = Some(0);
+            }
         }
     }
 }
 
-fn flush_normal(screen: &Arc<Mutex<Parser>>, normal: &mut Vec<u8>) {
-    if !normal.is_empty() {
-        lock(screen).process(normal);
-        normal.clear();
+fn flush_normal(share: &ReaderShare, normal: &mut Vec<u8>, record_styles: bool) {
+    if normal.is_empty() {
+        return;
     }
+    let needs_record = record_styles && {
+        let style = lock(&share.style);
+        !style.current().is_default() || !style.is_empty()
+    };
+    let before = needs_record.then(|| {
+        let parser = lock(&share.screen);
+        GridSnapshot::take(parser.screen())
+    });
+    lock(&share.screen).process(normal);
+    if let Some(before) = before {
+        let after = {
+            let parser = lock(&share.screen);
+            GridSnapshot::take(parser.screen())
+        };
+        lock(&share.style).record(&before, &after, share.scrollback);
+    }
+    normal.clear();
+}
+
+/// Hand an OSC to `vt100` and update the hyperlink state. The text before it
+/// was already flushed, so the link starts at the right cell.
+fn handle_osc(payload: &[u8], share: &ReaderShare) {
+    let mut sequence = Vec::with_capacity(payload.len() + 3);
+    sequence.extend_from_slice(b"\x1b]");
+    sequence.extend_from_slice(payload);
+    sequence.push(0x07);
+    flush_normal(share, &mut sequence, false);
+    lock(&share.style).apply_osc(payload);
 }
 
 /// DECSET 2026 and the kitty keyboard protocol are both carried in CSI
 /// sequences `vt100` drops. Record them for the renderer and the key encoder.
-fn observe_csi(keyboard: &mut KittyKeyboard, sequence: &Csi, meta: &Arc<Mutex<ScreenMeta>>) {
+fn observe_csi(
+    keyboard: &mut KittyKeyboard,
+    sequence: &Csi,
+    meta: &Arc<Mutex<ScreenMeta>>,
+    style: &Arc<Mutex<StyleState>>,
+) {
     const SYNCHRONIZED_OUTPUT: u16 = 2026;
     const ALTERNATE_SCREENS: [u16; 3] = [47, 1047, 1049];
 
@@ -2177,6 +2335,7 @@ fn observe_csi(keyboard: &mut KittyKeyboard, sequence: &Csi, meta: &Arc<Mutex<Sc
             .any(|mode| ALTERNATE_SCREENS.contains(mode))
     {
         keyboard.set_alternate_screen(change.is_enabled);
+        lock(style).set_alternate_screen(change.is_enabled);
     }
     let synchronized_output = change.as_ref().and_then(|change| {
         change

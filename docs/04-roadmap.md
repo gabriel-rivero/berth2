@@ -71,9 +71,10 @@ this order, one item per session: item 1 builds the CSI side-channel scanner tha
    answers `CSI ? u`, and the encoder honours every enhancement: `CSI u` for modified
    keys and disambiguated Escape, release and repeat events, alternate keys and
    associated text. Agents and Neovim/Helix bind it.
-3. **Styled text**: strikethrough, curly/dotted/dashed underline, underline colour
-   (SGR 4:x, 58), and OSC 8 hyperlinks tracked by the parser instead of the text scan;
-   hover underline and Cmd/Ctrl-click.
+3. **Styled text** — landed, unreleased. SGR 9/29 strikethrough, SGR 4:1..5 underline
+   styles (single, double, curly, dotted, dashed), SGR 58 underline colour, and OSC 8
+   hyperlink spans are recorded on the cells they style. Hover underlines a hyperlink
+   and Cmd/Ctrl-click opens it; text URL detection is the fallback.
 4. **Cursor and focus**: DECSCUSR shapes, focus in/out (CSI ?1004), OSC 52 read with a
    confirmation dialog.
 5. **Fonts and ligatures**: shape runs rather than single cells, with `fontWeight`,

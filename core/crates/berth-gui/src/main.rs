@@ -1521,6 +1521,20 @@ impl Gui {
                     .as_ref()
                     .filter(|hit| &hit.surface_id == surface_id)
                     .map(|hit| (hit.line, hit.col, hit.len));
+                let pointer = (
+                    self.pointer.0.max(0.0) as usize,
+                    self.pointer.1.max(0.0) as usize,
+                );
+                let hover_link = if pane.content.contains(pointer.0, pointer.1) {
+                    let col = (pointer.0 - pane.content.x) / cell.width.max(1);
+                    let row = (pointer.1 - pane.content.y) / cell.height.max(1);
+                    screen
+                        .cells
+                        .get(row * usize::from(screen.cols) + col)
+                        .and_then(|cell| cell.hyperlink.as_deref())
+                } else {
+                    None
+                };
                 let options = ScreenOptions {
                     theme: &theme,
                     focused: pane.focused,
@@ -1528,6 +1542,7 @@ impl Gui {
                     selection: selection.as_ref(),
                     exited,
                     search,
+                    hover_link,
                 };
                 let font = self.font();
                 painter.screen(font, &screen, pane.content, &options);
@@ -1882,6 +1897,16 @@ impl Gui {
             self.pointer.1.max(0.0) as usize,
         );
         let target = self.mouse_target(point)?;
+        if let Ok(view) = self.host.screen_view(&target.surface_id) {
+            let index = usize::from(target.row) * usize::from(view.cols) + usize::from(target.col);
+            if let Some(link) = view
+                .cells
+                .get(index)
+                .and_then(|cell| cell.hyperlink.as_deref())
+            {
+                return Some(link.to_string());
+            }
+        }
         let row = self.host.line_text(&target.surface_id, target.row).ok()?;
         links::link_at(&row, target.col as usize).map(|(_, _, link)| link)
     }

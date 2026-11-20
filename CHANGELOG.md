@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- **Styled text and OSC 8 hyperlinks in the portable window.** The CSI side channel
+  records SGR 9/29 strikethrough, SGR 4:1..5 underline styles, SGR 58 underline colour,
+  and OSC 8 hyperlink spans on the cells they style. The window paints single, double,
+  curly, dotted and dashed underlines in their own colour, underlines a hyperlink on
+  hover, and opens it with Cmd/Ctrl-click; text URL detection remains the fallback.
+
 ## 0.15.1 — 2026-11-20
 
 ### Features

@@ -4,6 +4,7 @@
 //! Alpha blending is done per pixel, so glyph edges and the selection tint look
 //! the same on every platform.
 
+use berth_headless::style::UnderlineStyle;
 use berth_headless::{CellView, ScreenView};
 
 use crate::font::{Bitmap, CellSize, FontRenderer, Raster, TextStyle};
@@ -695,6 +696,52 @@ impl<'a> Painter<'a> {
         self.glyph(font, (origin.0 + used, origin.1), "…", style, color);
     }
 
+    /// Draw one underline variant in a cell. The width may span a wide glyph.
+    fn underline(
+        &mut self,
+        origin: (usize, usize),
+        width: usize,
+        style: UnderlineStyle,
+        color: u32,
+        height: usize,
+    ) {
+        let baseline = origin.1 + height.saturating_sub(3);
+        match style {
+            UnderlineStyle::None => {}
+            UnderlineStyle::Single => {
+                self.fill(Rect::new(origin.0, baseline, width, 1), color);
+            }
+            UnderlineStyle::Double => {
+                self.fill(
+                    Rect::new(origin.0, baseline.saturating_sub(2), width, 1),
+                    color,
+                );
+                self.fill(Rect::new(origin.0, baseline, width, 1), color);
+            }
+            UnderlineStyle::Curly => {
+                let mut x = 0;
+                while x < width {
+                    let y = baseline + ((x / 4) % 2);
+                    self.fill(Rect::new(origin.0 + x, y, (width - x).min(2), 1), color);
+                    x += 2;
+                }
+            }
+            UnderlineStyle::Dotted => {
+                for x in (0..width).step_by(3) {
+                    self.fill(Rect::new(origin.0 + x, baseline, 1, 1), color);
+                }
+            }
+            UnderlineStyle::Dashed => {
+                for x in (0..width).step_by(4) {
+                    self.fill(
+                        Rect::new(origin.0 + x, baseline, (width - x).min(2), 1),
+                        color,
+                    );
+                }
+            }
+        }
+    }
+
     /// Draw one terminal screen inside `area`.
     pub fn screen(
         &mut self,
@@ -763,6 +810,7 @@ impl<'a> Painter<'a> {
                 if !options.focused {
                     fg = options.theme.inactive(fg);
                 }
+                let decoration = fg;
                 self.fill(Rect::new(origin.0, origin.1, cell.width, cell.height), bg);
                 if cell_view.wide {
                     // Fill both halves before the glyph: a wide glyph such as an
@@ -826,14 +874,33 @@ impl<'a> Painter<'a> {
                 if !in_run && !painted && !text.is_empty() && text != " " {
                     self.glyph(font, origin, text, style, fg);
                 }
-                if cell_view.underline {
-                    let y = origin.1 + cell.height.saturating_sub(3);
-                    let width = if cell_view.wide {
-                        cell.width * 2
+                let hovered = options.hover_link.is_some()
+                    && cell_view.hyperlink.as_deref() == options.hover_link;
+                let underline_style = if hovered {
+                    UnderlineStyle::Single
+                } else if cell_view.underline_style != UnderlineStyle::None {
+                    cell_view.underline_style
+                } else if cell_view.underline {
+                    UnderlineStyle::Single
+                } else {
+                    UnderlineStyle::None
+                };
+                let width = if cell_view.wide {
+                    cell.width * 2
+                } else {
+                    cell.width
+                };
+                if underline_style != UnderlineStyle::None {
+                    let color = if hovered && cell_view.underline_style == UnderlineStyle::None {
+                        options.theme.accent
                     } else {
-                        cell.width
+                        cell_view.underline_color.map(rgb).unwrap_or(decoration)
                     };
-                    self.fill(Rect::new(origin.0, y, width, 1), fg);
+                    self.underline(origin, width, underline_style, color, cell.height);
+                }
+                if cell_view.strikethrough {
+                    let y = origin.1 + cell.height / 2;
+                    self.fill(Rect::new(origin.0, y, width, 1), decoration);
                 }
             }
             for run in &runs {
@@ -1229,6 +1296,8 @@ pub struct ScreenOptions<'a> {
     pub exited: bool,
     /// Absolute line, column and length of a search match to highlight.
     pub search: Option<(usize, usize, usize)>,
+    /// The URL under the pointer, so every cell of it underlines on hover.
+    pub hover_link: Option<&'a str>,
 }
 
 fn rgb(color: [u8; 3]) -> u32 {
@@ -1427,6 +1496,25 @@ mod tests {
         };
         assert!(!painter.block_glyph((0, 0), cell, 'a', 0x00ff_ffff));
         assert!(painter.block_glyph((0, 0), cell, '▁', 0x00ff_ffff));
+    }
+
+    #[test]
+    fn given_each_underline_style_then_it_paints_its_own_pattern() {
+        let cell = CellSize {
+            width: 12,
+            height: 10,
+        };
+        let pixels = |style| {
+            let mut buffer = vec![0u32; cell.width * cell.height];
+            let mut painter = Painter::new(&mut buffer, cell.width, cell.height);
+            painter.underline((0, 0), cell.width, style, 0x00ff_ffff, cell.height);
+            buffer.iter().filter(|pixel| **pixel != 0).count()
+        };
+        assert_eq!(pixels(UnderlineStyle::Single), 12);
+        assert_eq!(pixels(UnderlineStyle::Double), 24);
+        assert_eq!(pixels(UnderlineStyle::Dotted), 4);
+        assert_eq!(pixels(UnderlineStyle::Dashed), 6);
+        assert_eq!(pixels(UnderlineStyle::Curly), 12);
     }
 
     #[test]
