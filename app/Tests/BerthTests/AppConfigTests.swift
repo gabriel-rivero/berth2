@@ -81,21 +81,22 @@ final class AppConfigTests: XCTestCase {
     func testConfigWithoutAFileUsesTheAppearanceDefaults() {
         let config = AppConfig(url: tempURL())
         XCTAssertEqual(config.theme, "")
-        XCTAssertEqual(config.opacity, 1.0)
-        XCTAssertEqual(config.backgroundBlur, 0)
+        XCTAssertNil(config.opacity)
+        XCTAssertNil(config.backgroundBlur)
         XCTAssertEqual(config.fontSize, AppConfig.defaultFontSize)
+        XCTAssertEqual(config.fontZoom, 0)
     }
 
     func testOpacityBelowRangeClampsToTheMinimum() {
         let config = AppConfig(url: tempURL())
         config.setOpacity(0.1)
-        XCTAssertEqual(config.opacity, 0.3, accuracy: 0.0001)
+        XCTAssertEqual(config.opacity ?? 0, 0.3, accuracy: 0.0001)
     }
 
     func testOpacityAboveRangeClampsToTheMaximum() {
         let config = AppConfig(url: tempURL())
         config.setOpacity(1.5)
-        XCTAssertEqual(config.opacity, 1.0, accuracy: 0.0001)
+        XCTAssertEqual(config.opacity ?? 0, 1.0, accuracy: 0.0001)
     }
 
     func testBackgroundBlurOutsideRangeClampsToItsBounds() {
@@ -104,6 +105,18 @@ final class AppConfigTests: XCTestCase {
         XCTAssertEqual(config.backgroundBlur, 0)
         config.setBackgroundBlur(200)
         XCTAssertEqual(config.backgroundBlur, 64)
+    }
+
+    func testZoomStaysWithinTheFontRangeAndResetReturnsToTheBase() {
+        let config = AppConfig(url: tempURL())
+        config.setFontSize(70)
+        config.setFontZoom(10)
+        XCTAssertEqual(config.fontZoom, 2, accuracy: 0.0001)
+        config.setFontZoom(-100)
+        XCTAssertEqual(config.fontSize + config.fontZoom,
+                       AppConfig.fontSizeRange.lowerBound, accuracy: 0.0001)
+        config.setFontSize(16)
+        XCTAssertEqual(config.fontZoom, 0)
     }
 
     func testThemeIsStoredTrimmed() {
@@ -134,7 +147,7 @@ final class AppConfigTests: XCTestCase {
 
         let reloaded = AppConfig(url: url)
         XCTAssertEqual(reloaded.theme, "Dracula")
-        XCTAssertEqual(reloaded.opacity, 0.85, accuracy: 0.0001)
+        XCTAssertEqual(reloaded.opacity ?? 0, 0.85, accuracy: 0.0001)
         XCTAssertEqual(reloaded.backgroundBlur, 20)
     }
 }

@@ -584,9 +584,9 @@ impl Config {
             theme: file.theme.unwrap_or_default().trim().to_string(),
             opacity: file
                 .opacity
-                .filter(|value| value.is_finite() && *value > 0.0)
-                .unwrap_or(defaults.opacity)
-                .clamp(MIN_OPACITY, 1.0),
+                .filter(|value| value.is_finite())
+                .map(|value| value.clamp(MIN_OPACITY, 1.0))
+                .unwrap_or(defaults.opacity),
             bell: file
                 .bell
                 .as_deref()
@@ -627,15 +627,16 @@ impl Config {
 
     /// Pixel size for the terminal font on this display. Mirrors the macOS
     /// rule: an automatic scale of `2 / backing` keeps the physical glyph size
-    /// stable between Retina and external monitors.
-    pub fn font_pixels(&self, backing_scale: f64) -> f32 {
+    /// stable between Retina and external monitors. `points` is the configured
+    /// size plus any zoom for this session.
+    pub fn font_pixels(&self, points: f32, backing_scale: f64) -> f32 {
         let backing = backing_scale.max(0.5);
         let multiplier = if self.font_scale > 0.0 {
             self.font_scale as f64
         } else {
             (2.0 / backing).clamp(0.75, 2.0)
         };
-        (self.font_size as f64 * multiplier * backing) as f32
+        (points as f64 * multiplier * backing) as f32
     }
 
     /// The renderer options this config selects.
@@ -817,8 +818,8 @@ mod tests {
     #[test]
     fn given_an_automatic_scale_when_computed_then_retina_and_external_match() {
         let config = Config::default();
-        let retina = config.font_pixels(2.0);
-        let external = config.font_pixels(1.0);
+        let retina = config.font_pixels(config.font_size, 2.0);
+        let external = config.font_pixels(config.font_size, 1.0);
         assert!((retina - external).abs() < 0.01);
     }
 
@@ -828,7 +829,7 @@ mod tests {
             font_scale: 1.0,
             ..Config::default()
         };
-        assert!((config.font_pixels(2.0) - 28.0).abs() < 0.01);
+        assert!((config.font_pixels(config.font_size, 2.0) - 28.0).abs() < 0.01);
     }
 
     #[test]
@@ -1211,6 +1212,17 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(saved["bell"], "audio");
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn given_an_explicit_zero_opacity_then_it_clamps_to_the_floor() {
+        let config = Config::parse(r#"{"opacity": 0}"#).unwrap();
+        assert_eq!(config.opacity, MIN_OPACITY);
+    }
+
+    #[test]
+    fn given_a_missing_opacity_then_the_window_is_opaque() {
+        assert_eq!(Config::default().opacity, 1.0);
     }
 
     #[test]

@@ -254,7 +254,7 @@ final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClient {
     /// built-in screen this is exactly the configured size; on a 1x external
     /// screen it doubles so the terminal does not look half-size.
     private func effectiveFontPoints() -> Double {
-        let base = AppConfig.shared.fontSize
+        let base = AppConfig.shared.fontSize + AppConfig.shared.fontZoom
         let configured = AppConfig.shared.fontScale
         let backing = window?.screen?.backingScaleFactor
             ?? NSScreen.main?.backingScaleFactor

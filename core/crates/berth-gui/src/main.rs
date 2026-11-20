@@ -345,6 +345,7 @@ fn main() {
         host,
         server,
         theme: config.theme(),
+        font_zoom: 0.0,
         config,
         font: None,
         chrome_font: None,
@@ -592,6 +593,8 @@ struct Gui {
     host: Arc<PtyHost>,
     server: Option<ServerHandle>,
     theme: Theme,
+    /// Session offset from `config.font_size` that the zoom chords set.
+    font_zoom: f32,
     config: Config,
     font: Option<FontRenderer>,
     chrome_font: Option<FontRenderer>,
@@ -694,7 +697,7 @@ impl ApplicationHandler<UserEvent> for Gui {
         // pane layout are set up; the first frame joins them.
         self.scale = window.scale_factor();
         self.font_job = Some(font::FontSlot::spawn(
-            self.config.font_pixels(self.scale),
+            self.config.font_pixels(self.font_points(), self.scale),
             self.config.font_family.clone(),
             self.config.font_options(),
         ));
@@ -1162,7 +1165,7 @@ impl Gui {
             self.font = self.font_job.take().and_then(|mut job| job.take());
         }
         if self.font.is_none() {
-            let pixels = self.config.font_pixels(self.scale);
+            let pixels = self.config.font_pixels(self.font_points(), self.scale);
             self.font = Some(FontRenderer::new(
                 pixels,
                 &self.config.font_family,
@@ -3425,25 +3428,30 @@ impl Gui {
 
     /// Zoom chords step the point size and keep the choice, like the settings
     /// row does.
+    /// Zoom is a session offset from the configured size, so the reset chord
+    /// and a relaunch both return to `fontSize` without writing the file.
+    fn font_points(&self) -> f32 {
+        self.config.font_size + self.font_zoom
+    }
+
     fn zoom_font(&mut self, delta: f32) {
-        let size =
-            (self.config.font_size + delta).clamp(config::MIN_FONT_SIZE, config::MAX_FONT_SIZE);
-        self.set_font_size(size);
+        let total =
+            (self.font_points() + delta).clamp(config::MIN_FONT_SIZE, config::MAX_FONT_SIZE);
+        let zoom = total - self.config.font_size;
+        if (zoom - self.font_zoom).abs() < f32::EPSILON {
+            return;
+        }
+        self.font_zoom = zoom;
+        self.invalidate_fonts();
+        self.request_redraw();
     }
 
     fn reset_zoom(&mut self) {
-        self.set_font_size(config::DEFAULT_FONT_SIZE);
-    }
-
-    fn set_font_size(&mut self, size: f32) {
-        if (size - self.config.font_size).abs() < f32::EPSILON {
+        if self.font_zoom == 0.0 {
             return;
         }
-        self.config.font_size = size;
+        self.font_zoom = 0.0;
         self.invalidate_fonts();
-        if let Err(error) = settings::save(&self.config) {
-            log::line(&format!("settings save failed: {error}"));
-        }
         self.request_redraw();
     }
 
@@ -3460,6 +3468,7 @@ impl Gui {
             return;
         }
         if change == settings::Change::Font {
+            self.font_zoom = 0.0;
             self.invalidate_fonts();
         }
         if change == settings::Change::Theme {

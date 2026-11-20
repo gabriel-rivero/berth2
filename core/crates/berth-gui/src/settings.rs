@@ -54,6 +54,11 @@ pub enum Change {
 
 /// The rows of the settings panel, in display order.
 pub fn rows(config: &Config, recording: Option<Action>, notice: Option<&str>) -> Vec<Row> {
+    let opacity_label = if cfg!(target_os = "macos") {
+        "Window opacity"
+    } else {
+        "Window opacity (macOS)"
+    };
     let mut rows = vec![
         Row {
             field: Field::FontSize,
@@ -76,7 +81,7 @@ pub fn rows(config: &Config, recording: Option<Action>, notice: Option<&str>) ->
         },
         Row {
             field: Field::Opacity,
-            label: "Window opacity".into(),
+            label: opacity_label.into(),
             value: format!("{:.0}%", config.opacity * 100.0),
         },
         Row {

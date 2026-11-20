@@ -118,6 +118,9 @@ final class AppConfig {
     private(set) var shortcuts: [String: String] = [:]
     /// Terminal font size in points, handed to Ghostty as `font-size`.
     private(set) var fontSize: Double = AppConfig.defaultFontSize
+    /// Session offset the zoom chords add. Never saved, so `fontSize` stays the
+    /// base and reset returns to it.
+    private(set) var fontZoom: Double = 0
     /// Per-display multiplier. Zero means automatic (2 / backing scale), so a
     /// 1x monitor gets the same physical glyph size as a Retina laptop.
     private(set) var fontScale: Double = 0
@@ -129,9 +132,10 @@ final class AppConfig {
     /// here does not drop it, and leaves its palette to the Ghostty config.
     private(set) var theme: String = ""
     /// Terminal background opacity, 0.3 (very transparent) to 1.0 (solid).
-    private(set) var opacity: Double = 1.0
-    /// Background blur radius, 0 to 64; 0 turns blur off.
-    private(set) var backgroundBlur: Int = 0
+    /// Nil leaves whatever the user's Ghostty config already says.
+    private(set) var opacity: Double?
+    /// Background blur radius, 0 to 64. Nil leaves Ghostty's value alone.
+    private(set) var backgroundBlur: Int?
 
     private init() {
         load()
@@ -149,6 +153,15 @@ final class AppConfig {
 
     func setFontSize(_ value: Double) {
         fontSize = min(max(value, Self.fontSizeRange.lowerBound), Self.fontSizeRange.upperBound)
+        fontZoom = 0
+    }
+
+    /// Zoom is clamped against the configured size, not on its own, so the
+    /// total never leaves the range the settings window accepts.
+    func setFontZoom(_ value: Double) {
+        let total = fontSize + value
+        let clamped = min(max(total, Self.fontSizeRange.lowerBound), Self.fontSizeRange.upperBound)
+        fontZoom = clamped - fontSize
     }
 
     func setTheme(_ value: String) {
@@ -239,8 +252,12 @@ final class AppConfig {
         object["fontScale"] = fontScale
         object["compactSidebar"] = compactSidebar
         object["theme"] = theme
-        object["opacity"] = opacity
-        object["backgroundBlur"] = backgroundBlur
+        if let opacity {
+            object["opacity"] = opacity
+        }
+        if let backgroundBlur {
+            object["backgroundBlur"] = backgroundBlur
+        }
         object["socket"] = socketMode.rawValue
         let data = try JSONSerialization.data(
             withJSONObject: object,

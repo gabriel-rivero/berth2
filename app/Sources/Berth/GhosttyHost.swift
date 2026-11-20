@@ -237,12 +237,14 @@ private let berthCloseSurfaceCallback: ghostty_runtime_close_surface_cb = { user
 /// Text of the generated Ghostty config that carries Berth's overrides. The
 /// file is the only way to pass them: Ghostty's config loader reads files.
 enum GhosttyConfigFile {
-    static func text(fontSize: Double, opacity: Double, backgroundBlur: Int) -> String {
-        var lines = [
-            "font-size = \(fontSize)",
-            "background-opacity = \(opacity)",
-        ]
-        if backgroundBlur > 0 {
+    /// Only keys the user set are written, so an untouched `config.json` leaves
+    /// the user's own Ghostty transparency and blur in force.
+    static func text(fontSize: Double, opacity: Double?, backgroundBlur: Int?) -> String {
+        var lines = ["font-size = \(fontSize)"]
+        if let opacity {
+            lines.append("background-opacity = \(opacity)")
+        }
+        if let backgroundBlur, backgroundBlur > 0 {
             lines.append("background-blur = \(backgroundBlur)")
         }
         return lines.joined(separator: "\n") + "\n"
@@ -339,7 +341,7 @@ final class GhosttyHost {
 
     /// Appearance lives on the main actor; every entry point here runs on the
     /// main thread (see the file header), so read it under that isolation.
-    private func currentAppearance() -> (opacity: Double, backgroundBlur: Int) {
+    private func currentAppearance() -> (opacity: Double?, backgroundBlur: Int?) {
         MainActor.assumeIsolated {
             (AppConfig.shared.opacity, AppConfig.shared.backgroundBlur)
         }

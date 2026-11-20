@@ -85,7 +85,7 @@ this order, one item per session: item 1 builds the CSI side-channel scanner tha
 6. **Appearance and zoom** — landed, unreleased. `theme` picks `berth-dark` or
    `berth-light` and persists, `opacity` fades the window on macOS, and
    `backgroundBlur` reaches Ghostty in the AppKit shell. `Cmd/Ctrl + =`, `-` and `0`
-   zoom the font on both shells and keep the choice.
+   zoom the font on both shells for the session; `fontSize` stays the base.
 7. **Resize reflow**: re-wrap wrapped lines on width change so shrinking a pane does not
    garble history. The largest item here and the one allowed to move to 0.16. It moves:
    `vt100` resizes by truncating and padding rows and keeps no logical line to re-wrap,

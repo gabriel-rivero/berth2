@@ -172,15 +172,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func zoomIn(_ sender: Any?) {
-        applyFontSize(AppConfig.shared.fontSize + 1)
+        stepZoom(1)
     }
 
     @objc func zoomOut(_ sender: Any?) {
-        applyFontSize(AppConfig.shared.fontSize - 1)
+        stepZoom(-1)
     }
 
     @objc func zoomReset(_ sender: Any?) {
-        applyFontSize(AppConfig.defaultFontSize)
+        AppConfig.shared.setFontZoom(0)
+        BerthCoreHost.shared.applyFontSizeToAllSurfaces()
     }
 
     /// Jump to the agent most recently asking for a human. Repeating the
@@ -258,16 +259,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         send("surface.split", ["surface_id": id, "direction": direction, "focus": true])
     }
 
-    /// Zoom steps by one point and clamps at the settings window's range, so
-    /// the two paths cannot drift. A failed save keeps the live size in effect.
-    private func applyFontSize(_ size: Double) {
-        AppConfig.shared.setFontSize(size)
-        do {
-            try AppConfig.shared.save()
-        } catch {
-            BerthLog.app.error(
-                "could not save font size: \(error.localizedDescription, privacy: .public)")
-        }
+    /// Zoom is a session offset, so it writes nothing and reset returns to the
+    /// configured size. The clamp lives in `setFontZoom`.
+    private func stepZoom(_ delta: Double) {
+        AppConfig.shared.setFontZoom(AppConfig.shared.fontZoom + delta)
         BerthCoreHost.shared.applyFontSizeToAllSurfaces()
     }
 

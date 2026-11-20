@@ -91,17 +91,23 @@ style are shaped as one string, so a face with `calt`/`liga` draws them.
   writes the choice back.
 - `opacity` is the window opacity, `0.3…1.0`. One is opaque. The portable window
   applies it on macOS; Linux and Windows keep the window opaque because winit does
-  not expose it there.
+  not expose it there. The AppKit shell applies `opacity` and `backgroundBlur` only
+  when the key is present, so an absent key keeps whatever the user's Ghostty config
+  already says.
 - `bell` is what a BEL does: `none`, `visual` (flash the pane border, the default) or
   `audio`, which plays the system bell sound (Glass on macOS, the freedesktop bell
   elsewhere). OSC 9/777 notifications are separate and still reach the desktop.
-- `backgroundBlur` is a blur radius, `0…64`, passed to Ghostty by the AppKit shell.
+- `backgroundBlur` is a blur radius, `0…64`, passed to Ghostty by the AppKit shell
+  when it is set.
   The portable renderer writes opaque pixels, so it cannot show what is behind the
   window and ignores the key.
 - `zoomIn`, `zoomOut` and `zoomReset` are ordinary shortcuts: they step the font
-  size by one point, or return it to the configured `fontSize`, and write
-  `fontSize` so the choice survives a relaunch. The defaults are `cmd+=`, `cmd+-`
-  and `cmd+0` on macOS and `ctrl+=`, `ctrl+-`, `ctrl+0` elsewhere.
+  size by one point, and reset returns to the configured `fontSize`. Zoom lasts for
+  the session and writes nothing, so a relaunch starts at `fontSize`. The defaults
+  are `cmd+=`, `cmd+-` and `cmd+0` on macOS and `ctrl+=`, `ctrl+-`, `ctrl+0`
+  elsewhere.
+- The AppKit shell has no settings rows for `opacity` and `backgroundBlur`; set
+  them in `config.json`.
 
 ## Portable window shortcuts
 
