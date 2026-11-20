@@ -217,21 +217,25 @@ when Xvfb is absent.
 These are the window's limits; [docs/09-known-gaps.md](09-known-gaps.md) has the
 full audited inventory.
 
-- **One window, one visible workspace.** No multi-window, no detachable panes.
-- **No graphics protocols** (sixel/kitty/iTerm images): `vt100` cannot carry
-  them, so images stay with the renderer decision.
-- **No search, tab rename or tab reorder.** Tracked on the roadmap, not present
-  in the macOS app either.
-- **No installers.** The release publishes archives; there is no `.deb`,
-  AppImage or Windows installer.
+- **One window, one visible workspace.** No multi-window, no detachable panes, no pane
+  zoom.
+- **The protocol floor is xterm only.** No Kitty keyboard protocol, no synchronized
+  output, no OSC 8 spans, no focus reporting, no cursor shapes, no OSC 52 read, no OSC
+  133. The design is in [docs/11-competitive-gaps.md](11-competitive-gaps.md); it is
+  0.15 work.
+- **One palette, no ligatures.** The theme is hard-coded and each cell is shaped alone.
+- **No copy mode, paste history or command blocks.** Selection is mouse-only.
+- **No installers on macOS or Windows.** Linux has a `.deb` and a `PKGBUILD`; there is no
+  AppImage, Flatpak, Windows installer or auto-update.
 - **Detection is process-name only**, and a Windows notification is not raised.
-- **Linux/X11 is the only scripted path.** Windows and Wayland are compile
-  coverage; macOS runs the same code path and is the development host.
+- **Linux/X11 is the only scripted path.** Windows and Wayland are compile coverage
+  (Wayland now has a smoke); macOS runs the same code path and is the development host.
 - **No menu bar or single-instance handoff.** A second launch refuses to start
   when the endpoint is live but does not bring the first window forward.
+- **Window geometry is not persisted**; the window opens at 1180×720 each launch.
 
 ## Next
 
-1. Search, tab rename and tab reorder (roadmap: they need core support).
-2. OS notifications on Windows; dock/taskbar badges.
-3. Installers and notarization for the portable archives.
+Owned by [docs/04-roadmap.md](04-roadmap.md): 0.15 is the protocol floor above, 0.16 the
+window model, 0.17 shell integration and recall, 0.18 durability. Platform packaging moved
+to 1.0.

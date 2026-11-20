@@ -1,11 +1,14 @@
 # Known gaps and missing behavior
 
-Last audited: 2026-11-19, code at the 0.14.0 release: real text, scrollback,
+Last audited: 2026-11-20, code at the 0.14.1 release: real text, scrollback,
 selection with auto-scroll, clipboard, mouse reporting, IME, links, OSC events,
 divider and sidebar dragging, the palette, attention and settings panels, agent
 detection, autosave, journal, accessibility, logs and per-platform archives. This is the
 honest inventory of what is **not** in the tree. It separates missing UI, missing
-platform work, and deliberate non-goals so the three do not get confused.
+platform work, and deliberate non-goals so the three do not get confused. The
+competitive view, and which milestone owns each item, is
+[docs/11-competitive-gaps.md](11-competitive-gaps.md) and
+[docs/04-roadmap.md](04-roadmap.md).
 
 The portable window is no longer a spike: it renders real text and is usable as a
 daily terminal. It is still not feature parity with the macOS app, and the macOS
@@ -16,14 +19,23 @@ app itself has the gaps listed in
 
 ### Terminal rendering
 
+- **The protocol floor is missing.** The window sends and understands xterm only. No
+  Kitty keyboard protocol, no synchronized output (DECSET 2026), no focus in/out
+  (CSI ?1004), no cursor shapes (DECSCUSR), no OSC 8 hyperlink spans (link clicking is a
+  text heuristic, `links.rs`), no OSC 52 read, and no OSC 133 shell integration. Modern
+  TUIs and agents degrade or tear without these. The AppKit shell inherits all of them
+  from Ghostty.
 - **One font family, no ligatures.** `fontFamily` picks the face (first
   installed name wins, else system monospace) at `fontSize` × `fontScale`. There
   is no weight, line-height or zoom control, and no per-font metric tuning.
   Ligatures cannot render: each cell is shaped and cached on its own.
+- **One palette.** The window ships a hard-coded dark theme and a fixed ANSI table; there
+  is no theme selection or light mode. The AppKit shell reads the user's Ghostty config
+  instead.
 - **No text effects beyond bold/italic/dim/underline.** No strikethrough, blink,
-  underline colour, hyperlinks or per-cell font changes.
-- **No audible bell or dock badge.** Bells flash a pane ring; OSC 9/777
-  notifications also reach the desktop on macOS and Linux.
+  underline colour, styled underlines or per-cell font changes.
+- **No audio bell.** Bells flash a pane ring; OSC 9/777 notifications also reach the
+  desktop on macOS and Linux.
 - **Partial graphics protocols.** iTerm2 inline images, kitty graphics and
   sixel render. Kitty shared memory, z-index and direct placements are not
   supported, so clients fall back to base64 or text. Sixel covers the raster
@@ -62,6 +74,10 @@ app itself has the gaps listed in
 - **No divider cursor change.** The grab band is 7 px and the pointer stays an
   arrow.
 - **No menus or status bar.**
+- **Window geometry is not persisted.** A dragged sidebar width and the window
+  size are lost on relaunch; the window opens at 1180×720 every time.
+- **No copy mode or paste history.** Selection is mouse-only and the clipboard
+  keeps one entry.
 
 ### Agents, attention and notifications
 
@@ -74,11 +90,13 @@ app itself has the gaps listed in
 - **Notifications are only in the attention list.** `⌘I` lists unacknowledged
   notifications (Enter jumps and acknowledges); there is no filter, grouping or
   bulk acknowledge, and the list is not reachable from the sidebar.
-- **No OS banners, sounds or dock/taskbar badges.** `notify_os` still prints to
-  stderr.
+- **No dock/taskbar badge or sound.** Desktop banners exist on macOS and Linux; the
+  Windows path is a stub that returns without notifying, so the attention list is the
+  only surface there. `notify_os` in the headless shell prints to stderr.
 - **Mute is config-only.** `muteProviders` silences desktop notifications at
-  launch; there is no Settings row. Token and cost display needs a client to
-  report usage, and no bundled hook does yet.
+  launch; there is no Settings row. Usage needs a client to report it: `agent.usage`
+  exists and the sidebar shows it, but the bundled hooks do not report tokens or cost
+  yet.
 
 ### Session and lifecycle
 
@@ -156,6 +174,9 @@ UniFFI. Known gaps already tracked in the macOS docs:
 
 - Group management UI (create/rename/color) is absent even though
   `group.create/update/delete` exist.
+- No in-terminal search: `search` is not in its `ShortcutAction` enum, so the
+  binding is ignored.
+- No tab rename UI, tab drag-reorder, or tab overflow handling.
 - Geometric focus: `⌘]`/`⌘[` walk tree order; arrow-key spatial navigation is
   missing.
 - Agent mute and multi-agent workspace rows are incomplete; banners have no
@@ -164,10 +185,17 @@ UniFFI. Known gaps already tracked in the macOS docs:
   lose the last ~500 ms.
 - No headless app-test loop for the real GUI; `scripts/m2-acceptance.sh` needs
   the app window.
-- Socket hardening: no peer-UID check, token is visible to children, `trusted`
-  bypasses auth.
+- No terminal accessibility model; VoiceOver sees the sidebar and panels only.
+- Socket hardening: peer-uid and the token file are in the core and portable
+  path, not in this shell's own `SocketServer.swift`, so the Swift app still
+  exposes `BERTH_TOKEN` to children.
 - No Instruments profile run against the §9 budgets.
 - Scrollback is intentionally not restored.
+- Most `config.json` keys are read only by the portable window
+  (`fontFamily`, `closeExitedPanes`, `restoreLaunchFlags`, `copyOnSelect`,
+  `scrollbackLines`, `graphics`, `shell`, `resumeArgs`, `muteProviders`,
+  `sidebarWidth`); the Swift shell reads `shortcuts`, `fontSize`, `fontScale`,
+  `compactSidebar` and `socket` only.
 
 ## 5. Explicit non-goals (intentional, not gaps)
 
@@ -196,12 +224,18 @@ move to GTK4 + `libghostty-vt`.
 
 ## 7. Recommended order
 
-1. **macOS notarization:** install the Developer ID certificate and put the
-   notary credentials on the release machine; `make gui-notarize` is ready.
-2. **AppKit shell parity:** in-terminal search, tab rename/reorder, the group
-   UI and geometric focus still exist only in the portable window.
-3. **Multiple windows** and detachable surfaces.
-4. **Sidebar and palette depth:** colour/icon picker, filter, a row per agent,
-   and palette actions beyond the bound chords.
-5. **Kitty protocol depth:** shared memory, z-index and direct placements, only
+The roadmap supersedes this list; it is kept as the ordering the gap analysis
+arrived at:
+
+1. **Terminal floor in the portable window** (0.15): Kitty keyboard, synchronized
+   output, styled text and OSC 8, focus reporting, cursor shapes, ligatures, reflow.
+2. **Window model** (0.16): multiple windows, pane zoom, tab tear-off, broadcast input,
+   geometric focus, persisted geometry.
+3. **Shell integration and recall** (0.17): OSC 133 prompt marks, AppKit search, copy
+   mode, paste history, quick terminal.
+4. **Durability and agent depth** (0.18): detached PTY host, agent inbox, cost meter,
+   more providers, headless test loop.
+5. **Distribution** (1.0): notarization, Sparkle, Homebrew cask, AppImage or Flatpak,
+   Windows package.
+6. **Kitty protocol depth:** shared memory, z-index and direct placements, only
    if a tool in use needs them.
