@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Features
+
+- **Synchronized output (DECSET 2026) in the portable window.** The PTY reader's
+  side-channel scanner now observes CSI sequences and records `CSI ? 2026 h`/`l`;
+  `screen_view` reports the flag and the window keeps showing a surface's previous frame
+  until the program ends the frame, so full-screen TUIs stop tearing. A hold that lasts
+  longer than 500 ms is released, so a client that crashes mid-frame cannot freeze the
+  pane. The scanner is the CSI side channel the remaining 0.15 items reuse.
+
 ### Fixes
 
 - Next/previous tab in the portable window sent `surface.cycle` with `delta`, but the

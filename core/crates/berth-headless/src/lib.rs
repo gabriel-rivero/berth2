@@ -78,7 +78,10 @@ pub struct KittyImage {
     pub pixels: Arc<Vec<u8>>,
 }
 
+mod csi;
 mod sixel;
+
+use csi::{Csi, CsiScanner};
 
 #[derive(Debug, Clone, Default)]
 pub struct ScreenView {
@@ -99,6 +102,9 @@ pub struct ScreenView {
     pub cells: Vec<CellView>,
     pub images: Vec<ImageView>,
     pub placeholders: Vec<KittyImage>,
+    /// DECSET 2026: the program is holding a frame open, so a renderer should
+    /// keep showing the previous one until the flag clears.
+    pub is_synchronized_output_enabled: bool,
 }
 
 /// How much pointer traffic the program wants. Mirrors `vt100`.
@@ -150,6 +156,9 @@ pub struct ScreenMeta {
     /// Cell size in pixels, reported through XTWINOPS (`CSI 16 t`). The UI
     /// sets it on resize; zero means unknown.
     pub cell_pixels: Option<(u16, u16)>,
+    /// DECSET 2026: the program brackets a frame with begin/end and asks the
+    /// renderer not to paint between them.
+    pub is_synchronized_output_enabled: bool,
     /// Replies the terminal owes the program (cursor position, device
     /// attributes). The reader drains them back to the PTY.
     pub responses: Vec<String>,
@@ -620,6 +629,7 @@ impl PtyHost {
         }
         let images = lock(&surface.images).clone();
         let placeholders = lock(&surface.kitty).values().cloned().collect();
+        let is_synchronized_output_enabled = lock(&surface.meta).is_synchronized_output_enabled;
         Ok(ScreenView {
             cols,
             rows,
@@ -643,6 +653,7 @@ impl PtyHost {
             cells,
             images,
             placeholders,
+            is_synchronized_output_enabled,
         })
     }
 
@@ -665,6 +676,7 @@ impl PtyHost {
             clipboard: meta.clipboard.take(),
             notification: meta.notification.take(),
             cell_pixels: meta.cell_pixels,
+            is_synchronized_output_enabled: meta.is_synchronized_output_enabled,
             // Replies belong to the reader, which writes them to the PTY; the
             // window must not take them or the program waits forever.
             responses: Vec::new(),
@@ -1080,7 +1092,7 @@ fn spawn_reader(mut reader: Box<dyn Read + Send>, share: ReaderShare, waker: Sha
         .name("berth-pty-reader".into())
         .spawn(move || {
             let mut buffer = [0u8; 16 * 1024];
-            let mut scanner = GraphicsScanner::default();
+            let mut scanner = SideChannelScanner::default();
             loop {
                 match reader.read(&mut buffer) {
                     Ok(0) => break,
@@ -1588,8 +1600,12 @@ mod meta_tests {
             }
         }
 
-        fn feed(&self, scanner: &mut GraphicsScanner, bytes: &[u8]) {
+        fn feed(&self, scanner: &mut SideChannelScanner, bytes: &[u8]) {
             scanner.feed(bytes, &self.share());
+        }
+
+        fn is_synchronized_output_enabled(&self) -> bool {
+            lock(&self.meta).is_synchronized_output_enabled
         }
 
         fn share(&self) -> ReaderShare {
@@ -1610,7 +1626,7 @@ mod meta_tests {
     fn given_a_kitty_apc_split_across_reads_then_the_image_is_stored() {
         let fixture = ScannerFixture::new();
         let data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
-        let mut scanner = GraphicsScanner::default();
+        let mut scanner = SideChannelScanner::default();
         fixture.feed(&mut scanner, b"\x1b_Gq=2,a=T,U=1,f=100,i=7;");
         fixture.feed(&mut scanner, format!("{data}\x1b\\").as_bytes());
         let store = fixture.kitty.lock().unwrap();
@@ -1622,7 +1638,7 @@ mod meta_tests {
     #[test]
     fn given_text_before_a_split_escape_then_the_text_is_not_held_back() {
         let fixture = ScannerFixture::new();
-        let mut scanner = GraphicsScanner::default();
+        let mut scanner = SideChannelScanner::default();
         fixture.feed(&mut scanner, b"before\x1b");
         let text = lock(&fixture.screen).screen().contents();
         assert!(text.starts_with("before"), "held back: {text}");
@@ -1634,7 +1650,7 @@ mod meta_tests {
     #[test]
     fn given_a_kitty_capability_query_then_it_is_answered_ok() {
         let fixture = ScannerFixture::new();
-        let mut scanner = GraphicsScanner::default();
+        let mut scanner = SideChannelScanner::default();
         fixture.feed(
             &mut scanner,
             b"\x1b_Gi=278941603,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\",
@@ -1648,7 +1664,7 @@ mod meta_tests {
     #[test]
     fn given_a_shared_memory_query_then_it_is_reported_unsupported() {
         let fixture = ScannerFixture::new();
-        let mut scanner = GraphicsScanner::default();
+        let mut scanner = SideChannelScanner::default();
         fixture.feed(
             &mut scanner,
             b"\x1b_Gi=916472805,s=1,v=1,a=q,t=s,f=24,S=3;L3RtcC94\x1b\\",
@@ -1662,7 +1678,7 @@ mod meta_tests {
     #[test]
     fn given_a_sixel_dcs_then_the_image_is_stored_at_the_cursor() {
         let fixture = ScannerFixture::new();
-        let mut scanner = GraphicsScanner::default();
+        let mut scanner = SideChannelScanner::default();
         fixture.feed(&mut scanner, b"\x1bP0;0;0q\"1;1;2;6#0;2;100;0;0#0~~\x1b\\");
         let images = fixture.images.lock().unwrap();
         assert_eq!(images.len(), 1);
@@ -1674,7 +1690,7 @@ mod meta_tests {
     #[test]
     fn given_a_sixel_dcs_split_across_reads_then_the_image_is_stored() {
         let fixture = ScannerFixture::new();
-        let mut scanner = GraphicsScanner::default();
+        let mut scanner = SideChannelScanner::default();
         fixture.feed(&mut scanner, b"\x1bPq#0;2;0;0;100#0");
         assert!(fixture.images.lock().unwrap().is_empty());
         fixture.feed(&mut scanner, b"~~\x1b");
@@ -1687,9 +1703,56 @@ mod meta_tests {
     #[test]
     fn given_a_non_sixel_dcs_then_no_image_is_stored() {
         let fixture = ScannerFixture::new();
-        let mut scanner = GraphicsScanner::default();
+        let mut scanner = SideChannelScanner::default();
         fixture.feed(&mut scanner, b"\x1bP$q q\x1b\\");
         assert!(fixture.images.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn given_synchronized_output_begins_then_the_flag_is_set() {
+        let fixture = ScannerFixture::new();
+        let mut scanner = SideChannelScanner::default();
+        fixture.feed(&mut scanner, b"before\x1b[?2026hafter");
+        assert!(fixture.is_synchronized_output_enabled());
+        // The sequence still reaches vt100, so the text around it renders.
+        let text = lock(&fixture.screen).screen().contents();
+        assert!(text.starts_with("beforeafter"), "{text}");
+    }
+
+    #[test]
+    fn given_synchronized_output_ends_then_the_flag_clears() {
+        let fixture = ScannerFixture::new();
+        let mut scanner = SideChannelScanner::default();
+        fixture.feed(&mut scanner, b"\x1b[?2026h");
+        assert!(fixture.is_synchronized_output_enabled());
+        fixture.feed(&mut scanner, b"\x1b[?2026l");
+        assert!(!fixture.is_synchronized_output_enabled());
+    }
+
+    #[test]
+    fn given_synchronized_output_split_across_reads_then_it_is_still_observed() {
+        let fixture = ScannerFixture::new();
+        let mut scanner = SideChannelScanner::default();
+        fixture.feed(&mut scanner, b"\x1b[?20");
+        assert!(!fixture.is_synchronized_output_enabled());
+        fixture.feed(&mut scanner, b"26h");
+        assert!(fixture.is_synchronized_output_enabled());
+    }
+
+    #[test]
+    fn given_other_private_modes_then_synchronized_output_is_untouched() {
+        let fixture = ScannerFixture::new();
+        let mut scanner = SideChannelScanner::default();
+        fixture.feed(&mut scanner, b"\x1b[?25l\x1b[?1049h\x1b[?25h");
+        assert!(!fixture.is_synchronized_output_enabled());
+    }
+
+    #[test]
+    fn given_synchronized_output_among_other_modes_then_it_is_observed() {
+        let fixture = ScannerFixture::new();
+        let mut scanner = SideChannelScanner::default();
+        fixture.feed(&mut scanner, b"\x1b[?1;2026;25h");
+        assert!(fixture.is_synchronized_output_enabled());
     }
 
     #[test]
@@ -1882,13 +1945,15 @@ mod journal_tests {
 }
 
 /// Splits a PTY read into text (fed to vt100), kitty APC sequences and sixel
-/// DCS sequences (fed to the image store). The state survives chunk boundaries.
+/// DCS sequences (fed to the image store), and CSI sequences whose private
+/// modes the VT parser drops. The state survives chunk boundaries.
 #[derive(Default)]
-struct GraphicsScanner {
+struct SideChannelScanner {
     normal: Vec<u8>,
     capture: Option<Capture>,
     capture_esc: bool,
     capture_overflow: bool,
+    csi: CsiScanner,
     esc: bool,
     pending: KittyPending,
 }
@@ -1910,7 +1975,7 @@ struct KittyPending {
     data: Vec<u8>,
 }
 
-impl GraphicsScanner {
+impl SideChannelScanner {
     fn feed(&mut self, chunk: &[u8], share: &ReaderShare) {
         for &byte in chunk {
             if self.capture.is_some() {
@@ -1972,9 +2037,26 @@ impl GraphicsScanner {
                         flush_normal(&share.screen, &mut self.normal);
                         self.capture = Some(Capture::Dcs(Vec::new()));
                     }
+                    b'[' => {
+                        self.csi.begin();
+                        self.normal.push(0x1b);
+                        self.normal.push(byte);
+                    }
                     _ => {
                         self.normal.push(0x1b);
                         self.normal.push(byte);
+                    }
+                }
+                continue;
+            }
+            if self.csi.is_active() {
+                if byte == 0x1b {
+                    self.csi.abort();
+                    self.esc = true;
+                } else {
+                    self.normal.push(byte);
+                    if let Some(sequence) = self.csi.feed(byte) {
+                        observe_csi(&sequence, &share.meta);
                     }
                 }
                 continue;
@@ -1996,6 +2078,19 @@ fn flush_normal(screen: &Arc<Mutex<Parser>>, normal: &mut Vec<u8>) {
         lock(screen).process(normal);
         normal.clear();
     }
+}
+
+/// DECSET 2026 is a private mode `vt100` drops. Record it so a renderer can
+/// keep the previous frame instead of painting a half-updated grid.
+fn observe_csi(sequence: &Csi, meta: &Arc<Mutex<ScreenMeta>>) {
+    const SYNCHRONIZED_OUTPUT: u16 = 2026;
+    let Some(change) = sequence.private_mode_change() else {
+        return;
+    };
+    if !change.modes.contains(&SYNCHRONIZED_OUTPUT) {
+        return;
+    }
+    lock(meta).is_synchronized_output_enabled = change.is_enabled;
 }
 
 /// A DCS is sixel when the part before `q` is only its numeric parameters.

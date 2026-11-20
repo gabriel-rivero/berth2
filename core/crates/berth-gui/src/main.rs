@@ -46,6 +46,7 @@ mod paint;
 mod panel;
 mod settings;
 mod shells;
+mod sync_output;
 mod theme;
 mod ui;
 
@@ -392,6 +393,7 @@ fn main() {
         save_seq: 0,
         quit: false,
         captured: false,
+        frames: sync_output::FrameHold::default(),
     };
 
     if let Err(error) = event_loop.run_app(&mut app) {
@@ -639,6 +641,9 @@ struct Gui {
     /// Set when a one-frame run (PNG smoke) has written its frame.
     quit: bool,
     captured: bool,
+    /// The frame each surface last showed, held while a program has DECSET
+    /// 2026 set.
+    frames: sync_output::FrameHold,
 }
 
 impl ApplicationHandler<UserEvent> for Gui {
@@ -841,6 +846,9 @@ impl ApplicationHandler<UserEvent> for Gui {
         self.tick_agents();
         self.tick_save();
         self.tick_selection_autoscroll();
+        if self.frames.release_expired(Instant::now()) {
+            self.request_redraw();
+        }
         if self.a11y_active {
             self.refresh_a11y();
         }
@@ -927,6 +935,15 @@ impl Gui {
         }
         if self.autoscroll {
             consider(now + FRAME_INTERVAL);
+        }
+        if let Some(at) = self.frames.deadline() {
+            // A wake can land a hair before the deadline; retry shortly rather
+            // than leaving the pane held.
+            consider(if at > now {
+                at
+            } else {
+                now + Duration::from_millis(1)
+            });
         }
         next
     }
@@ -1450,6 +1467,7 @@ impl Gui {
                 );
             }
             let blink_on = self.blink_on();
+            let now = Instant::now();
             for pane in &panes {
                 let border = if pane.focused {
                     theme.pane_border_focused
@@ -1490,9 +1508,10 @@ impl Gui {
                 let Some(surface_id) = &pane.surface else {
                     continue;
                 };
-                let Ok(screen) = self.host.screen_view(surface_id) else {
+                let Ok(fresh) = self.host.screen_view(surface_id) else {
                     continue;
                 };
+                let screen = self.frames.frame_to_paint(surface_id, fresh, now);
                 let selection = self.selection.get(surface_id).copied();
                 let exited = !self.host.is_alive(surface_id);
                 let search = self
@@ -2508,6 +2527,7 @@ impl Gui {
                 self.last_meta.remove(surface_id);
                 self.flashes.remove(surface_id);
                 self.exit_announced.remove(surface_id);
+                self.frames.remove(surface_id);
             }
             Err(error) => eprintln!("berth-gui: close {surface_id}: {error}"),
         }

@@ -283,3 +283,39 @@ fn given_a_default_shell_when_a_plain_terminal_spawns_then_it_runs_that_program(
         std::thread::sleep(Duration::from_millis(20));
     }
 }
+
+/// DECSET 2026 is a private mode `vt100` drops. The PTY reader must observe it
+/// and expose it on the screen view the window renders from.
+#[cfg(unix)]
+#[test]
+fn given_synchronized_output_from_a_pty_then_the_screen_view_reports_it() {
+    use berth_core::SpawnRequest;
+
+    let host = PtyHost::new();
+    let surface_id = format!("surf-sync-output-{}", std::process::id());
+    host.spawn(SpawnRequest {
+        cwd: None,
+        argv: vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            "printf '\\033[?2026h'; sleep 2".into(),
+        ],
+        env: vec![("BERTH_SURFACE_ID".into(), surface_id.clone())],
+        cols: 80,
+        rows: 24,
+    })
+    .expect("spawn a writer of DECSET 2026");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let view = host.screen_view(&surface_id).expect("screen view");
+        if view.is_synchronized_output_enabled {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the screen view never reported synchronized output"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}

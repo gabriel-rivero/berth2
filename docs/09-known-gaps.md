@@ -1,6 +1,7 @@
 # Known gaps and missing behavior
 
-Last audited: 2026-11-20, code at the 0.14.1 release: real text, scrollback,
+Last audited: 2026-11-20, code at the 0.14.1 release; 0.15 items are marked as they land.
+The audit covers real text, scrollback,
 selection with auto-scroll, clipboard, mouse reporting, IME, links, OSC events,
 divider and sidebar dragging, the palette, attention and settings panels, agent
 detection, autosave, journal, accessibility, logs and per-platform archives. This is the
@@ -19,12 +20,12 @@ app itself has the gaps listed in
 
 ### Terminal rendering
 
-- **The protocol floor is missing.** The window sends and understands xterm only. No
-  Kitty keyboard protocol, no synchronized output (DECSET 2026), no focus in/out
-  (CSI ?1004), no cursor shapes (DECSCUSR), no OSC 8 hyperlink spans (link clicking is a
-  text heuristic, `links.rs`), no OSC 52 read, and no OSC 133 shell integration. Modern
-  TUIs and agents degrade or tear without these. The AppKit shell inherits all of them
-  from Ghostty.
+- **The protocol floor is incomplete.** Synchronized output (DECSET 2026) is in, but
+  otherwise the window sends and understands xterm only. No Kitty keyboard protocol, no
+  focus in/out (CSI ?1004), no cursor shapes (DECSCUSR), no OSC 8 hyperlink spans (link
+  clicking is a text heuristic, `links.rs`), no OSC 52 read, and no OSC 133 shell
+  integration. Modern TUIs and agents degrade or tear without these. The AppKit shell
+  inherits all of them from Ghostty.
 - **One font family, no ligatures.** `fontFamily` picks the face (first
   installed name wins, else system monospace) at `fontSize` × `fontScale`. There
   is no weight, line-height or zoom control, and no per-font metric tuning.

@@ -62,9 +62,10 @@ tagged; the AppKit shell inherits these from Ghostty already. Work through the l
 this order, one item per session: item 1 builds the CSI side-channel scanner that items
 2 and 3 reuse, and each item lands with its tests and a changelog entry.
 
-1. **Synchronized output (DECSET 2026)**: observe begin/end in the PTY stream, hold paint
-   between them so full-screen TUIs (Claude Code, docker, lazygit) stop tearing, and
-   release the hold on a timeout so a crashed client cannot freeze the pane.
+1. **Synchronized output (DECSET 2026)** — landed, unreleased. The PTY reader's CSI
+   side channel records begin/end, `screen_view` carries the flag, and the window keeps
+   the previous frame until the program ends it or 500 ms passes, so full-screen TUIs
+   stop tearing and a crashed client cannot freeze the pane.
 2. **Kitty keyboard protocol**: progressive enhancement, `CSI u` for modified keys, key
    release events, disambiguated Escape; track the flags a program sets, answer the
    query, and advertise support in DA1. Agents and Neovim/Helix bind it.

@@ -36,6 +36,9 @@ pass.
    The scanner also answers the `a=q` capability probe: `OK` when graphics are
    on and `ENOTSUPPORTED` for shared memory or when `graphics` is off. Without
    that reply, clients such as yazi assume no image support and never transmit.
+   The same scanner observes CSI sequences (`ESC [ … final`) without withholding
+   them from `vt100`. The first consumer is DECSET 2026 for synchronized output;
+   kitty keyboard flags and extended SGR parameters reuse the same side channel.
 2. **Image store.** Each surface owns a bounded list of images: protocol id,
    pixel buffer, pixel size, the cell rectangle or auto size, and an absolute
    line anchor (`scrollback_len + cursor_row` at insert). Scrolling and
