@@ -918,6 +918,10 @@ impl<'a> Painter<'a> {
             }
             for run in &runs {
                 let first = &view.cells[base + run.start];
+                // A run is all one blink state, so the off phase hides it whole.
+                if first.blink && !options.blink_on {
+                    continue;
+                }
                 let origin = (area.x + run.start * cell.width, area.y + row * cell.height);
                 let mut fg = first.fg.map(rgb).unwrap_or(options.theme.terminal_fg);
                 if first.dim {
@@ -1449,6 +1453,8 @@ fn same_run_style(first: &CellView, cell: &CellView) -> bool {
         && first.dim == cell.dim
         && first.inverse == cell.inverse
         && first.fg == cell.fg
+        // The background is the glyph colour only under inverse.
+        && (!first.inverse || first.bg == cell.bg)
         && first.blink == cell.blink
 }
 
@@ -1479,6 +1485,7 @@ fn rtl_runs(cells: &[CellView], base: usize, cols: usize, cursor: Option<usize>)
                 || cell.dim != first.dim
                 || cell.inverse != first.inverse
                 || cell.fg != first.fg
+                || (first.inverse && cell.bg != first.bg)
                 || cell.blink != first.blink
                 || cursor == Some(base + j)
             {
@@ -1598,18 +1605,52 @@ mod tests {
 
     #[test]
     fn given_a_blink_cell_when_the_phase_is_off_then_no_glyph_is_painted() {
-        let mut font = FontRenderer::new(16.0, &[], crate::font::Options::default());
-        let cell = font.cell();
-        let mut buffer = vec![0u32; cell.width * cell.height];
-        let view = ScreenView {
-            cols: 1,
-            rows: 1,
-            cursor_hidden: true,
-            cells: vec![CellView {
-                contents: "B".to_string(),
+        let pixels = paint_blink_row(vec![CellView {
+            contents: "B".to_string(),
+            blink: true,
+            ..CellView::default()
+        }]);
+        assert!(
+            pixels.iter().all(|pixel| *pixel == 0),
+            "a blinking cell painted during the off phase"
+        );
+    }
+
+    /// An RTL run forms even when every cell blinks, so the phase has to hide
+    /// the whole run, not just the per-cell glyphs.
+    #[test]
+    fn given_a_blinking_rtl_run_then_the_off_phase_hides_it() {
+        let cells = vec![
+            CellView {
+                contents: "\u{05D0}".to_string(),
                 blink: true,
                 ..CellView::default()
-            }],
+            },
+            CellView {
+                contents: "\u{05D1}".to_string(),
+                blink: true,
+                ..CellView::default()
+            },
+        ];
+        assert_eq!(rtl_runs(&cells, 0, cells.len(), None).len(), 1);
+        let pixels = paint_blink_row(cells);
+        assert!(
+            pixels.iter().all(|pixel| *pixel == 0),
+            "a blinking RTL run painted during the off phase"
+        );
+    }
+
+    /// Paint one row at the blink-off phase, returning the pixel buffer.
+    fn paint_blink_row(cells: Vec<CellView>) -> Vec<u32> {
+        let mut font = FontRenderer::new(16.0, &[], crate::font::Options::default());
+        let cell = font.cell();
+        let cols = cells.len();
+        let mut buffer = vec![0u32; cell.width * cols * cell.height];
+        let view = ScreenView {
+            cols: u16::try_from(cols).expect("a short row"),
+            rows: 1,
+            cursor_hidden: true,
+            cells,
             ..ScreenView::default()
         };
         let theme = Theme::default();
@@ -1623,17 +1664,14 @@ mod tests {
             hover_link: None,
             blink_on: false,
         };
-        let mut painter = Painter::new(&mut buffer, cell.width, cell.height);
+        let mut painter = Painter::new(&mut buffer, cell.width * cols, cell.height);
         painter.screen(
             &mut font,
             &view,
-            Rect::new(0, 0, cell.width, cell.height),
+            Rect::new(0, 0, cell.width * cols, cell.height),
             &options,
         );
-        assert!(
-            buffer.iter().all(|pixel| *pixel == 0),
-            "a blinking cell painted during the off phase"
-        );
+        buffer
     }
 
     #[test]
@@ -1716,6 +1754,33 @@ mod tests {
     }
 
     #[test]
+    fn given_a_background_change_outside_inverse_then_the_run_still_shapes() {
+        let mut cells = row(&["a", "b", "c", "d"]);
+        cells[2].bg = Some([4, 5, 6]);
+        cells[3].bg = Some([4, 5, 6]);
+        let runs = shaping_runs(&cells, 0, cells.len(), None);
+        assert_eq!(runs.len(), 1, "{runs:?}");
+        assert_eq!(runs[0].text, "abcd");
+    }
+
+    #[test]
+    fn given_inverse_cells_with_different_backgrounds_then_the_run_breaks() {
+        // Under inverse the glyph colour is the cell background, so merging
+        // these would paint the second cell in the first one's colour.
+        let mut cells = row(&["a", "b", "c", "d"]);
+        for cell in cells.iter_mut() {
+            cell.inverse = true;
+            cell.fg = Some([1, 2, 3]);
+        }
+        cells[2].bg = Some([4, 5, 6]);
+        cells[3].bg = Some([4, 5, 6]);
+        let runs = shaping_runs(&cells, 0, cells.len(), None);
+        assert_eq!(runs.len(), 2, "{runs:?}");
+        assert_eq!(runs[0].text, "ab");
+        assert_eq!(runs[1].text, "cd");
+    }
+
+    #[test]
     fn given_a_blink_or_cursor_cell_then_it_is_not_shaped_in_a_run() {
         let mut cells = row(&["a", "b", "c", "d"]);
         cells[1].blink = true;
@@ -1748,6 +1813,26 @@ mod tests {
         let mut cells = row(&["ا", "ب", "ج"]);
         cells[1].bold = true;
         cells[2].bold = true;
+        assert_eq!(rtl_runs(&cells, 0, cells.len(), None).len(), 2);
+    }
+
+    #[test]
+    fn given_a_background_change_inside_an_arabic_phrase_then_it_stays_one_run() {
+        let mut cells = row(&["ا", "ب", "ج"]);
+        cells[1].bg = Some([1, 2, 3]);
+        cells[2].bg = Some([1, 2, 3]);
+        assert_eq!(rtl_runs(&cells, 0, cells.len(), None).len(), 1);
+    }
+
+    #[test]
+    fn given_inverse_arabic_cells_with_different_backgrounds_then_the_run_splits() {
+        let mut cells = row(&["ا", "ب", "ج"]);
+        for cell in cells.iter_mut() {
+            cell.inverse = true;
+            cell.fg = Some([1, 2, 3]);
+        }
+        cells[1].bg = Some([4, 5, 6]);
+        cells[2].bg = Some([4, 5, 6]);
         assert_eq!(rtl_runs(&cells, 0, cells.len(), None).len(), 2);
     }
 

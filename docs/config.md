@@ -25,7 +25,7 @@ socket mode is read at launch.
   "fontWeight": 400,
   "lineHeight": 1.35,
   "fontFeatures": ["calt", "liga"],
-  "fontMetrics": {"JetBrains Mono": {"width": 9, "height": 20}},
+  "fontMetrics": {"MesloLGS NF": {"width": 9, "height": 20}},
   "compactSidebar": false,
   "closeExitedPanes": true,
   "restoreLaunchFlags": true,

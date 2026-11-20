@@ -386,6 +386,7 @@ fn main() {
         proxy: proxy.clone(),
         wake: Arc::clone(&wake),
         blink_shown: true,
+        has_blinking_content: false,
         ime_cursor: None,
         autoscroll: false,
         cursor_icon: CursorIcon::Default,
@@ -642,6 +643,9 @@ struct Gui {
     /// Blink phase of the last frame, so a phase flip is what schedules a
     /// repaint instead of a fixed frame timer.
     blink_shown: bool,
+    /// Set at paint time when a focused pane blinks, so the loop wakes on the
+    /// phase edge only while something visible blinks.
+    has_blinking_content: bool,
     /// Cursor cell and pixel origin the IME window was last placed at.
     ime_cursor: Option<(String, u16, u16, i32, i32)>,
     /// Set by `tick_selection_autoscroll` while a drag sits past a pane edge,
@@ -906,6 +910,12 @@ impl ApplicationHandler<UserEvent> for Gui {
     }
 }
 
+/// Blinking text keeps the timer awake in any pane; a blinking cursor only
+/// counts where it is drawn, which needs focus and no scrollback.
+fn blinks_needing_timer(window_focused: bool, cursor_blinks: bool, cell_blinks: bool) -> bool {
+    window_focused && (cursor_blinks || cell_blinks)
+}
+
 impl Gui {
     /// Cursor blink phase: `true` draws the cursor. The loop wakes on the phase
     /// change, not on a frame timer.
@@ -915,7 +925,7 @@ impl Gui {
     }
 
     fn needs_blink(&self) -> bool {
-        self.window_focused && !lock(&self.state).surfaces.is_empty()
+        self.has_blinking_content
     }
 
     /// Drop bells whose flash has finished, repainting once so the pane border
@@ -1475,6 +1485,7 @@ impl Gui {
         let cell = self.cell();
         let area = self.content_area(width, height);
         let theme = self.theme;
+        self.has_blinking_content = false;
         let tab_height = self.tab_height();
         let flash = self
             .flashes
@@ -1576,6 +1587,15 @@ impl Gui {
                     continue;
                 };
                 let screen = self.frames.frame_to_paint(surface_id, fresh, now);
+                let cursor_blinks = pane.focused
+                    && !screen.cursor_hidden
+                    && screen.scrollback == 0
+                    && screen.cursor_style.blinks;
+                self.has_blinking_content |= blinks_needing_timer(
+                    self.window_focused,
+                    cursor_blinks,
+                    screen.cells.iter().any(|cell| cell.blink),
+                );
                 let selection = self.selection.get(surface_id).copied();
                 let exited = !self.host.is_alive(surface_id);
                 let search = self
@@ -1607,7 +1627,9 @@ impl Gui {
                     exited,
                     search,
                     hover_link,
-                    blink_on,
+                    // Blinking text stays solid while the window is unfocused,
+                    // since no timer runs to flip the phase.
+                    blink_on: blink_on || !self.window_focused,
                 };
                 let font = self.font();
                 painter.screen(font, &screen, pane.content, &options);
@@ -4196,6 +4218,26 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// The protocol names the tab step by direction rather than a signed delta.
 fn cycle_direction(delta: i32) -> &'static str {
     if delta < 0 { "prev" } else { "next" }
+}
+
+#[cfg(test)]
+mod blink_timer_tests {
+    use super::blinks_needing_timer;
+
+    #[test]
+    fn given_blinking_text_in_a_background_pane_then_the_timer_stays_armed() {
+        assert!(blinks_needing_timer(true, false, true));
+    }
+
+    #[test]
+    fn given_nothing_blinking_then_the_timer_sleeps() {
+        assert!(!blinks_needing_timer(true, false, false));
+    }
+
+    #[test]
+    fn given_an_unfocused_window_then_no_blink_timer_runs() {
+        assert!(!blinks_needing_timer(false, true, true));
+    }
 }
 
 #[cfg(test)]
