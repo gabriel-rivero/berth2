@@ -643,8 +643,8 @@ struct Gui {
     /// Blink phase of the last frame, so a phase flip is what schedules a
     /// repaint instead of a fixed frame timer.
     blink_shown: bool,
-    /// Set at paint time when a focused pane blinks, so the loop wakes on the
-    /// phase edge only while something visible blinks.
+    /// Set at paint time when visible content blinks, so the loop wakes on the
+    /// phase edge only then.
     has_blinking_content: bool,
     /// Cursor cell and pixel origin the IME window was last placed at.
     ime_cursor: Option<(String, u16, u16, i32, i32)>,
