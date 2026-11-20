@@ -115,6 +115,9 @@ jobs:
           fi
           if [ "$RUNNER_OS" = "Linux" ] && [[ "$GITHUB_REF" == refs/tags/* ]]; then
             ./packaging/debian/build-deb.sh "$version" core/target/release dist
+            # The release job merges artifacts into dist/, so the .deb has to
+            # leave this job without the dist/ prefix or it lands at dist/dist.
+            cp dist/berth_*.deb .
           fi
           if [ "$RUNNER_OS" = "macOS" ]; then
             if [[ "$GITHUB_REF" == refs/tags/* ]]; then export VERSION="$version"; fi
@@ -128,7 +131,7 @@ jobs:
           name: portable-${{ matrix.target }}
           path: |
             berth-gui-*
-            dist/berth_*.deb
+            berth_*.deb
           retention-days: 7
 
   # One publish step, only after the app and every portable archive built. A
