@@ -11,7 +11,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.13.0"
+version = "0.14.0"
 edition = "2024"
 rust-version = "1.89"
 license = "MIT"
@@ -49,3 +49,10 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+
+# Same optimisations as release, but with symbols so `sample` and Instruments
+# show Rust frames. Use it for measurements only: `make perf-trace`.
+[profile.profiling]
+inherits = "release"
+strip = "none"
+debug = 1

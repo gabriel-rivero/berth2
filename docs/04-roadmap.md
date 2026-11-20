@@ -96,7 +96,7 @@ breadcrumbs to `crash.log`, and one `surface:` geometry line per size change.
 app by downloading the CI-built GhosttyKit.
 
 - Hook recipes for Claude Code and opencode (shipped as copy-paste snippets + `berth hooks install`). **Done.**
-- Perf pass against the budgets in `docs/02-architecture.md` §9; Instruments trace of startup and keystroke path. **Reconcile, core dispatch and detection-pass timings are logged; the Instruments trace is still open.**
+- Perf pass against the budgets in `docs/02-architecture.md` §9; Instruments trace of startup and keystroke path. **Done 2026-11-19:** a symbolized Time Profiler run plus phase logs; cold start 135–143 ms, repaint 8–16 ms, socket p99 0.05 ms, idle CPU ~0 %, RSS 161 MB at 8 panes. Startup work was moved to the font worker threads and the passive detector stopped forking `ps`.
 - Crash/quit safety, zombie PTY audit, restore fuzzing (kill -9 mid-session). **Done: eager PTY teardown, snapshot validation, corruption tests, and the three defects above.**
 - Polish: notification popover, empty states, sidebar density, theme tokens, onboarding (one screen). **Done.**
 - Docs: README, protocol reference, config reference. **Done.**
@@ -153,7 +153,9 @@ Swift gaps list, because several items are new to both shells.
 - ~~Accessibility tree~~: shipped in 0.11 as an AccessKit tree with the focused
   terminal as a `Terminal` node; sidebar and panels are still outside it.
 - **Packaging**: the Linux release ships a Debian `.deb`, an Arch `PKGBUILD` and
-  the CLI beside the window; notarization is next.
+  the CLI beside the window. The macOS bundle is ad-hoc signed; `make
+  gui-notarize` signs with a Developer ID and notarizes once that certificate is
+  installed, which CI can do from a secret.
 - **Graphics protocols**: iTerm2 inline images, kitty graphics (including yazi's
   Unicode placeholders) and sixel render in the portable window. `vt100` has no
   APC or DCS callback, so a side-channel scanner in the PTY reader handles them;

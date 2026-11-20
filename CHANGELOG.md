@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.14.0 — 2026-11-19
 
 ### Security
 
@@ -17,6 +17,24 @@
   mouse-tracking program as xterm buttons 6 and 7. It used to be read as
   `y > 0.0 == false`, so a sideways swipe arrived as a wheel-down and moved the
   selection instead of shifting the view.
+
+### Performance
+
+- Cold start with a restored session is 135–143 ms (budget 150 ms) and an idle
+  eight-pane window sits near 0 % CPU. The system font database is read once and
+  the two font systems are built on worker threads while the window and adapter
+  come up; passive agent detection now reads `libproc`/`sysctl` instead of
+  forking `ps` twice per surface per second, which was the idle CPU cost.
+- `BERTH_TRACE=1` prints startup phases and repaint times, the release binary
+  logs the first frame in milliseconds, and `make perf-trace` records a
+  symbolized Time Profiler trace of the launch path.
+
+### Packaging
+
+- `make gui-notarize` signs the bundle and nested binaries with a Developer ID
+  and the hardened runtime, submits to `notarytool`, staples the ticket and
+  checks it with `spctl`. It needs a paid Apple Developer certificate and stored
+  notary credentials; the local build stays ad-hoc signed.
 
 ### Features
 

@@ -75,6 +75,32 @@ struct CacheKey {
 /// with more distinct cells than this is scrolling thousands of unique lines.
 const CACHE_LIMIT: usize = 8_192;
 
+/// A font built on a worker thread while the window and the restored shells are
+/// being set up. `take` joins it when the first frame needs it.
+pub struct FontSlot {
+    job: Option<std::thread::JoinHandle<FontRenderer>>,
+    ready: Option<FontRenderer>,
+}
+
+impl FontSlot {
+    pub fn spawn(pixels: f32, families: Vec<String>) -> Self {
+        let job = std::thread::Builder::new()
+            .name("berth-font".into())
+            .spawn(move || FontRenderer::new(pixels, &families))
+            .ok();
+        Self { job, ready: None }
+    }
+
+    pub fn take(&mut self) -> Option<FontRenderer> {
+        if self.ready.is_none()
+            && let Some(job) = self.job.take()
+        {
+            self.ready = job.join().ok();
+        }
+        self.ready.take()
+    }
+}
+
 pub struct FontRenderer {
     font_system: FontSystem,
     swash: SwashCache,
@@ -86,6 +112,9 @@ pub struct FontRenderer {
     /// glyphs from whichever face actually has them.
     families: Vec<FamilyOwned>,
     cache: HashMap<CacheKey, Option<Arc<Raster>>>,
+    /// Face lookup is a database query; a glyph redraws often, so remember the
+    /// answer per family and style.
+    faces: HashMap<(usize, bool, bool), Option<fontdb::ID>>,
 }
 
 /// Every configured name that is installed, in the user's order, then the
@@ -143,6 +172,25 @@ fn attrs_for(family: Family<'_>, style: TextStyle) -> Attrs<'_> {
     attrs
 }
 
+/// The system font database is expensive to build (a few thousand faces read
+/// from disk) and the window builds two `FontSystem`s, one for the grid and one
+/// for chrome. Load it once and clone the parsed database for each system.
+pub fn preload() {
+    std::thread::spawn(|| {
+        let _ = shared_database();
+    });
+}
+
+fn shared_database() -> (String, fontdb::Database) {
+    static SHARED: std::sync::OnceLock<(String, fontdb::Database)> = std::sync::OnceLock::new();
+    SHARED
+        .get_or_init(|| {
+            let system = FontSystem::new();
+            (system.locale().to_string(), system.db().clone())
+        })
+        .clone()
+}
+
 impl FontRenderer {
     /// Build a renderer at `font_size` pixels. Text comes from the first
     /// configured name the system knows; the rest supply what it lacks.
@@ -150,7 +198,10 @@ impl FontRenderer {
     pub fn new(font_size: f32, families: &[String]) -> Self {
         let font_size = font_size.max(4.0);
         let metrics = Metrics::relative(font_size, 1.35);
-        let mut font_system = FontSystem::new();
+        let started = std::time::Instant::now();
+        let (locale, database) = shared_database();
+        let database_ms = started.elapsed().as_millis();
+        let mut font_system = FontSystem::new_with_locale_and_db(locale, database);
         let resolved = resolve_families(&font_system, families);
         let mut buffer = Buffer::new(&mut font_system, metrics);
         buffer.set_size(Some(f32::MAX), Some(metrics.line_height * 2.0));
@@ -166,13 +217,17 @@ impl FontRenderer {
             },
             families: resolved,
             cache: HashMap::new(),
+            faces: HashMap::new(),
         };
         renderer.cell = renderer.measure_cell();
         // Which face the config actually resolved to; the first thing to check
         // when a window looks like it ignored `fontFamily`.
         crate::log::line(&format!(
-            "font: {:?} at {font_size:.1}px cell {}x{}",
-            renderer.families, renderer.cell.width, renderer.cell.height
+            "font: {:?} at {font_size:.1}px cell {}x{} (database {database_ms} ms, ready {} ms)",
+            renderer.families,
+            renderer.cell.width,
+            renderer.cell.height,
+            started.elapsed().as_millis()
         ));
         renderer
     }
@@ -269,12 +324,12 @@ impl FontRenderer {
     /// tried rather than giving up.
     fn render_cell(&mut self, text: &str, style: TextStyle) -> Option<Raster> {
         let families = self.families.clone();
-        for family in &families {
+        for (index, family) in families.iter().enumerate() {
             let attrs = attrs_for(family.as_family(), style);
             // A named face must draw the glyph itself. cosmic-text otherwise
             // substitutes another installed font, which is how a powerline
             // separator ended up as a 6x7 box from an unrelated face.
-            let required = self.face_id(family, style);
+            let required = self.face_for(index, family, style);
             if let Some(raster) = self.shape_cell(text, &attrs, required) {
                 return Some(raster);
             }
@@ -284,11 +339,20 @@ impl FontRenderer {
 
     /// The face `family` resolves to for this style, or `None` for the generic
     /// families, which are the fallback of last resort.
-    fn face_id(&self, family: &FamilyOwned, style: TextStyle) -> Option<fontdb::ID> {
+    fn face_for(
+        &mut self,
+        index: usize,
+        family: &FamilyOwned,
+        style: TextStyle,
+    ) -> Option<fontdb::ID> {
         if !matches!(family, FamilyOwned::Name(_)) {
             return None;
         }
-        self.font_system.db().query(&fontdb::Query {
+        let key = (index, style.bold, style.italic);
+        if let Some(hit) = self.faces.get(&key) {
+            return *hit;
+        }
+        let id = self.font_system.db().query(&fontdb::Query {
             families: &[family.as_family()],
             weight: if style.bold {
                 Weight::BOLD
@@ -301,7 +365,9 @@ impl FontRenderer {
             } else {
                 Style::Normal
             },
-        })
+        });
+        self.faces.insert(key, id);
+        id
     }
 
     fn shape_cell(

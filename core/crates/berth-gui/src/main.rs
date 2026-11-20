@@ -55,6 +55,17 @@ const FRAME_INTERVAL: Duration = Duration::from_millis(33);
 const FLASH_DURATION: Duration = Duration::from_millis(1200);
 const BLINK_INTERVAL: Duration = Duration::from_millis(530);
 
+/// Print a startup phase time when `BERTH_TRACE` is set. The first-frame line
+/// stays unconditional; these phases exist to find what delayed it.
+fn trace_phase(started: Instant, label: &str) {
+    if std::env::var_os("BERTH_TRACE").is_some() {
+        eprintln!(
+            "berth-gui: phase {label} at {} ms",
+            started.elapsed().as_millis()
+        );
+    }
+}
+
 /// The next moment the cursor blink phase flips, in `started`-relative steps.
 /// Always strictly after `now`.
 fn next_blink_edge(started: Instant, now: Instant) -> Instant {
@@ -183,6 +194,9 @@ fn main() {
         eprintln!("berth-gui: config skipped: {warning}");
     }
     log::init();
+    // Read the system font database while the window and shells are being set
+    // up; the first frame blocks on it otherwise.
+    font::preload();
     let socket = args.socket.clone().unwrap_or_else(paths::socket_path);
     let mode = args
         .mode
@@ -322,6 +336,8 @@ fn main() {
         config,
         font: None,
         chrome_font: None,
+        font_job: None,
+        chrome_job: None,
         clipboard: arboard::Clipboard::new().ok(),
         smoke: args.smoke_ms.map(Duration::from_millis),
         smoke_png: args.smoke_png,
@@ -555,6 +571,8 @@ struct Gui {
     config: Config,
     font: Option<FontRenderer>,
     chrome_font: Option<FontRenderer>,
+    font_job: Option<font::FontSlot>,
+    chrome_job: Option<font::FontSlot>,
     clipboard: Option<arboard::Clipboard>,
     smoke: Option<Duration>,
     smoke_png: Option<PathBuf>,
@@ -637,6 +655,18 @@ impl ApplicationHandler<UserEvent> for Gui {
                 return;
             }
         };
+        trace_phase(self.started, "window");
+        // Build both fonts while softbuffer, the accessibility adapter and the
+        // pane layout are set up; the first frame joins them.
+        self.scale = window.scale_factor();
+        self.font_job = Some(font::FontSlot::spawn(
+            self.config.font_pixels(self.scale),
+            self.config.font_family.clone(),
+        ));
+        self.chrome_job = Some(font::FontSlot::spawn(
+            CHROME_FONT_SIZE * self.scale as f32,
+            self.config.font_family.clone(),
+        ));
         let context = match softbuffer::Context::new(window.clone()) {
             Ok(context) => context,
             Err(error) => {
@@ -655,16 +685,17 @@ impl ApplicationHandler<UserEvent> for Gui {
                 return;
             }
         };
+        trace_phase(self.started, "surface");
         window.set_ime_allowed(true);
         self.a11y = Some(accesskit_winit::Adapter::with_event_loop_proxy(
             &window,
             self.proxy.clone(),
         ));
         window.set_visible(true);
-        self.scale = window.scale_factor();
         self.sidebar_width = self.config.sidebar_pixels().max(config::MIN_SIDEBAR_WIDTH);
         self.context = Some(context);
         self.surface = Some(surface);
+        trace_phase(self.started, "adapter");
         self.window = Some(window);
         self.request_redraw();
     }
@@ -1036,8 +1067,11 @@ impl Gui {
     }
 
     fn font(&mut self) -> &mut FontRenderer {
-        let pixels = self.config.font_pixels(self.scale);
         if self.font.is_none() {
+            self.font = self.font_job.take().and_then(|mut job| job.take());
+        }
+        if self.font.is_none() {
+            let pixels = self.config.font_pixels(self.scale);
             self.font = Some(FontRenderer::new(pixels, &self.config.font_family));
         }
         self.font.as_mut().expect("font just created")
@@ -1048,6 +1082,9 @@ impl Gui {
     }
 
     fn chrome_font(&mut self) -> &mut FontRenderer {
+        if self.chrome_font.is_none() {
+            self.chrome_font = self.chrome_job.take().and_then(|mut job| job.take());
+        }
         if self.chrome_font.is_none() {
             self.chrome_font = Some(FontRenderer::new(
                 CHROME_FONT_SIZE * self.scale as f32,
@@ -1345,6 +1382,7 @@ impl Gui {
         width: usize,
         height: usize,
     ) -> Result<(), String> {
+        let trace_started = Instant::now();
         let cell = self.cell();
         let area = self.content_area(width, height);
         let theme = self.theme;
@@ -1386,7 +1424,6 @@ impl Gui {
         let mut buffer = soft
             .buffer_mut()
             .map_err(|error| format!("softbuffer buffer: {error}"))?;
-
         {
             let mut painter = Painter::new(&mut buffer, width, height);
             painter.fill(Rect::new(0, 0, width, height), theme.terminal_bg);
@@ -1589,16 +1626,26 @@ impl Gui {
         }
 
         self.update_ime_cursor(width, height);
+        if !self.ready {
+            trace_phase(self.started, "first paint");
+        }
         buffer
             .present()
             .map_err(|error| format!("softbuffer present: {error}"))?;
+        if std::env::var_os("BERTH_TRACE").is_some() {
+            eprintln!(
+                "berth-gui: paint {} ms",
+                trace_started.elapsed().as_millis()
+            );
+        }
         if !self.ready {
             self.ready = true;
             println!(
-                "berth-gui: window ready {width}x{height} ({} pane(s), {}x{} cell)",
+                "berth-gui: window ready {width}x{height} ({} pane(s), {}x{} cell) in {} ms",
                 panes.len(),
                 cell.width,
-                cell.height
+                cell.height,
+                self.started.elapsed().as_millis()
             );
         }
         Ok(())

@@ -252,6 +252,34 @@ what `berth run`, `hooks install` and the socket scripts call.
 - **Local check:** `packaging/debian/build-deb.sh VERSION` after building both
   Linux binaries, or `makepkg -si` from `packaging/arch` on Arch.
 
+## Signing and notarizing the macOS app
+
+`make gui-app` produces an ad-hoc signed bundle, which is enough locally but
+trips Gatekeeper when another Mac downloads it. Notarizing needs a paid Apple
+Developer account:
+
+1. Install a **Developer ID Application** certificate in the login keychain
+   (Xcode: Settings, Accounts, Manage Certificates).
+2. Store the notary credentials once:
+
+   ```sh
+   xcrun notarytool store-credentials berth-notary \
+     --apple-id <apple-id> --team-id <team-id> --password <app-specific-password>
+   ```
+
+3. Sign and notarize:
+
+   ```sh
+   DEVELOPER_ID="Developer ID Application: Name (TEAMID)" \
+   NOTARY_PROFILE=berth-notary make gui-notarize
+   ```
+
+The script signs the nested `berth-gui` and `berth` binaries and the bundle with
+the hardened runtime and a timestamp, submits a zip with `notarytool --wait`,
+staples the ticket, and checks the result with `spctl`. Without the certificate
+it stops before changing anything. CI still publishes the ad-hoc bundle until
+the signing identity is available as a secret.
+
 ## M4 crash and restore checkpoint (run on the Mac)
 
 ```sh

@@ -260,10 +260,23 @@ berth2/
 | Idle CPU, 8 panes, 1 hidden window | < 1 % |
 | RSS, 8 panes × 10k scrollback | ≤ 1.2 GB |
 
+Measured on the portable window, 2026-11-19 (MacBook Pro, M-series, 2360×1440 at
+2×, release build):
+
+| Path | Measured | Budget |
+| --- | --- | --- |
+| Cold start, restored 4 workspaces | 135–143 ms | ≤ 150 ms |
+| Full-window repaint after input | 8–16 ms | ≤ 1 frame |
+| Socket round trip, `workspace.list` | 0.05 ms p99 | ≤ 2 ms |
+| Idle CPU, 8 panes × 8k scrollback | 0.0–0.2 % | < 1 % |
+| RSS, 8 panes × 8k scrollback | 161 MB | ≤ 1.2 GB |
+
 Reconcile, core-dispatch and detection-pass timings are written to
 `~/Library/Logs/Berth/berth.log`, and a watchdog appends any main-thread stall
 over two seconds, with the preceding breadcrumbs, to `crash.log`. Use those
-before reaching for Instruments.
+before reaching for Instruments. `BERTH_TRACE=1` adds startup phases and
+per-repaint times to stderr, and `make perf-trace` records a symbolized trace
+of the launch path.
 
 ## 10. Operational risks
 

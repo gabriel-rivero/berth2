@@ -7,7 +7,7 @@ CONFIG ?= release
 ZIG_FLAGS := -Doptimize=ReleaseFast -Dapp-runtime=none -Demit-xcframework=true \
              -Demit-macos-app=false -Dxcframework-target=native
 
-.PHONY: help bootstrap fetch-engine core-lib bindings build app run cli headless gui gui-app gui-smoke acceptance m3 schema test test-core fmt fmt-check clean engine-clean
+.PHONY: help bootstrap fetch-engine core-lib bindings build app run cli headless gui gui-app gui-smoke gui-notarize perf-trace acceptance m3 schema test test-core fmt fmt-check clean engine-clean
 
 help:
 	@echo "make bootstrap   fetch pinned Ghostty submodule + build GhosttyKit (macOS)"
@@ -20,7 +20,9 @@ help:
 	@echo "make cli         build the berth CLI at core/target/release/berth"
 	@echo "make headless    build the headless shell at core/target/release/berth-headless"
 	@echo "make gui         build the portable window at core/target/release/berth-gui"
-	@echo "make gui-app     wrap it in build/BerthGui.app (macOS)"
+	@echo "make gui-app     wrap it in build/BerthGui.app (macOS, ad-hoc signed)"
+	@echo "make gui-notarize sign with DEVELOPER_ID and notarize (macOS)"
+	@echo "make perf-trace  record a symbolized startup trace (macOS)"
 	@echo "make gui-smoke   render the window under Xvfb and exit (headless check)"
 	@echo "make acceptance  run the M2 protocol check against the running app"
 	@echo "make m3          run the M3 agent check against the running app"
@@ -65,6 +67,12 @@ gui:
 
 gui-app: gui cli
 	./scripts/bundle-gui.sh release
+
+perf-trace:
+	./scripts/perf-trace.sh
+
+gui-notarize: gui-app
+	./scripts/notarize-gui.sh
 
 gui-smoke: gui
 	./scripts/gui-smoke.sh

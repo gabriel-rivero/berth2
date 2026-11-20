@@ -1135,18 +1135,27 @@ fn process_comm(pid: u32) -> Option<String> {
         .filter(|text| !text.is_empty())
 }
 
-/// macOS has no `/proc`; `ps` is the portable answer and is what the AppKit
-/// shell uses for passive detection too.
+/// macOS has no `/proc`. `libproc` answers without forking, which matters: the
+/// passive detector asks once a second for every surface without an agent.
 #[cfg(target_os = "macos")]
 fn process_comm(pid: u32) -> Option<String> {
-    let output = std::process::Command::new("ps")
-        .args(["-o", "comm=", "-p", &pid.to_string()])
-        .output()
-        .ok()?;
-    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    Some(text)
-        .filter(|text| !text.is_empty())
-        .map(|text| text.rsplit('/').next().unwrap_or(&text).to_string())
+    let mut buffer = [0u8; 256];
+    // SAFETY: the buffer is valid for its stated length and pid is an int.
+    let length = unsafe {
+        libc::proc_name(
+            pid as libc::c_int,
+            buffer.as_mut_ptr().cast(),
+            buffer.len() as u32,
+        )
+    };
+    if length <= 0 {
+        return None;
+    }
+    let length = (length as usize).min(buffer.len());
+    let text = String::from_utf8_lossy(&buffer[..length])
+        .trim()
+        .to_string();
+    Some(text).filter(|text| !text.is_empty())
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -1167,18 +1176,67 @@ fn process_argv(pid: u32) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// The kernel keeps the original argv after the executable path. One
+/// `sysctl(KERN_PROCARGS2)` is much cheaper than forking `ps` per surface.
 #[cfg(target_os = "macos")]
 fn process_argv(pid: u32) -> Vec<String> {
-    let Ok(output) = std::process::Command::new("ps")
-        .args(["-o", "args=", "-p", &pid.to_string()])
-        .output()
-    else {
-        return Vec::new();
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid as libc::c_int];
+    let mut size: libc::size_t = 0;
+    // SAFETY: `sysctl` writes only the size into `size` for a null buffer, and
+    // the second call fills a buffer of exactly that size.
+    unsafe {
+        if libc::sysctl(
+            mib.as_mut_ptr(),
+            mib.len() as u32,
+            std::ptr::null_mut(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        ) != 0
+            || size == 0
+            || size > 1 << 20
+        {
+            return Vec::new();
+        }
+    }
+    let mut buffer = vec![0u8; size];
+    // SAFETY: the buffer is valid for `size` bytes and `size` is updated in
+    // place.
+    let result = unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            mib.len() as u32,
+            buffer.as_mut_ptr().cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
     };
-    String::from_utf8_lossy(&output.stdout)
-        .split_whitespace()
-        .map(str::to_string)
-        .collect()
+    if result != 0 || size < 4 {
+        return Vec::new();
+    }
+    buffer.truncate(size);
+    let argc = i32::from_ne_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]).max(0) as usize;
+    let mut index = 4;
+    while index < buffer.len() && buffer[index] != 0 {
+        index += 1;
+    }
+    while index < buffer.len() && buffer[index] == 0 {
+        index += 1;
+    }
+    let mut args = Vec::new();
+    while args.len() < argc && index < buffer.len() {
+        let start = index;
+        while index < buffer.len() && buffer[index] != 0 {
+            index += 1;
+        }
+        if start == index {
+            break;
+        }
+        args.push(String::from_utf8_lossy(&buffer[start..index]).into_owned());
+        index += 1;
+    }
+    args
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]

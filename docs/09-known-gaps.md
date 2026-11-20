@@ -1,6 +1,6 @@
 # Known gaps and missing behavior
 
-Last audited: 2026-11-19, code at the 0.13.0 release: real text, scrollback,
+Last audited: 2026-11-19, code at the 0.14.0 release: real text, scrollback,
 selection with auto-scroll, clipboard, mouse reporting, IME, links, OSC events,
 divider and sidebar dragging, the palette, attention and settings panels, agent
 detection, autosave, journal, accessibility, logs and per-platform archives. This is the
@@ -119,17 +119,20 @@ app itself has the gaps listed in
   enter`.
 - Key encoding covers the documented named keys, not every xterm modifier
   combination or kitty keyboard protocol.
-- No package, service unit, autostart or log rotation.
+- Debian/Arch packages exist; there is no systemd unit, launch agent or
+  autostart. The log keeps one rotated file.
 
 ## 3. Portable core, transport, server and CLI
 
 - **Local endpoints only.** Unix domain socket or Windows named pipe; no TCP,
   TLS, SSH tunnel helper or remote transport.
 - **Token auth is the whole authorization model.** `local` needs a token for
-  mutations; `trusted` bypasses it; `off` denies. There is no peer-UID/peer-SID
-  check, per-client identity, audit trail, rate limit or documented client cap.
-- **`BERTH_TOKEN` is injected into child environments**, so processes in a
-  terminal can read the token; `trusted` mode intentionally has no token check.
+  mutations; `trusted` bypasses it; `off` denies. Unix endpoints reject a
+  different peer uid before the token check; Windows named pipes have no
+  peer-SID check. There is no per-client identity, audit trail, rate limit or
+  documented client cap.
+- **Tokens live in a 0600 file**, not in child environments. `trusted` mode
+  intentionally has no token check.
 - **Socket ownership is probed, not locked.** `Server::start` connects first and
   refuses with `AddrInUse` when a live instance answers, and only the handle that
   bound the endpoint unlinks it. Two starts that race inside the probe window can
@@ -176,8 +179,8 @@ From [docs/01-vision.md](01-vision.md#4-non-goals-for-v1):
 - Plugin marketplace, TUI mode, custom command DSLs.
 - Feature parity with cmux.
 
-Deferred until after v1: webview panes, cloud, plugins, telemetry, auto-update
-and notarized distribution. The renderer decision is settled: winit + `vt100` +
+Deferred until after v1: webview panes, cloud, plugins, telemetry and
+auto-update. The renderer decision is settled: winit + `vt100` +
 cosmic-text, with a side-channel scanner for graphics, so there is no planned
 move to GTK4 + `libghostty-vt`.
 
@@ -193,10 +196,12 @@ move to GTK4 + `libghostty-vt`.
 
 ## 7. Recommended order
 
-1. **Settings window**, the last overlay on the existing chord.
-2. **Protocol parity for input:** mouse reporting, IME preedit, link open.
-3. **Sidebar completion:** scrolling, drag-reorder, groups UI, workspace rename.
-4. **Lifecycle:** agent detection loop, autosave debounce, single-instance guard,
-   log file.
-5. **Packaging and CI:** window smoke on Linux CI, Windows/Wayland runs,
-   installers.
+1. **macOS notarization:** install the Developer ID certificate and put the
+   notary credentials on the release machine; `make gui-notarize` is ready.
+2. **AppKit shell parity:** in-terminal search, tab rename/reorder, the group
+   UI and geometric focus still exist only in the portable window.
+3. **Multiple windows** and detachable surfaces.
+4. **Sidebar and palette depth:** colour/icon picker, filter, a row per agent,
+   and palette actions beyond the bound chords.
+5. **Kitty protocol depth:** shared memory, z-index and direct placements, only
+   if a tool in use needs them.
