@@ -95,8 +95,9 @@ style are shaped as one string, so a face with `calt`/`liga` draws them.
   when the key is present, so an absent key keeps whatever the user's Ghostty config
   already says.
 - `bell` is what a BEL does: `none`, `visual` (flash the pane border, the default) or
-  `audio`, which plays the system bell sound (Glass on macOS, the freedesktop bell
-  elsewhere). OSC 9/777 notifications are separate and still reach the desktop.
+  `audio`, which plays the system bell sound (Glass on macOS, the freedesktop bell on
+  Linux and the console beep on Windows). `none` also stops the bell counting as
+  attention. OSC 9/777 notifications are separate and still reach the desktop.
 - `backgroundBlur` is a blur radius, `0…64`, passed to Ghostty by the AppKit shell
   when it is set.
   The portable renderer writes opaque pixels, so it cannot show what is behind the

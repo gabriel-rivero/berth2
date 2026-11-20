@@ -694,7 +694,13 @@ impl Config {
         if !self.theme.is_empty() {
             object.insert("theme".into(), serde_json::json!(self.theme));
         }
-        object.insert("opacity".into(), serde_json::json!(self.opacity));
+        // One is the default and means "inherit"; writing it would tell the
+        // AppKit shell to override the user's Ghostty transparency.
+        if (self.opacity - 1.0).abs() > f32::EPSILON {
+            object.insert("opacity".into(), serde_json::json!(self.opacity));
+        } else {
+            object.remove("opacity");
+        }
         object.insert("bell".into(), serde_json::json!(self.bell.name()));
         if !self.font_family.is_empty() {
             object.insert("fontFamily".into(), serde_json::json!(self.font_family));
@@ -1248,6 +1254,15 @@ mod tests {
         assert_eq!(saved["theme"], "berth-light");
         assert!((saved["opacity"].as_f64().expect("opacity") - 0.85).abs() < 1e-6);
         assert_eq!(saved["futureKey"]["a"], 1);
+
+        config.opacity = 1.0;
+        config.save_to(&path).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(
+            saved.get("opacity").is_none(),
+            "opaque must not be written as an explicit override"
+        );
         let _ = std::fs::remove_file(&path);
     }
 }

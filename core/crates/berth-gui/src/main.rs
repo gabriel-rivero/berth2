@@ -1324,10 +1324,12 @@ impl Gui {
                     changed = true;
                 }
                 if meta.bells > applied.bells {
-                    params["bell"] = serde_json::json!(true);
                     applied.bells = meta.bells;
                     bell_rang = true;
-                    changed = true;
+                    if self.config.bell != config::BellMode::None {
+                        params["bell"] = serde_json::json!(true);
+                        changed = true;
+                    }
                 }
             }
             if changed {
