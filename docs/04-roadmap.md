@@ -75,8 +75,9 @@ this order, one item per session: item 1 builds the CSI side-channel scanner tha
    styles (single, double, curly, dotted, dashed), SGR 58 underline colour, and OSC 8
    hyperlink spans are recorded on the cells they style. Hover underlines a hyperlink
    and Cmd/Ctrl-click opens it; text URL detection is the fallback.
-4. **Cursor and focus**: DECSCUSR shapes, focus in/out (CSI ?1004), OSC 52 read with a
-   confirmation dialog.
+4. **Cursor and focus** — landed, unreleased. DECSCUSR selects block, underline and bar
+   cursors with their blink state, CSI ?1004 reports focus in/out for the focused pane,
+   and an OSC 52 read opens a confirmation dialog before returning the clipboard.
 5. **Fonts and ligatures**: shape runs rather than single cells, with `fontWeight`,
    `lineHeight`, font-feature and per-face metric keys, and honour blink.
 6. **Appearance and zoom**: a theme list with light/dark selection and a persisted choice

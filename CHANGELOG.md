@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Features
+
+- **Cursor shapes, focus reporting and OSC 52 read in the portable window.** DECSCUSR
+  selects a block, underline or bar cursor and its blink state. CSI ?1004 sends FocusIn
+  and FocusOut when the window or the focused pane changes. An OSC 52 read request opens a
+  confirmation dialog and only sends the clipboard after Allow; Deny, a lost window or an
+  oversized selection gets an empty reply.
+
 ### Fixes
 
 - A program that rewrites the same characters with a new extended style now replaces the

@@ -4,6 +4,7 @@
 //! Alpha blending is done per pixel, so glyph edges and the selection tint look
 //! the same on every platform.
 
+use berth_headless::cursor::CursorShape;
 use berth_headless::style::UnderlineStyle;
 use berth_headless::{CellView, ScreenView};
 
@@ -804,7 +805,8 @@ impl<'a> Painter<'a> {
                 if cell_view.dim {
                     fg = options.theme.inactive(fg);
                 }
-                if cell_view.inverse || on_cursor {
+                let block_cursor = on_cursor && view.cursor_style.shape == CursorShape::Block;
+                if cell_view.inverse || block_cursor {
                     std::mem::swap(&mut fg, &mut bg);
                 }
                 if !options.focused {
@@ -901,6 +903,10 @@ impl<'a> Painter<'a> {
                 if cell_view.strikethrough {
                     let y = origin.1 + cell.height / 2;
                     self.fill(Rect::new(origin.0, y, width, 1), decoration);
+                }
+                if on_cursor && let Some(rect) = cursor_rect(view.cursor_style.shape, origin, cell)
+                {
+                    self.fill(rect, options.theme.terminal_fg);
                 }
             }
             for run in &runs {
@@ -1304,6 +1310,20 @@ fn rgb(color: [u8; 3]) -> u32 {
     (u32::from(color[0]) << 16) | (u32::from(color[1]) << 8) | u32::from(color[2])
 }
 
+/// The bar or underline to draw for a non-block cursor.
+fn cursor_rect(shape: CursorShape, origin: (usize, usize), cell: CellSize) -> Option<Rect> {
+    match shape {
+        CursorShape::Block => None,
+        CursorShape::Underline => Some(Rect::new(
+            origin.0,
+            origin.1 + cell.height.saturating_sub(2),
+            cell.width,
+            2,
+        )),
+        CursorShape::Bar => Some(Rect::new(origin.0, origin.1, 2, cell.height)),
+    }
+}
+
 fn single_char(text: &str) -> Option<char> {
     let mut chars = text.chars();
     let ch = chars.next()?;
@@ -1496,6 +1516,19 @@ mod tests {
         };
         assert!(!painter.block_glyph((0, 0), cell, 'a', 0x00ff_ffff));
         assert!(painter.block_glyph((0, 0), cell, '▁', 0x00ff_ffff));
+    }
+
+    #[test]
+    fn given_each_cursor_shape_then_the_rect_matches_the_shape() {
+        let cell = CellSize {
+            width: 10,
+            height: 20,
+        };
+        assert_eq!(cursor_rect(CursorShape::Block, (0, 0), cell), None);
+        let underline = cursor_rect(CursorShape::Underline, (0, 0), cell).expect("underline");
+        assert_eq!((underline.y, underline.w, underline.h), (18, 10, 2));
+        let bar = cursor_rect(CursorShape::Bar, (1, 2), cell).expect("bar");
+        assert_eq!((bar.x, bar.y, bar.w, bar.h), (1, 2, 2, 20));
     }
 
     #[test]

@@ -13,7 +13,7 @@
 // reconnects to a terminal when the binary is started from one.
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -34,6 +34,7 @@ use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 use winit::window::{CursorIcon, Window, WindowId};
 
 mod a11y;
+mod clipboard;
 mod config;
 mod console;
 mod desktop;
@@ -395,6 +396,8 @@ fn main() {
         quit: false,
         captured: false,
         frames: sync_output::FrameHold::default(),
+        focus_reported: None,
+        pending_clipboard: VecDeque::new(),
     };
 
     if let Err(error) = event_loop.run_app(&mut app) {
@@ -497,6 +500,12 @@ enum Overlay {
         matches: Vec<SearchMatch>,
         selected: usize,
     },
+    /// A program asked to read the clipboard; allow or deny.
+    ClipboardRead {
+        surface_id: String,
+        selection: String,
+        selected: usize,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -512,6 +521,7 @@ impl Overlay {
             Overlay::Palette { selected, .. }
             | Overlay::Attention { selected }
             | Overlay::Settings { selected, .. } => *selected,
+            Overlay::ClipboardRead { selected, .. } => *selected,
             Overlay::Rename { .. } | Overlay::Confirm { .. } => 0,
             Overlay::Search { selected, .. } => *selected,
         }
@@ -522,7 +532,8 @@ impl Overlay {
             Overlay::Palette { selected, .. }
             | Overlay::Attention { selected }
             | Overlay::Settings { selected, .. }
-            | Overlay::Search { selected, .. } => *selected = index,
+            | Overlay::Search { selected, .. }
+            | Overlay::ClipboardRead { selected, .. } => *selected = index,
             Overlay::Rename { .. } | Overlay::Confirm { .. } => {}
         }
     }
@@ -645,6 +656,10 @@ struct Gui {
     /// The frame each surface last showed, held while a program has DECSET
     /// 2026 set.
     frames: sync_output::FrameHold,
+    /// The surface we last told the program has focus.
+    focus_reported: Option<String>,
+    /// OSC 52 read requests waiting for the modal confirmation.
+    pending_clipboard: VecDeque<(String, String)>,
 }
 
 impl ApplicationHandler<UserEvent> for Gui {
@@ -740,8 +755,14 @@ impl ApplicationHandler<UserEvent> for Gui {
             }
             WindowEvent::Focused(focused) => {
                 self.window_focused = focused;
-                if !focused {
-                    self.overlay = None;
+                if !focused
+                    && let Some(Overlay::ClipboardRead {
+                        surface_id,
+                        selection,
+                        ..
+                    }) = self.overlay.take()
+                {
+                    self.send_clipboard_response(&surface_id, &selection, None);
                 }
                 if focused && let Some(surface_id) = self.active_surface() {
                     let _ = self.host.focus(&surface_id);
@@ -848,6 +869,8 @@ impl ApplicationHandler<UserEvent> for Gui {
         self.tick_agents();
         self.tick_save();
         self.tick_selection_autoscroll();
+        self.sync_focus_events();
+        self.open_pending_clipboard();
         if self.frames.release_expired(Instant::now()) {
             self.request_redraw();
         }
@@ -890,7 +913,11 @@ impl Gui {
     }
 
     fn cursor_blinks(&self) -> bool {
-        self.window_focused && !lock(&self.state).surfaces.is_empty()
+        self.window_focused
+            && self
+                .active_surface()
+                .and_then(|surface_id| self.host.cursor_style(&surface_id).ok())
+                .is_some_and(|style| style.blinks)
     }
 
     /// Drop bells whose flash has finished, repainting once so the pane border
@@ -948,6 +975,33 @@ impl Gui {
             });
         }
         next
+    }
+
+    /// Tell the focused program when focus enters or leaves. A program opts in
+    /// with CSI ?1004; the old surface gets FocusOut before the new gets FocusIn.
+    fn sync_focus_events(&mut self) {
+        if let Some(surface_id) = self.focus_reported.clone()
+            && !self.host.is_focus_reporting(&surface_id).unwrap_or(false)
+        {
+            self.focus_reported = None;
+        }
+        let current = if self.window_focused {
+            self.active_surface()
+        } else {
+            None
+        };
+        if self.focus_reported.as_deref() == current.as_deref() {
+            return;
+        }
+        if let Some(old) = self.focus_reported.take() {
+            let _ = self.host.send_bytes(&old, b"\x1b[O");
+        }
+        if let Some(new) = current
+            && self.host.is_focus_reporting(&new).unwrap_or(false)
+        {
+            let _ = self.host.send_bytes(&new, b"\x1b[I");
+            self.focus_reported = Some(new);
+        }
     }
 
     /// Passive detection, the same cadence as the macOS shell: once a second for
@@ -1269,6 +1323,11 @@ impl Gui {
             {
                 let _ = clipboard.set_text(text);
             }
+            if let Some(selection) = meta.clipboard_read {
+                self.pending_clipboard
+                    .push_back((surface_id.clone(), selection));
+                self.request_redraw();
+            }
             if let Some(body) = meta.notification {
                 let workspace_id = lock(&self.state)
                     .surface(&surface_id)
@@ -1538,7 +1597,9 @@ impl Gui {
                 let options = ScreenOptions {
                     theme: &theme,
                     focused: pane.focused,
-                    cursor_visible: pane.focused && self.window_focused && blink_on,
+                    cursor_visible: pane.focused
+                        && self.window_focused
+                        && (!screen.cursor_style.blinks || blink_on),
                     selection: selection.as_ref(),
                     exited,
                     search,
@@ -3032,6 +3093,7 @@ impl Gui {
             Overlay::Confirm { text } => confirm_lines(text).len(),
             Overlay::Rename { .. } => 0,
             Overlay::Search { matches, .. } => matches.len(),
+            Overlay::ClipboardRead { .. } => 2,
         }
     }
 
@@ -3044,6 +3106,7 @@ impl Gui {
         let mut close = false;
         let mut activate = false;
         let mut rename_commit: Option<(RenameTarget, String)> = None;
+        let mut clipboard_deny: Option<(String, String)> = None;
         match &mut overlay {
             Overlay::Palette { query, .. } => match &event.logical_key {
                 Key::Named(NamedKey::Escape) => close = true,
@@ -3182,9 +3245,26 @@ impl Gui {
                 Key::Named(NamedKey::Enter) => activate = true,
                 _ => close = true,
             },
+            Overlay::ClipboardRead {
+                surface_id,
+                selection,
+                ..
+            } => match &event.logical_key {
+                Key::Named(NamedKey::Escape) => {
+                    clipboard_deny = Some((surface_id.clone(), selection.clone()));
+                    close = true;
+                }
+                Key::Named(NamedKey::Enter) => activate = true,
+                Key::Named(NamedKey::ArrowUp) => next_selected = Some(0),
+                Key::Named(NamedKey::ArrowDown) => next_selected = Some(1),
+                _ => {}
+            },
         }
         if let Some((target, value)) = rename_commit {
             self.commit_rename(&target, &value);
+        }
+        if let Some((surface_id, selection)) = clipboard_deny {
+            self.send_clipboard_response(&surface_id, &selection, None);
         }
         if let Some(index) = next_selected {
             overlay.select(index);
@@ -3500,6 +3580,40 @@ impl Gui {
                 selected: 0,
                 hint: "enter paste · esc cancel".to_string(),
             }),
+            Overlay::ClipboardRead {
+                surface_id,
+                selection,
+                selected,
+            } => {
+                let label = lock(&self.state)
+                    .surface(surface_id)
+                    .map(|surface| surface.title.clone())
+                    .filter(|title| !title.is_empty())
+                    .unwrap_or_else(|| surface_id.clone());
+                let kind = if selection.starts_with('p') {
+                    "primary selection"
+                } else {
+                    "clipboard"
+                };
+                Some(PanelContent {
+                    title: "Clipboard read".to_string(),
+                    query: None,
+                    rows: vec![
+                        panel::PanelRow {
+                            label: "Allow".to_string(),
+                            detail: format!("send the {kind} to {label}"),
+                            color: None,
+                        },
+                        panel::PanelRow {
+                            label: "Deny".to_string(),
+                            detail: "send an empty reply".to_string(),
+                            color: None,
+                        },
+                    ],
+                    selected: *selected,
+                    hint: "↑↓ choose · enter confirm · esc deny".to_string(),
+                })
+            }
             Overlay::Settings {
                 selected,
                 recording,
@@ -3590,6 +3704,20 @@ impl Gui {
             Some(Overlay::Confirm { text }) => {
                 self.send_paste(&text);
             }
+            Some(Overlay::ClipboardRead {
+                surface_id,
+                selection,
+                selected,
+            }) => {
+                let text = if selected == 0 {
+                    self.clipboard
+                        .as_mut()
+                        .and_then(|clipboard| clipboard.get_text().ok())
+                } else {
+                    None
+                };
+                self.send_clipboard_response(&surface_id, &selection, text.as_deref());
+            }
             Some(Overlay::Settings {
                 selected,
                 recording,
@@ -3617,6 +3745,30 @@ impl Gui {
             }
             None => {}
         }
+        self.request_redraw();
+    }
+
+    /// Answer an OSC 52 read. `None` is a denial and sends an empty payload.
+    fn send_clipboard_response(&mut self, surface_id: &str, selection: &str, text: Option<&str>) {
+        let bytes = clipboard::response(selection, text);
+        if let Err(error) = self.host.send_bytes(surface_id, &bytes) {
+            log::line(&format!("clipboard reply {surface_id}: {error}"));
+        }
+    }
+
+    /// Open the confirmation for a queued OSC 52 read when no other panel is up.
+    fn open_pending_clipboard(&mut self) {
+        if self.overlay.is_some() {
+            return;
+        }
+        let Some((surface_id, selection)) = self.pending_clipboard.pop_front() else {
+            return;
+        };
+        self.overlay = Some(Overlay::ClipboardRead {
+            surface_id,
+            selection,
+            selected: 0,
+        });
         self.request_redraw();
     }
 

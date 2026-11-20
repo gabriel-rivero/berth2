@@ -20,11 +20,10 @@ app itself has the gaps listed in
 
 ### Terminal rendering
 
-- **The protocol floor is incomplete.** Synchronized output (DECSET 2026), the Kitty
-  keyboard protocol, styled text and OSC 8 hyperlinks are in. The remaining gaps are
-  focus in/out (CSI ?1004), cursor shapes (DECSCUSR), OSC 52 read, and OSC 133 shell
-  integration. Modern TUIs and agents degrade without these. The AppKit shell inherits
-  all of them from Ghostty.
+- **The protocol floor is nearly complete.** Synchronized output (DECSET 2026), the Kitty
+  keyboard protocol, styled text, OSC 8 hyperlinks, cursor shapes, focus in/out and OSC 52
+  read are in. The remaining gap is OSC 133 shell integration. The AppKit shell inherits
+  it all from Ghostty.
 - **One font family, no ligatures.** `fontFamily` picks the face (first
   installed name wins, else system monospace) at `fontSize` × `fontScale`. There
   is no weight, line-height or zoom control, and no per-font metric tuning.
@@ -41,9 +40,7 @@ app itself has the gaps listed in
 - **Partial graphics protocols.** iTerm2 inline images, kitty graphics and
   sixel render. Kitty shared memory, z-index and direct placements are not
   supported, so clients fall back to base64 or text. Sixel covers the raster
-  subset: 256 colour registers, RGB and HLS definitions, repeats and motion. No
-  hyperlink
-  (`OSC 8`) hover styling beyond the text scan.
+  subset: 256 colour registers, RGB and HLS definitions, repeats and motion.
 
 
 ### Input and clipboard

@@ -465,3 +465,46 @@ fn given_styled_text_and_a_hyperlink_then_the_screen_view_carries_them() {
         std::thread::sleep(Duration::from_millis(20));
     }
 }
+
+/// DECSCUSR, CSI ?1004 and OSC 52 read requests must survive the PTY reader.
+#[cfg(unix)]
+#[test]
+fn given_cursor_focus_and_clipboard_requests_then_the_screen_view_reports_them() {
+    use berth_core::SpawnRequest;
+    use berth_headless::cursor::CursorShape;
+
+    let host = PtyHost::new();
+    let surface_id = format!("surf-cursor-focus-{}", std::process::id());
+    host.spawn(SpawnRequest {
+        cwd: None,
+        argv: vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            "printf '\\033[4 q\\033[?1004h\\033]52;c;?\\007'; sleep 1".into(),
+        ],
+        env: vec![("BERTH_SURFACE_ID".into(), surface_id.clone())],
+        cols: 80,
+        rows: 24,
+    })
+    .expect("spawn a writer of cursor and focus modes");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let view = host.screen_view(&surface_id).expect("screen view");
+        let meta = host
+            .take_screen_meta_requests(&surface_id)
+            .expect("meta requests");
+        if view.cursor_style.shape == CursorShape::Underline
+            && !view.cursor_style.blinks
+            && view.is_focus_reporting_enabled
+            && meta.clipboard_read.as_deref() == Some("c")
+        {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "cursor, focus or clipboard state never arrived"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}

@@ -38,8 +38,8 @@ is portable-only, and every macOS gap is UI-only.
 | | synchronized output (DECSET 2026) | ● | ● | ● | near-universal |
 | | styled and coloured underlines, strikethrough | ● | ● | ● | iTerm2, Ghostty, WezTerm |
 | | OSC 8 hyperlinks | ● | ● | ● | ● |
-| | OSC 52 clipboard write / read | ● / ○ | ● / ● | ● | ● |
-| | focus reporting, cursor shapes (DECSCUSR) | ○ | ● | ● | ● |
+| | OSC 52 clipboard write / read | ● / ● | ● / ● | ● | ● |
+| | focus reporting, cursor shapes (DECSCUSR) | ● | ● | ● | ● |
 | | iTerm2 / kitty / sixel images | ● | ● | ● / ● / ○ | ● |
 | | resize reflow of wrapped lines | ○ | ● | ● | ● |
 | | audio bell option | ○ | ● | ● | ● |
@@ -89,11 +89,11 @@ is portable-only, and every macOS gap is UI-only.
 
 ## 3. The gaps that matter, in order
 
-1. **The portable terminal is behind on protocol, not features.** Focus reporting and
-   cursor shapes are what modern TUIs and agents test for; synchronized output, the
-   kitty keyboard protocol, styled text and OSC 8 have landed. This is a bounded parsing
-   and painting job, and it is the cheapest way to stop the portable window feeling like
-   a different product.
+1. **The portable terminal is behind on protocol, not features.** OSC 133 shell
+   integration is the remaining floor item; synchronized output, the kitty keyboard
+   protocol, styled text, OSC 8, cursor shapes, focus reporting and OSC 52 read have
+   landed. This is a bounded parsing and painting job, and it is the cheapest way to stop
+   the portable window feeling like a different product.
 2. **Multiple windows, pane zoom, tab tear-off.** Every competitor has them; Berth has one
    window and no zoom. This is the most frequent shape of "I can't work like this" for a
    terminal workspace, and the protocol already models the tree, so it is a model and

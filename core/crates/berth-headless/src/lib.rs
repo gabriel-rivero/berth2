@@ -8,6 +8,7 @@
 //! protocol, so the end-to-end criterion (create, type, read back) runs without
 //! a display or Ghostty.
 
+pub mod cursor;
 pub mod keys;
 pub mod kitty;
 pub mod style;
@@ -92,6 +93,7 @@ mod csi;
 mod sixel;
 
 use csi::{Csi, CsiScanner};
+use cursor::CursorStyle;
 use kitty::KittyKeyboard;
 use style::{GridSnapshot, StyleState};
 
@@ -119,6 +121,10 @@ pub struct ScreenView {
     pub is_synchronized_output_enabled: bool,
     /// Kitty keyboard protocol flags the program enabled.
     pub kitty_keyboard_flags: kitty::KittyFlags,
+    /// DECSCUSR shape and blink state.
+    pub cursor_style: CursorStyle,
+    /// CSI ?1004: send focus in/out events.
+    pub is_focus_reporting_enabled: bool,
 }
 
 /// How much pointer traffic the program wants. Mirrors `vt100`.
@@ -175,6 +181,13 @@ pub struct ScreenMeta {
     pub is_synchronized_output_enabled: bool,
     /// Kitty keyboard protocol flags the program enabled.
     pub kitty_keyboard_flags: kitty::KittyFlags,
+    /// DECSCUSR shape and blink state.
+    pub cursor_style: CursorStyle,
+    /// CSI ?1004: send focus in/out events.
+    pub is_focus_reporting_enabled: bool,
+    /// OSC 52 read request: the selection type the program asked for. The UI
+    /// must confirm before answering.
+    pub clipboard_read: Option<String>,
     /// Replies the terminal owes the program (cursor position, device
     /// attributes). The reader drains them back to the PTY.
     pub responses: Vec<String>,
@@ -224,6 +237,10 @@ impl vt100::Callbacks for ScreenEvents {
         if let Some(text) = decode_base64(data) {
             lock(&self.meta).clipboard = Some(text);
         }
+    }
+
+    fn paste_from_clipboard(&mut self, _: &mut vt100::Screen, ty: &[u8]) {
+        lock(&self.meta).clipboard_read = Some(String::from_utf8_lossy(ty).into_owned());
     }
 
     fn unhandled_csi(
@@ -664,11 +681,13 @@ impl PtyHost {
         }
         let images = lock(&surface.images).clone();
         let placeholders = lock(&surface.kitty).values().cloned().collect();
-        let (is_synchronized_output_enabled, kitty_keyboard_flags) = {
+        let (is_synchronized_output_enabled, kitty_keyboard_flags, cursor_style, focus) = {
             let meta = lock(&surface.meta);
             (
                 meta.is_synchronized_output_enabled,
                 meta.kitty_keyboard_flags,
+                meta.cursor_style,
+                meta.is_focus_reporting_enabled,
             )
         };
         Ok(ScreenView {
@@ -696,6 +715,8 @@ impl PtyHost {
             placeholders,
             is_synchronized_output_enabled,
             kitty_keyboard_flags,
+            cursor_style,
+            is_focus_reporting_enabled: focus,
         })
     }
 
@@ -720,6 +741,9 @@ impl PtyHost {
             cell_pixels: meta.cell_pixels,
             is_synchronized_output_enabled: meta.is_synchronized_output_enabled,
             kitty_keyboard_flags: meta.kitty_keyboard_flags,
+            cursor_style: meta.cursor_style,
+            is_focus_reporting_enabled: meta.is_focus_reporting_enabled,
+            clipboard_read: meta.clipboard_read.take(),
             // Replies belong to the reader, which writes them to the PTY; the
             // window must not take them or the program waits forever.
             responses: Vec::new(),
@@ -750,6 +774,16 @@ impl PtyHost {
             .get(surface_id)
             .map(|surface| surface.alive.load(Ordering::Relaxed))
             .unwrap_or(false)
+    }
+
+    /// Whether the program asked for focus in/out events (CSI ?1004).
+    pub fn is_focus_reporting(&self, surface_id: &str) -> Result<bool, CoreError> {
+        Ok(lock(&self.surface(surface_id)?.meta).is_focus_reporting_enabled)
+    }
+
+    /// The DECSCUSR style the program selected.
+    pub fn cursor_style(&self, surface_id: &str) -> Result<CursorStyle, CoreError> {
+        Ok(lock(&self.surface(surface_id)?.meta).cursor_style)
     }
 
     /// Plain text between two cells of the visible view, used by the clipboard.
@@ -1647,6 +1681,18 @@ mod meta_tests {
             lock(&self.meta).kitty_keyboard_flags
         }
 
+        fn cursor_style(&self) -> CursorStyle {
+            lock(&self.meta).cursor_style
+        }
+
+        fn is_focus_reporting(&self) -> bool {
+            lock(&self.meta).is_focus_reporting_enabled
+        }
+
+        fn clipboard_read(&self) -> Option<String> {
+            lock(&self.meta).clipboard_read.clone()
+        }
+
         fn share(&self) -> ReaderShare {
             ReaderShare {
                 screen: Arc::clone(&self.screen),
@@ -1823,6 +1869,54 @@ mod meta_tests {
         let mut scanner = SideChannelScanner::default();
         fixture.feed(&mut scanner, b"\x1b[>13u\x1b[?u");
         assert_eq!(lock(&fixture.meta).responses, vec!["\x1b[?13u".to_string()]);
+    }
+
+    #[test]
+    fn given_decscusr_then_the_cursor_style_changes() {
+        let fixture = ScannerFixture::new();
+        let mut scanner = SideChannelScanner::default();
+        fixture.feed(&mut scanner, b"\x1b[4 q");
+        assert_eq!(
+            fixture.cursor_style(),
+            CursorStyle {
+                shape: cursor::CursorShape::Underline,
+                blinks: false
+            }
+        );
+        fixture.feed(&mut scanner, b"\x1b[6 q");
+        assert_eq!(
+            fixture.cursor_style(),
+            CursorStyle {
+                shape: cursor::CursorShape::Bar,
+                blinks: false
+            }
+        );
+        fixture.feed(&mut scanner, b"\x1b[ q");
+        assert_eq!(
+            fixture.cursor_style(),
+            CursorStyle {
+                shape: cursor::CursorShape::Block,
+                blinks: true
+            }
+        );
+    }
+
+    #[test]
+    fn given_focus_reporting_mode_then_it_is_recorded() {
+        let fixture = ScannerFixture::new();
+        let mut scanner = SideChannelScanner::default();
+        fixture.feed(&mut scanner, b"\x1b[?1004h");
+        assert!(fixture.is_focus_reporting());
+        fixture.feed(&mut scanner, b"\x1b[?1004l");
+        assert!(!fixture.is_focus_reporting());
+    }
+
+    #[test]
+    fn given_an_osc52_read_then_the_request_is_recorded() {
+        let fixture = ScannerFixture::new();
+        let mut scanner = SideChannelScanner::default();
+        fixture.feed(&mut scanner, b"\x1b]52;c;?\x07");
+        assert_eq!(fixture.clipboard_read().as_deref(), Some("c"));
     }
 
     #[test]
@@ -2385,7 +2479,16 @@ fn observe_csi(
     let is_kitty_control =
         sequence.final_byte == b'u' && matches!(prefix, Some(b'?' | b'>' | b'=' | b'<'));
     let is_mutation = is_kitty_control && prefix != Some(b'?');
-    if change.is_none() && !is_kitty_control {
+    let decscusr =
+        (sequence.final_byte == b'q' && sequence.body.last() == Some(&b' ')).then(|| {
+            let value =
+                std::str::from_utf8(&sequence.body[..sequence.body.len().saturating_sub(1)])
+                    .ok()
+                    .and_then(|text| text.parse().ok())
+                    .unwrap_or(0);
+            CursorStyle::from_decscusr(value)
+        });
+    if change.is_none() && !is_kitty_control && decscusr.is_none() {
         return;
     }
 
@@ -2404,16 +2507,25 @@ fn observe_csi(
             .contains(&SYNCHRONIZED_OUTPUT)
             .then_some(change.is_enabled)
     });
+    let focus_reporting = change
+        .as_ref()
+        .and_then(|change| change.modes.contains(&1004).then_some(change.is_enabled));
     let reply = if is_kitty_control {
         keyboard.observe(sequence)
     } else {
         None
     };
-    if change.is_none() && reply.is_none() && !is_mutation {
+    if change.is_none() && reply.is_none() && !is_mutation && decscusr.is_none() {
         return;
     }
 
     let mut meta = lock(meta);
+    if let Some(style) = decscusr {
+        meta.cursor_style = style;
+    }
+    if let Some(is_enabled) = focus_reporting {
+        meta.is_focus_reporting_enabled = is_enabled;
+    }
     if let Some(is_enabled) = synchronized_output {
         meta.is_synchronized_output_enabled = is_enabled;
     }
