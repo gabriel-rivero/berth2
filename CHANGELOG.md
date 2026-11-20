@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+
+- A program that rewrites the same characters with a new extended style now replaces the
+  old style instead of leaving it on the cell, including after a cursor move. Custom tab
+  stops and unusual escapes still fall back to the grid diff. Platform key events that
+  report no text no longer send the raw character in legacy mode, which preserves
+  dead-key and IME input.
+- Hyperlinks open only http(s), mailto, ftp(s) and local paths; other schemes are
+  refused. On Windows the opener uses the shell handler instead of `cmd`, so a URL
+  cannot inject a command.
+- The release script builds the Rust artifacts with cargo on every OS, needs `make` only
+  for the macOS Swift shell, and passes `7z` a Windows path.
+
 ## 0.15.2 — 2026-11-20
 
 ### Features

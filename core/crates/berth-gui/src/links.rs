@@ -56,10 +56,30 @@ pub fn target(link: &str) -> String {
     }
 }
 
+/// Only these targets reach the platform opener. Hyperlinks come from programs
+/// in the terminal, so a custom scheme must not be handed to LaunchServices or
+/// `cmd start` just because a cell carries it.
+pub fn is_supported_target(target: &str) -> bool {
+    let lower = target.to_ascii_lowercase();
+    lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("mailto:")
+        || lower.starts_with("ftp://")
+        || lower.starts_with("ftps://")
+        || target.starts_with('/')
+        || target.starts_with("~/")
+}
+
 /// Open a link with the platform handler. Spawned, so a slow browser cannot
 /// block the window.
 pub fn open(link: &str) -> std::io::Result<()> {
     let target = target(link);
+    if !is_supported_target(&target) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("refusing to open an unsupported link: {target}"),
+        ));
+    }
     #[cfg(target_os = "macos")]
     let mut command = {
         let mut command = std::process::Command::new("open");
@@ -74,8 +94,10 @@ pub fn open(link: &str) -> std::io::Result<()> {
     };
     #[cfg(windows)]
     let mut command = {
-        let mut command = std::process::Command::new("cmd");
-        command.args(["/C", "start", ""]).arg(&target);
+        // explorer goes through ShellExecute and does not parse a command line,
+        // so an `&` in a URL cannot chain a command the way `cmd /C start` can.
+        let mut command = std::process::Command::new("explorer.exe");
+        command.arg(&target);
         command
     };
     command.spawn().map(|_| ())
@@ -121,5 +143,19 @@ mod tests {
     fn given_a_bare_host_when_targeted_then_it_gains_a_scheme() {
         assert_eq!(target("www.example.com"), "https://www.example.com");
         assert_eq!(target("https://x.dev"), "https://x.dev");
+    }
+
+    #[test]
+    fn given_an_unsupported_scheme_then_it_is_refused() {
+        assert!(is_supported_target("https://x.dev"));
+        assert!(is_supported_target("mailto:a@b"));
+        assert!(is_supported_target("ftps://x"));
+        assert!(is_supported_target("/tmp/file"));
+        assert!(is_supported_target("~/file"));
+        assert!(!is_supported_target("ftp:anything"));
+        assert!(!is_supported_target("ftps:anything"));
+        assert!(!is_supported_target("file:///etc/passwd"));
+        assert!(!is_supported_target("javascript:alert(1)"));
+        assert!(!is_supported_target("custom:thing"));
     }
 }

@@ -68,9 +68,9 @@ this order, one item per session: item 1 builds the CSI side-channel scanner tha
    stop tearing and a crashed client cannot freeze the pane.
 2. **Kitty keyboard protocol** — landed, unreleased. The scanner tracks the flags a
    program pushes, sets or pops (with separate main and alternate-screen stacks),
-   answers `CSI ? u`, and the encoder honours every enhancement: `CSI u` for modified
-   keys and disambiguated Escape, release and repeat events, alternate keys and
-   associated text. Agents and Neovim/Helix bind it.
+   answers `CSI ? u`, and the encoder honours the flags: `CSI u` for modified keys and
+   disambiguated Escape, release and repeat events, alternate keys and associated text.
+   Modifier-only key events are not reported. Agents and Neovim/Helix bind it.
 3. **Styled text** — landed, unreleased. SGR 9/29 strikethrough, SGR 4:1..5 underline
    styles (single, double, curly, dotted, dashed), SGR 58 underline colour, and OSC 8
    hyperlink spans are recorded on the cells they style. Hover underlines a hyperlink

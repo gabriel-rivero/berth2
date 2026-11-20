@@ -9,6 +9,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use unicode_width::UnicodeWidthChar;
+
 /// The SGR 4:x underline variants.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum UnderlineStyle {
@@ -175,12 +177,7 @@ impl StyleState {
                     continue;
                 }
                 let key = (after.scrollback_len + row, column);
-                let current = self.current.clone();
-                if current.is_default() {
-                    self.map_mut().remove(&key);
-                } else {
-                    self.map_mut().insert(key, current);
-                }
+                self.put(key);
             }
         }
 
@@ -206,6 +203,159 @@ impl StyleState {
             &mut self.main
         }
     }
+
+    fn put(&mut self, key: (usize, u16)) {
+        let current = self.current.clone();
+        if current.is_default() {
+            self.map_mut().remove(&key);
+        } else {
+            self.map_mut().insert(key, current);
+        }
+    }
+
+    /// Record the current style on the cells a text segment wrote, following
+    /// carriage returns, line feeds, tabs, wide characters and cursor moves.
+    pub fn record_text(
+        &mut self,
+        cursor: (u16, u16),
+        rows: u16,
+        cols: u16,
+        scrollback: usize,
+        bytes: &[u8],
+    ) {
+        let rows = usize::from(rows);
+        let cols = usize::from(cols);
+        let (mut row, mut column) = (usize::from(cursor.0), usize::from(cursor.1));
+        let mut line = scrollback;
+        let mut index = 0;
+        while index < bytes.len() {
+            if bytes[index] == 0x1b {
+                let Some(&next) = bytes.get(index + 1) else {
+                    break;
+                };
+                if next != b'[' {
+                    break;
+                }
+                let start = index + 2;
+                let mut end = start;
+                while end < bytes.len() && !(0x40..=0x7e).contains(&bytes[end]) {
+                    end += 1;
+                }
+                if end >= bytes.len() {
+                    break;
+                }
+                apply_cursor(
+                    &mut row,
+                    &mut column,
+                    rows,
+                    cols,
+                    bytes[end],
+                    &bytes[start..end],
+                );
+                index = end + 1;
+                continue;
+            }
+            let Ok(text) = std::str::from_utf8(&bytes[index..]) else {
+                break;
+            };
+            let Some(character) = text.chars().next() else {
+                break;
+            };
+            index += character.len_utf8();
+            match character {
+                '\r' => column = 0,
+                '\n' | '\u{0b}' | '\u{0c}' => {
+                    if row + 1 < rows {
+                        row += 1;
+                    } else {
+                        line = line.saturating_add(1);
+                    }
+                }
+                '\t' => {
+                    let next = (column / 8 + 1) * 8;
+                    column = if next < cols { next } else { 0 };
+                }
+                '\u{8}' => column = column.saturating_sub(1),
+                character if is_control(character) => {}
+                character => {
+                    let width = character.width().unwrap_or(1);
+                    if width == 0 {
+                        continue;
+                    }
+                    if column + width > cols {
+                        column = 0;
+                        if row + 1 < rows {
+                            row += 1;
+                        } else {
+                            line = line.saturating_add(1);
+                        }
+                    }
+                    let absolute = line.saturating_add(row);
+                    self.put((absolute, column as u16));
+                    if width > 1 && column + 1 < cols {
+                        self.put((absolute, column as u16 + 1));
+                    }
+                    column += width;
+                    if column >= cols {
+                        column = 0;
+                        if row + 1 < rows {
+                            row += 1;
+                        } else {
+                            line = line.saturating_add(1);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Track the screen cursor through the CSI moves a text segment may contain.
+fn apply_cursor(
+    row: &mut usize,
+    column: &mut usize,
+    rows: usize,
+    cols: usize,
+    final_byte: u8,
+    body: &[u8],
+) {
+    if body.first() == Some(&b'?') {
+        return;
+    }
+    let mut params = body.split(|byte| *byte == b';').map(|part| {
+        std::str::from_utf8(part)
+            .ok()
+            .and_then(|text| text.parse::<usize>().ok())
+            .unwrap_or(0)
+    });
+    let first = params.next().unwrap_or(0);
+    let second = params.next().unwrap_or(0);
+    let count = if first == 0 { 1 } else { first };
+    match final_byte {
+        b'H' | b'f' => {
+            *row = first.saturating_sub(1).min(rows.saturating_sub(1));
+            *column = second.saturating_sub(1).min(cols.saturating_sub(1));
+        }
+        b'A' => *row = (*row).saturating_sub(count),
+        b'B' => *row = (*row + count).min(rows.saturating_sub(1)),
+        b'C' => *column = (*column + count).min(cols.saturating_sub(1)),
+        b'D' => *column = (*column).saturating_sub(count),
+        b'G' | b'`' => *column = first.saturating_sub(1).min(cols.saturating_sub(1)),
+        b'd' => *row = first.saturating_sub(1).min(rows.saturating_sub(1)),
+        b'E' => {
+            *row = (*row + count).min(rows.saturating_sub(1));
+            *column = 0;
+        }
+        b'F' => {
+            *row = (*row).saturating_sub(count);
+            *column = 0;
+        }
+        _ => {}
+    }
+}
+
+fn is_control(character: char) -> bool {
+    character < '\u{20}' || ('\u{7f}'..='\u{9f}').contains(&character)
 }
 
 /// A cheap fingerprint of the grid for change detection.
@@ -498,6 +648,26 @@ mod tests {
         parser.process(b"\x1b[1;1Hb");
         let after = GridSnapshot::take(parser.screen());
         state.record(&before, &after, 10);
+        assert!(state.get(0, 0).is_none());
+    }
+
+    #[test]
+    fn given_the_same_text_rewritten_with_a_new_style_then_the_style_changes() {
+        let mut parser = parser();
+        let mut state = StyleState::default();
+        state.apply_sgr(b"9");
+        let before = GridSnapshot::take(parser.screen());
+        parser.process(b"ab");
+        let after = GridSnapshot::take(parser.screen());
+        state.record(&before, &after, 10);
+        assert!(state.get(0, 0).is_some_and(|style| style.strikethrough));
+
+        state.apply_sgr(b"0");
+        let before = GridSnapshot::take(parser.screen());
+        parser.process(b"\rab");
+        let after = GridSnapshot::take(parser.screen());
+        state.record(&before, &after, 10);
+        state.record_text((0, 2), 2, 4, 0, b"\rab");
         assert!(state.get(0, 0).is_none());
     }
 

@@ -28,6 +28,9 @@ pub struct KeyInput<'a> {
     pub action: KeyAction,
     /// The text the platform says this key produced, when it reports one.
     pub text: Option<&'a str>,
+    /// True when `text` came from a platform key event, so `None` means the
+    /// platform reported no text rather than a synthetic key with none.
+    pub has_text_report: bool,
     /// The base PC-101 layout character for the physical key, when known.
     pub base_layout: Option<char>,
 }
@@ -40,6 +43,7 @@ impl<'a> KeyInput<'a> {
             modifiers,
             action: KeyAction::Press,
             text: None,
+            has_text_report: false,
             base_layout: None,
         }
     }
@@ -66,6 +70,10 @@ fn encode_legacy(input: &KeyInput<'_>) -> Vec<u8> {
         && let Some(text) = input.text.filter(|text| !text.is_empty())
     {
         return text.as_bytes().to_vec();
+    }
+    if input.has_text_report && input.text.is_none() && named(input.key).is_none() && !ctrl && !alt
+    {
+        return Vec::new();
     }
     encode(input.key, input.modifiers)
 }
@@ -555,6 +563,7 @@ mod tests {
             modifiers: mods,
             action: KeyAction::Press,
             text: None,
+            has_text_report: false,
             base_layout: None,
         }
     }
@@ -573,6 +582,16 @@ mod tests {
         );
         assert_eq!(encoded(&input("c", &mods(&["ctrl"])), 0), vec![3]);
         assert_eq!(encoded(&input("left", &[]), 0), b"\x1b[D");
+    }
+
+    #[test]
+    fn given_a_platform_character_without_text_then_the_legacy_path_sends_nothing() {
+        let platform = KeyInput {
+            has_text_report: true,
+            ..input("a", &[])
+        };
+        assert!(encoded(&platform, 0).is_empty());
+        assert_eq!(encoded(&platform, DISAMBIGUATE), b"\x1b[97u");
     }
 
     #[test]

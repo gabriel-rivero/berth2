@@ -1904,6 +1904,34 @@ mod meta_tests {
     }
 
     #[test]
+    fn given_the_same_text_rewritten_then_the_extended_style_is_replaced() {
+        let fixture = ScannerFixture::new();
+        let mut scanner = SideChannelScanner::default();
+        fixture.feed(&mut scanner, b"\x1b[9mab");
+        assert!(
+            lock(&fixture.style)
+                .get(0, 0)
+                .is_some_and(|style| style.strikethrough)
+        );
+        fixture.feed(&mut scanner, b"\x1b[0m\rab");
+        assert!(lock(&fixture.style).get(0, 0).is_none());
+    }
+
+    #[test]
+    fn given_a_cursor_move_then_the_rewritten_text_replaces_the_style() {
+        let fixture = ScannerFixture::new();
+        let mut scanner = SideChannelScanner::default();
+        fixture.feed(&mut scanner, b"\x1b[9mab");
+        assert!(
+            lock(&fixture.style)
+                .get(0, 0)
+                .is_some_and(|style| style.strikethrough)
+        );
+        fixture.feed(&mut scanner, b"\x1b[0m\x1b[1;1Hab");
+        assert!(lock(&fixture.style).get(0, 0).is_none());
+    }
+
+    #[test]
     fn given_the_alternate_screen_then_styles_do_not_leak_between_screens() {
         let fixture = ScannerFixture::new();
         let mut scanner = SideChannelScanner::default();
@@ -2119,6 +2147,7 @@ struct SideChannelScanner {
     capture_overflow: bool,
     csi: CsiScanner,
     csi_start: Option<usize>,
+    split_csi: bool,
     keyboard: KittyKeyboard,
     esc: bool,
     pending: KittyPending,
@@ -2202,15 +2231,18 @@ impl SideChannelScanner {
                 self.esc = false;
                 match byte {
                     b'_' => {
-                        flush_normal(share, &mut self.normal, true);
+                        flush_normal(share, &mut self.normal, true, !self.split_csi);
+                        self.split_csi = false;
                         self.capture = Some(Capture::Apc(Vec::new()));
                     }
                     b'P' => {
-                        flush_normal(share, &mut self.normal, true);
+                        flush_normal(share, &mut self.normal, true, !self.split_csi);
+                        self.split_csi = false;
                         self.capture = Some(Capture::Dcs(Vec::new()));
                     }
                     b']' => {
-                        flush_normal(share, &mut self.normal, true);
+                        flush_normal(share, &mut self.normal, true, !self.split_csi);
+                        self.split_csi = false;
                         self.capture = Some(Capture::Osc(Vec::new()));
                     }
                     b'[' => {
@@ -2245,11 +2277,13 @@ impl SideChannelScanner {
                         if is_alt_screen {
                             let sequence_bytes =
                                 self.normal.split_off(start.min(self.normal.len()));
-                            flush_normal(share, &mut self.normal, true);
+                            flush_normal(share, &mut self.normal, true, !self.split_csi);
+                            self.split_csi = false;
                             self.normal = sequence_bytes;
-                            flush_normal(share, &mut self.normal, false);
+                            flush_normal(share, &mut self.normal, false, false);
                         } else if is_sgr {
-                            flush_normal(share, &mut self.normal, true);
+                            flush_normal(share, &mut self.normal, true, !self.split_csi);
+                            self.split_csi = false;
                         }
                         observe_csi(&mut self.keyboard, &sequence, &share.meta, &share.style);
                         if is_sgr {
@@ -2266,15 +2300,17 @@ impl SideChannelScanner {
             }
         }
         if self.capture.is_none() {
-            flush_normal(share, &mut self.normal, true);
+            flush_normal(share, &mut self.normal, true, !self.split_csi);
+            self.split_csi = false;
             if self.csi.is_active() {
                 self.csi_start = Some(0);
+                self.split_csi = true;
             }
         }
     }
 }
 
-fn flush_normal(share: &ReaderShare, normal: &mut Vec<u8>, record_styles: bool) {
+fn flush_normal(share: &ReaderShare, normal: &mut Vec<u8>, record_styles: bool, mark_text: bool) {
     if normal.is_empty() {
         return;
     }
@@ -2284,17 +2320,42 @@ fn flush_normal(share: &ReaderShare, normal: &mut Vec<u8>, record_styles: bool) 
     };
     let before = needs_record.then(|| {
         let parser = lock(&share.screen);
-        GridSnapshot::take(parser.screen())
+        let screen = parser.screen();
+        let (rows, cols) = screen.size();
+        let text_start = TextStart {
+            cursor: screen.cursor_position(),
+            rows: rows.get(),
+            cols: cols.get(),
+            scrollback: screen.scrollback_len(),
+        };
+        (GridSnapshot::take(screen), text_start)
     });
     lock(&share.screen).process(normal);
-    if let Some(before) = before {
+    if let Some((before, text_start)) = before {
         let after = {
             let parser = lock(&share.screen);
             GridSnapshot::take(parser.screen())
         };
-        lock(&share.style).record(&before, &after, share.scrollback);
+        let mut style = lock(&share.style);
+        style.record(&before, &after, share.scrollback);
+        if mark_text {
+            style.record_text(
+                text_start.cursor,
+                text_start.rows,
+                text_start.cols,
+                text_start.scrollback,
+                normal,
+            );
+        }
     }
     normal.clear();
+}
+
+struct TextStart {
+    cursor: (u16, u16),
+    rows: u16,
+    cols: u16,
+    scrollback: usize,
 }
 
 /// Hand an OSC to `vt100` and update the hyperlink state. The text before it
@@ -2304,7 +2365,7 @@ fn handle_osc(payload: &[u8], share: &ReaderShare) {
     sequence.extend_from_slice(b"\x1b]");
     sequence.extend_from_slice(payload);
     sequence.push(0x07);
-    flush_normal(share, &mut sequence, false);
+    flush_normal(share, &mut sequence, false, false);
     lock(&share.style).apply_osc(payload);
 }
 

@@ -3805,6 +3805,7 @@ impl Gui {
             modifiers: &mods,
             action,
             text: event.text.as_deref(),
+            has_text_report: true,
             base_layout,
         };
         if let Err(error) = self.host.send_key_event(surface_id, &input) {

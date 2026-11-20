@@ -156,14 +156,14 @@ copy_bundle() {
 build_macos() {
   stage_engine
   make app
-  make gui-app
+  (cd core && cargo build --release -p berth-gui -p berth-cli)
+  ./scripts/bundle-gui.sh release
   copy_bundle build/Berth.app Berth.app Berth
   copy_bundle build/BerthGui.app BerthGui.app berth-gui
 }
 
 build_linux() {
-  make gui
-  make cli
+  (cd core && cargo build --release -p berth-gui -p berth-cli)
   local arch stage
   arch="$(uname -m)"
   stage="$(mktemp -d)"
@@ -181,14 +181,13 @@ build_linux() {
 }
 
 build_windows() {
-  make gui
-  make cli
+  (cd core && cargo build --release -p berth-gui -p berth-cli)
   local stage zip
   stage="$(mktemp -d)"
   cp core/target/release/berth-gui.exe core/target/release/berth.exe "$stage/"
   zip="$DOWNLOADS/berth-gui-$VERSION-windows-x86_64.zip"
   if command -v 7z >/dev/null 2>&1; then
-    (cd "$stage" && 7z a "$zip" .)
+    (cd "$stage" && 7z a "$(cygpath -w "$zip")" .)
   else
     powershell.exe -NoProfile -Command \
       "Compress-Archive -Force -Path '$(cygpath -w "$stage")\\*' -DestinationPath '$(cygpath -w "$zip")'"

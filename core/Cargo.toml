@@ -26,6 +26,7 @@ getrandom = "0.4"
 # PTY + VT screen for the headless shell spike (and future GUI shells).
 portable-pty = "0.9"
 vt100 = "0.18"
+unicode-width = "0.2"
 libc = "0.2"
 # Minimal Linux/Windows window: no GTK headers, no GPU required.
 winit = "0.30"

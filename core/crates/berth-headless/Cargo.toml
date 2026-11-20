@@ -12,6 +12,7 @@ berth-server = { path = "../berth-server" }
 serde_json = { workspace = true }
 portable-pty = { workspace = true }
 vt100 = { workspace = true }
+unicode-width.workspace = true
 libc = { workspace = true }
 png = "0.17"
 

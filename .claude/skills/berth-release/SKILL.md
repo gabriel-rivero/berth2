@@ -37,7 +37,7 @@ It does the whole mechanical sequence:
 3. runs `cargo fmt --check`, `cargo test --workspace`, and `cargo clippy`;
 4. commits `release: <version>` and creates the annotated tag `v<version>`;
 5. builds the local platform's artifacts:
-   - **macOS**: `make app` and `make gui-app`, then verifies and copies
+   - **macOS**: `make app` and the portable bundle, then verifies and copies
      `Berth.app` (AppKit shell) and `BerthGui.app` (portable window) into
      `~/Downloads`. It checks the version, the ad-hoc signature, and the binary
      architecture.
@@ -45,6 +45,9 @@ It does the whole mechanical sequence:
      in `~/Downloads`, plus a `.deb` when `dpkg-deb` is installed.
    - **Windows Git Bash**: a `berth-gui-<version>-windows-x86_64.zip` with both
      binaries in `~/Downloads`.
+
+Only the macOS Swift shell needs `make`; the Rust artifacts are built with
+`cargo` on every OS.
 
 Use `--no-build` when only the version bump, commit, and tag are wanted (for
 example in CI). Use `--build-only` to rebuild and copy artifacts for the

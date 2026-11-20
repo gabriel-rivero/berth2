@@ -34,7 +34,8 @@ app itself has the gaps listed in
   instead.
 - **Text effects stop short of blink.** Strikethrough, underline colour, and single,
   double, curly, dotted and dashed underlines are in. There is no blink, and no
-  per-cell font change.
+  per-cell font change. Hyperlinks open only http(s), mailto, ftp(s) and local paths;
+  other schemes are refused.
 - **No audio bell.** Bells flash a pane ring; OSC 9/777 notifications also reach the
   desktop on macOS and Linux.
 - **Partial graphics protocols.** iTerm2 inline images, kitty graphics and
@@ -147,7 +148,7 @@ app itself has the gaps listed in
 - `send_text` is deliberately raw; clients must send `\r` or use `send-key
   enter`.
 - Key encoding covers the documented named keys and the kitty keyboard protocol;
-  other xterm modifier combinations are not modelled.
+  modifier-only key events and other xterm modifier combinations are not modelled.
 - Debian/Arch packages exist; there is no systemd unit, launch agent or
   autostart. The log keeps one rotated file.
 
