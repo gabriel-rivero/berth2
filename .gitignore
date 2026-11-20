@@ -26,3 +26,6 @@ core/target/
 .idea/
 .vscode/
 *.swp
+
+# Agent worktrees
+.claude/worktrees/
