@@ -4,6 +4,9 @@
 
 ### Features
 
+- **Selectable bell.** `bell` picks `none`, `visual` (the default pane flash) or
+  `audio`, which plays the system bell sound once per bell.
+
 - **Themes, window opacity and font zoom.** `theme` selects `berth-dark` or
   `berth-light` and persists the choice, `opacity` fades the portable window on macOS,
   and `Cmd/Ctrl + =`, `-` and `0` zoom the font on both shells. The AppKit shell hands

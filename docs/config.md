@@ -32,6 +32,7 @@ socket mode is read at launch.
   "theme": "berth-dark",
   "opacity": 1.0,
   "backgroundBlur": 0,
+  "bell": "visual",
   "compactSidebar": false,
   "closeExitedPanes": true,
   "restoreLaunchFlags": true,
@@ -91,6 +92,9 @@ style are shaped as one string, so a face with `calt`/`liga` draws them.
 - `opacity` is the window opacity, `0.3…1.0`. One is opaque. The portable window
   applies it on macOS; Linux and Windows keep the window opaque because winit does
   not expose it there.
+- `bell` is what a BEL does: `none`, `visual` (flash the pane border, the default) or
+  `audio`, which plays the system bell sound (Glass on macOS, the freedesktop bell
+  elsewhere). OSC 9/777 notifications are separate and still reach the desktop.
 - `backgroundBlur` is a blur radius, `0…64`, passed to Ghostty by the AppKit shell.
   The portable renderer writes opaque pixels, so it cannot show what is behind the
   window and ignores the key.

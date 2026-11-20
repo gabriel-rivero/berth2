@@ -88,7 +88,9 @@ this order, one item per session: item 1 builds the CSI side-channel scanner tha
    zoom the font on both shells and keep the choice.
 7. **Resize reflow**: re-wrap wrapped lines on width change so shrinking a pane does not
    garble history. The largest item here and the one allowed to move to 0.16.
-8. **Bell**: `bell = none | visual | audio`.
+8. **Bell** — landed, unreleased. `bell` selects `none`, `visual` (the default pane-border
+   flash) or `audio`, which plays the system bell sound. A repeated bell rings once per
+   batch, not once per frame.
 
 **Done when:** `nvim`, `lazygit`, `yazi`, `htop` and a Claude Code session render and
 respond identically to stock Ghostty at the same size, and a scripted transcript of each

@@ -33,6 +33,37 @@ pub fn notify(title: &str, body: &str) -> std::io::Result<()> {
     }
 }
 
+/// Play the system bell once. Errors are returned for logging, not retried.
+pub fn ring() -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("afplay")
+            .arg("/System/Library/Sounds/Glass.aiff")
+            .spawn()
+            .map(|_| ())
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("canberra-gtk-play")
+            .args(["-i", "bell"])
+            .spawn()
+            .map(|_| ())
+            .or_else(|_| {
+                std::process::Command::new("paplay")
+                    .arg("/usr/share/sounds/freedesktop/stereo/bell.oga")
+                    .spawn()
+                    .map(|_| ())
+            })
+    }
+    #[cfg(windows)]
+    {
+        std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", "[console]::beep(880,120)"])
+            .spawn()
+            .map(|_| ())
+    }
+}
+
 /// Quote a string for AppleScript, escaping what would end it early.
 #[cfg(target_os = "macos")]
 pub fn apple_script_string(text: &str) -> String {

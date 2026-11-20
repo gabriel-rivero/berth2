@@ -1297,6 +1297,7 @@ impl Gui {
             };
             let mut params = serde_json::json!({"surface_id": surface_id});
             let mut changed = false;
+            let mut bell_rang = false;
             {
                 let applied = self.last_meta.entry(surface_id.clone()).or_default();
                 if meta.title.is_some() && meta.title != applied.title {
@@ -1322,12 +1323,23 @@ impl Gui {
                 if meta.bells > applied.bells {
                     params["bell"] = serde_json::json!(true);
                     applied.bells = meta.bells;
+                    bell_rang = true;
                     changed = true;
                 }
             }
             if changed {
-                if meta.bells > 0 {
-                    self.flashes.insert(surface_id.clone(), Instant::now());
+                if bell_rang {
+                    match self.config.bell {
+                        config::BellMode::None => {}
+                        config::BellMode::Visual => {
+                            self.flashes.insert(surface_id.clone(), Instant::now());
+                        }
+                        config::BellMode::Audio => {
+                            if let Err(error) = desktop::ring() {
+                                log::line(&format!("bell failed: {error}"));
+                            }
+                        }
+                    }
                 }
                 if let Err(error) = self.dispatch("surface.update", params) {
                     eprintln!("berth-gui: surface.update: {error}");

@@ -291,6 +291,8 @@ pub struct Config {
     pub theme: String,
     /// Window opacity, 0.3..=1.0. One is opaque.
     pub opacity: f32,
+    /// What a bell does. The default flashes the pane border.
+    pub bell: BellMode,
     pub compact_sidebar: bool,
     /// Close a pane when its process exits instead of keeping the final screen
     /// with a banner. On by default, like a terminal tab.
@@ -331,6 +333,7 @@ impl Default for Config {
             font_metrics: HashMap::new(),
             theme: String::new(),
             opacity: 1.0,
+            bell: BellMode::default(),
             compact_sidebar: false,
             close_exited_panes: true,
             restore_launch_flags: true,
@@ -344,6 +347,34 @@ impl Default for Config {
             sidebar_width: 200.0,
             socket: None,
             shortcuts: Shortcuts::build(&HashMap::new()),
+        }
+    }
+}
+
+/// What a bell does: nothing, the pane flash, or the system sound.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BellMode {
+    None,
+    #[default]
+    Visual,
+    Audio,
+}
+
+impl BellMode {
+    pub fn parse(text: &str) -> Option<Self> {
+        match text.trim().to_ascii_lowercase().as_str() {
+            "none" => Some(Self::None),
+            "visual" => Some(Self::Visual),
+            "audio" => Some(Self::Audio),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Visual => "visual",
+            Self::Audio => "audio",
         }
     }
 }
@@ -462,6 +493,7 @@ struct FileConfig {
     font_metrics: Option<HashMap<String, FaceMetrics>>,
     theme: Option<String>,
     opacity: Option<f32>,
+    bell: Option<String>,
     compact_sidebar: Option<bool>,
     close_exited_panes: Option<bool>,
     restore_launch_flags: Option<bool>,
@@ -555,6 +587,11 @@ impl Config {
                 .filter(|value| value.is_finite() && *value > 0.0)
                 .unwrap_or(defaults.opacity)
                 .clamp(MIN_OPACITY, 1.0),
+            bell: file
+                .bell
+                .as_deref()
+                .and_then(BellMode::parse)
+                .unwrap_or(defaults.bell),
             compact_sidebar: file.compact_sidebar.unwrap_or(defaults.compact_sidebar),
             close_exited_panes: file
                 .close_exited_panes
@@ -657,6 +694,7 @@ impl Config {
             object.insert("theme".into(), serde_json::json!(self.theme));
         }
         object.insert("opacity".into(), serde_json::json!(self.opacity));
+        object.insert("bell".into(), serde_json::json!(self.bell.name()));
         if !self.font_family.is_empty() {
             object.insert("fontFamily".into(), serde_json::json!(self.font_family));
         }
@@ -1144,6 +1182,35 @@ mod tests {
                 .expect("light theme")
                 .terminal_bg
         );
+    }
+
+    #[test]
+    fn given_each_bell_name_when_parsed_then_it_maps_to_a_mode() {
+        for (text, mode) in [
+            ("none", BellMode::None),
+            ("visual", BellMode::Visual),
+            (" Audio ", BellMode::Audio),
+        ] {
+            assert_eq!(BellMode::parse(text), Some(mode));
+            assert_eq!(mode.name(), text.trim().to_ascii_lowercase());
+        }
+        assert_eq!(BellMode::parse("bell"), None);
+    }
+
+    #[test]
+    fn given_a_bell_key_when_parsed_and_saved_then_it_round_trips() {
+        let config = Config::parse(r#"{"bell": "audio"}"#).unwrap();
+        assert_eq!(config.bell, BellMode::Audio);
+        assert_eq!(
+            Config::parse(r#"{"bell": "loud"}"#).unwrap().bell,
+            BellMode::Visual
+        );
+        let path = temp_path("bell");
+        config.save_to(&path).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved["bell"], "audio");
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

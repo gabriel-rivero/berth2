@@ -3,7 +3,7 @@
 //! The panel edits the same document the macOS shell reads, so it writes only
 //! the keys it owns and leaves the rest of the file alone.
 
-use crate::config::{Action, Config, MAX_FONT_SIZE, MIN_FONT_SIZE, MIN_OPACITY};
+use crate::config::{Action, BellMode, Config, MAX_FONT_SIZE, MIN_FONT_SIZE, MIN_OPACITY};
 use crate::theme::THEMES;
 
 /// Values the display-scale row cycles through. `0` means automatic.
@@ -17,6 +17,7 @@ pub enum Field {
     FontScale,
     Theme,
     Opacity,
+    Bell,
     Shell,
     CompactSidebar,
     CloseExitedPanes,
@@ -77,6 +78,11 @@ pub fn rows(config: &Config, recording: Option<Action>, notice: Option<&str>) ->
             field: Field::Opacity,
             label: "Window opacity".into(),
             value: format!("{:.0}%", config.opacity * 100.0),
+        },
+        Row {
+            field: Field::Bell,
+            label: "Bell".into(),
+            value: config.bell.name().to_string(),
         },
         Row {
             field: Field::Shell,
@@ -200,6 +206,16 @@ pub fn adjust(config: &mut Config, field: Field, delta: i32) -> Change {
             config.opacity = opacity;
             Change::Opacity
         }
+        Field::Bell => {
+            const MODES: [BellMode; 3] = [BellMode::None, BellMode::Visual, BellMode::Audio];
+            let index = MODES
+                .iter()
+                .position(|mode| *mode == config.bell)
+                .unwrap_or(1) as i32;
+            let next = (index + delta).rem_euclid(MODES.len() as i32) as usize;
+            config.bell = MODES[next];
+            Change::View
+        }
         Field::FontScale => {
             let index = SCALES
                 .iter()
@@ -292,7 +308,7 @@ mod tests {
     fn given_the_settings_rows_when_built_then_every_action_has_a_row() {
         let config = Config::default();
         let rows = rows(&config, None, None);
-        assert_eq!(rows.len(), 12 + Action::ALL.len());
+        assert_eq!(rows.len(), 13 + Action::ALL.len());
         assert_eq!(rows[0].label, "Font size");
     }
 
@@ -330,6 +346,17 @@ mod tests {
         config.theme = "not-a-theme".into();
         assert_eq!(adjust(&mut config, Field::Theme, 1), Change::Theme);
         assert_eq!(config.theme, "berth-light");
+    }
+
+    #[test]
+    fn given_the_bell_when_adjusted_then_it_cycles_through_the_modes() {
+        let mut config = Config::default();
+        assert_eq!(adjust(&mut config, Field::Bell, 1), Change::View);
+        assert_eq!(config.bell, BellMode::Audio);
+        adjust(&mut config, Field::Bell, 1);
+        assert_eq!(config.bell, BellMode::None);
+        adjust(&mut config, Field::Bell, 1);
+        assert_eq!(config.bell, BellMode::Visual);
     }
 
     #[test]

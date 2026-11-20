@@ -36,7 +36,8 @@ app itself has the gaps listed in
   double, curly, dotted and dashed underlines, and blink are in. There is no per-cell
   font change. Hyperlinks open only http(s), mailto, ftp(s) and local paths; other
   schemes are refused.
-- **No audio bell.** Bells flash a pane ring; OSC 9/777 notifications also reach the
+- **Bells are one or the other.** `bell` selects `none`, `visual` or `audio`; the AppKit
+  shell follows Ghostty's `bell-features` instead. OSC 9/777 notifications also reach the
   desktop on macOS and Linux.
 - **Partial graphics protocols.** iTerm2 inline images, kitty graphics and
   sixel render. Kitty shared memory, z-index and direct placements are not
