@@ -949,7 +949,7 @@ impl<'a> Painter<'a> {
         }
         if view.scrollback > 0 && view.scrollback_len > 0 {
             let track = Rect::new(area.right().saturating_sub(4), area.y, 3, area.h);
-            self.fill(track, 0x001c_1c24);
+            self.fill(track, options.theme.scrollbar);
             let total = view.scrollback_len + rows;
             let thumb = (area.h * rows / total.max(1)).max(16).min(area.h);
             let travel = area.h.saturating_sub(thumb);
@@ -971,7 +971,7 @@ impl<'a> Painter<'a> {
             return;
         }
         let banner = Rect::new(area.x, area.bottom().saturating_sub(height), area.w, height);
-        self.fill(banner, 0x0024_1418);
+        self.fill(banner, theme.banner_bg);
         self.fill(
             Rect::new(banner.x, banner.y, banner.w, 1),
             theme.attention_error,
@@ -1231,9 +1231,9 @@ impl Painter<'_> {
         let geometry = style.geometry;
         self.blend(self.bounds(), 0x0000_0000, 150);
         let cell = font.cell();
-        self.fill(geometry.panel, 0x0020_2028);
+        self.fill(geometry.panel, theme.panel_bg);
         self.stroke(geometry.panel, theme.accent);
-        self.fill(geometry.title, 0x0029_2934);
+        self.fill(geometry.title, theme.panel_title_bg);
         self.text_elided(
             font,
             (geometry.title.x + 12, geometry.title.y + 6),

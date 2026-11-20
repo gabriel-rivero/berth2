@@ -31,6 +31,10 @@ pub enum Command {
     Search,
     /// Select the nth workspace, one-based.
     Workspace(usize),
+    /// One point larger, one point smaller, or back to the config default.
+    ZoomIn,
+    ZoomOut,
+    ZoomReset,
     Copy,
     Paste,
     ScrollUp(usize),
@@ -57,6 +61,9 @@ impl Command {
             Action::ToggleSidebar => Command::ToggleSidebar,
             Action::Settings => Command::Settings,
             Action::Search => Command::Search,
+            Action::ZoomIn => Command::ZoomIn,
+            Action::ZoomOut => Command::ZoomOut,
+            Action::ZoomReset => Command::ZoomReset,
         }
     }
 }
@@ -426,6 +433,27 @@ mod tests {
             &shortcuts(),
         );
         assert_eq!(command, Some(Command::Workspace(3)));
+    }
+
+    #[test]
+    fn given_the_zoom_chords_then_they_resolve_on_this_platform() {
+        let shortcuts = shortcuts();
+        let modifier = if cfg!(target_os = "macos") {
+            ModifiersState::SUPER
+        } else {
+            ModifiersState::CONTROL
+        };
+        for (key, expected) in [
+            ("=", Command::ZoomIn),
+            ("-", Command::ZoomOut),
+            ("0", Command::ZoomReset),
+        ] {
+            assert_eq!(
+                resolve(&Key::Character(key.into()), modifier, false, &shortcuts),
+                Some(expected),
+                "{key} did not resolve"
+            );
+        }
     }
 
     #[test]

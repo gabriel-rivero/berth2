@@ -234,6 +234,21 @@ private let berthCloseSurfaceCallback: ghostty_runtime_close_surface_cb = { user
     }
 }
 
+/// Text of the generated Ghostty config that carries Berth's overrides. The
+/// file is the only way to pass them: Ghostty's config loader reads files.
+enum GhosttyConfigFile {
+    static func text(fontSize: Double, opacity: Double, backgroundBlur: Int) -> String {
+        var lines = [
+            "font-size = \(fontSize)",
+            "background-opacity = \(opacity)",
+        ]
+        if backgroundBlur > 0 {
+            lines.append("background-blur = \(backgroundBlur)")
+        }
+        return lines.joined(separator: "\n") + "\n"
+    }
+}
+
 /// Process-wide Ghostty instance. Lives on the main thread only; the
 /// `nonisolated(unsafe)` is the explicit opt-out from Swift 6's Sendable check
 /// for a singleton that AppKit already guarantees is single-threaded.
@@ -294,25 +309,39 @@ final class GhosttyHost {
         return true
     }
 
-    /// Ghostty's C config loader only reads files, so write the app's one
-    /// override next to the session files and load it after the defaults.
+    /// Ghostty's C config loader only reads files, so write the app's overrides
+    /// next to the session files and load them after the defaults. Every call
+    /// writes all of them, so a font-only update keeps the background settings.
     private func writeFontConfig(
         fontSize: Double,
         config: ghostty_config_t?,
         fileName: String = "ghostty.conf"
     ) {
         guard let config else { return }
+        let appearance = currentAppearance()
         let directory = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Berth", isDirectory: true)
         try? FileManager.default.createDirectory(
             at: directory, withIntermediateDirectories: true)
         let url = directory.appendingPathComponent(fileName)
+        let text = GhosttyConfigFile.text(
+            fontSize: fontSize,
+            opacity: appearance.opacity,
+            backgroundBlur: appearance.backgroundBlur)
         do {
-            try "font-size = \(fontSize)\n".write(to: url, atomically: true, encoding: .utf8)
+            try text.write(to: url, atomically: true, encoding: .utf8)
             ghostty_config_load_file(config, url.path)
         } catch {
             NSLog("berth: could not write font config: \(error.localizedDescription)")
+        }
+    }
+
+    /// Appearance lives on the main actor; every entry point here runs on the
+    /// main thread (see the file header), so read it under that isolation.
+    private func currentAppearance() -> (opacity: Double, backgroundBlur: Int) {
+        MainActor.assumeIsolated {
+            (AppConfig.shared.opacity, AppConfig.shared.backgroundBlur)
         }
     }
 

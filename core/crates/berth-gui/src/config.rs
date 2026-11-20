@@ -12,6 +12,7 @@ use serde::Deserialize;
 pub const DEFAULT_FONT_SIZE: f32 = 14.0;
 pub const MIN_FONT_SIZE: f32 = 8.0;
 pub const MAX_FONT_SIZE: f32 = 72.0;
+pub const MIN_OPACITY: f32 = 0.3;
 pub const MIN_SIDEBAR_WIDTH: f64 = 180.0;
 pub const MAX_SIDEBAR_WIDTH: f64 = 360.0;
 
@@ -33,10 +34,13 @@ pub enum Action {
     ToggleSidebar,
     Settings,
     Search,
+    ZoomIn,
+    ZoomOut,
+    ZoomReset,
 }
 
 impl Action {
-    pub const ALL: [Action; 15] = [
+    pub const ALL: [Action; 18] = [
         Action::SplitRight,
         Action::SplitDown,
         Action::NewTab,
@@ -52,6 +56,9 @@ impl Action {
         Action::ToggleSidebar,
         Action::Settings,
         Action::Search,
+        Action::ZoomIn,
+        Action::ZoomOut,
+        Action::ZoomReset,
     ];
 
     /// How the palette spells the action.
@@ -72,6 +79,9 @@ impl Action {
             Action::ToggleSidebar => "Toggle Sidebar",
             Action::Settings => "Settings",
             Action::Search => "Search Scrollback",
+            Action::ZoomIn => "Zoom In",
+            Action::ZoomOut => "Zoom Out",
+            Action::ZoomReset => "Actual Size",
         }
     }
 
@@ -93,6 +103,9 @@ impl Action {
             Action::ToggleSidebar => "toggleSidebar",
             Action::Settings => "settings",
             Action::Search => "search",
+            Action::ZoomIn => "zoomIn",
+            Action::ZoomOut => "zoomOut",
+            Action::ZoomReset => "zoomReset",
         }
     }
 
@@ -114,6 +127,9 @@ impl Action {
             Action::ToggleSidebar => "cmd+opt+s",
             Action::Settings => "cmd+,",
             Action::Search => "cmd+f",
+            Action::ZoomIn => "cmd+=",
+            Action::ZoomOut => "cmd+-",
+            Action::ZoomReset => "cmd+0",
         }
     }
 
@@ -137,6 +153,9 @@ impl Action {
             Action::ToggleSidebar => "ctrl+alt+s",
             Action::Settings => "ctrl+,",
             Action::Search => "ctrl+shift+f",
+            Action::ZoomIn => "ctrl+=",
+            Action::ZoomOut => "ctrl+-",
+            Action::ZoomReset => "ctrl+0",
         }
     }
 }
@@ -268,6 +287,10 @@ pub struct Config {
     pub font_features: Vec<String>,
     /// Per-family cell overrides, keyed by face name.
     pub font_metrics: HashMap<String, FaceMetrics>,
+    /// Palette name; empty and unknown names use the dark default.
+    pub theme: String,
+    /// Window opacity, 0.3..=1.0. One is opaque.
+    pub opacity: f32,
     pub compact_sidebar: bool,
     /// Close a pane when its process exits instead of keeping the final screen
     /// with a banner. On by default, like a terminal tab.
@@ -306,6 +329,8 @@ impl Default for Config {
             line_height: 1.35,
             font_features: Vec::new(),
             font_metrics: HashMap::new(),
+            theme: String::new(),
+            opacity: 1.0,
             compact_sidebar: false,
             close_exited_panes: true,
             restore_launch_flags: true,
@@ -435,6 +460,8 @@ struct FileConfig {
     line_height: Option<f32>,
     font_features: Option<Vec<String>>,
     font_metrics: Option<HashMap<String, FaceMetrics>>,
+    theme: Option<String>,
+    opacity: Option<f32>,
     compact_sidebar: Option<bool>,
     close_exited_panes: Option<bool>,
     restore_launch_flags: Option<bool>,
@@ -522,6 +549,12 @@ impl Config {
                     (metrics.width.is_some() || metrics.height.is_some()).then_some((name, metrics))
                 })
                 .collect(),
+            theme: file.theme.unwrap_or_default().trim().to_string(),
+            opacity: file
+                .opacity
+                .filter(|value| value.is_finite() && *value > 0.0)
+                .unwrap_or(defaults.opacity)
+                .clamp(MIN_OPACITY, 1.0),
             compact_sidebar: file.compact_sidebar.unwrap_or(defaults.compact_sidebar),
             close_exited_panes: file
                 .close_exited_panes
@@ -548,6 +581,11 @@ impl Config {
             socket: file.socket,
             shortcuts: Shortcuts::build(&file.shortcuts),
         }
+    }
+
+    /// The palette this config selects. An unknown name keeps the dark theme.
+    pub fn theme(&self) -> crate::theme::Theme {
+        crate::theme::Theme::named(&self.theme).unwrap_or_default()
     }
 
     /// Pixel size for the terminal font on this display. Mirrors the macOS
@@ -615,6 +653,10 @@ impl Config {
         })?;
         object.insert("fontSize".into(), serde_json::json!(self.font_size));
         object.insert("fontScale".into(), serde_json::json!(self.font_scale));
+        if !self.theme.is_empty() {
+            object.insert("theme".into(), serde_json::json!(self.theme));
+        }
+        object.insert("opacity".into(), serde_json::json!(self.opacity));
         if !self.font_family.is_empty() {
             object.insert("fontFamily".into(), serde_json::json!(self.font_family));
         }
@@ -1088,6 +1130,45 @@ mod tests {
         let saved: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert!(saved.get("fontFamily").is_none());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn given_a_theme_and_opacity_when_parsed_then_they_clamp_and_resolve() {
+        let config = Config::parse(r#"{"theme": " berth-light ", "opacity": 0.1}"#).unwrap();
+        assert_eq!(config.theme, "berth-light");
+        assert_eq!(config.opacity, MIN_OPACITY);
+        assert_eq!(
+            config.theme().terminal_bg,
+            crate::theme::Theme::named("berth-light")
+                .expect("light theme")
+                .terminal_bg
+        );
+    }
+
+    #[test]
+    fn given_an_unknown_theme_then_the_dark_palette_is_used() {
+        let config = Config::parse(r#"{"theme": "not-a-theme"}"#).unwrap();
+        assert_eq!(
+            config.theme().terminal_bg,
+            crate::theme::Theme::default().terminal_bg
+        );
+        assert_eq!(config.opacity, 1.0);
+    }
+
+    #[test]
+    fn given_a_theme_and_opacity_when_saved_then_they_round_trip() {
+        let path = temp_path("theme");
+        std::fs::write(&path, r#"{"futureKey": {"a": 1}}"#).unwrap();
+        let mut config = Config::parse(r#"{}"#).unwrap();
+        config.theme = "berth-light".into();
+        config.opacity = 0.85;
+        config.save_to(&path).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved["theme"], "berth-light");
+        assert!((saved["opacity"].as_f64().expect("opacity") - 0.85).abs() < 1e-6);
+        assert_eq!(saved["futureKey"]["a"], 1);
         let _ = std::fs::remove_file(&path);
     }
 }

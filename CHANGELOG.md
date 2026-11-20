@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- **Themes, window opacity and font zoom.** `theme` selects `berth-dark` or
+  `berth-light` and persists the choice, `opacity` fades the portable window on macOS,
+  and `Cmd/Ctrl + =`, `-` and `0` zoom the font on both shells. The AppKit shell hands
+  `opacity` and `backgroundBlur` to Ghostty. The portable renderer writes opaque pixels,
+  so it cannot blur what is behind the window.
+
 ## 0.15.4 — 2026-11-20
 
 ### Features

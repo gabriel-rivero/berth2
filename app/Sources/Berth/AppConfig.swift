@@ -1,7 +1,8 @@
-// User configuration: shortcut overrides, terminal font size and socket mode
-// in ~/.config/berth/config.json.
+// User configuration: shortcut overrides, terminal font size, appearance and
+// socket mode in ~/.config/berth/config.json.
 //
-//   {"shortcuts": {"splitRight": "cmd+d"}, "fontSize": 14, "socket": "local"}
+//   {"shortcuts": {"splitRight": "cmd+d"}, "fontSize": 14, "opacity": 0.95,
+//    "backgroundBlur": 20, "theme": "berth-light", "socket": "local"}
 //
 // Shortcuts are parsed into an AppKit key equivalent + modifier mask. Unknown
 // keys are ignored, and a missing file means the built-in defaults.
@@ -56,6 +57,9 @@ enum ShortcutAction: String, CaseIterable {
     case jumpAttention
     case showAttention
     case toggleSidebar
+    case zoomIn
+    case zoomOut
+    case zoomReset
     case settings
 
     var title: String {
@@ -73,6 +77,9 @@ enum ShortcutAction: String, CaseIterable {
         case .jumpAttention: return "Jump to Attention"
         case .showAttention: return "Attention…"
         case .toggleSidebar: return "Toggle Sidebar"
+        case .zoomIn: return "Zoom In"
+        case .zoomOut: return "Zoom Out"
+        case .zoomReset: return "Actual Size"
         case .settings: return "Settings…"
         }
     }
@@ -92,6 +99,9 @@ enum ShortcutAction: String, CaseIterable {
         case .jumpAttention: return "cmd+shift+u"
         case .showAttention: return "cmd+i"
         case .toggleSidebar: return "cmd+opt+s"
+        case .zoomIn: return "cmd+="
+        case .zoomOut: return "cmd+-"
+        case .zoomReset: return "cmd+0"
         case .settings: return "cmd+,"
         }
     }
@@ -101,9 +111,13 @@ enum ShortcutAction: String, CaseIterable {
 final class AppConfig {
     static let shared = AppConfig()
 
+    /// Zoom and the settings window share this floor and ceiling.
+    static let fontSizeRange: ClosedRange<Double> = 8...72
+    static let defaultFontSize: Double = 14
+
     private(set) var shortcuts: [String: String] = [:]
     /// Terminal font size in points, handed to Ghostty as `font-size`.
-    private(set) var fontSize: Double = 14
+    private(set) var fontSize: Double = AppConfig.defaultFontSize
     /// Per-display multiplier. Zero means automatic (2 / backing scale), so a
     /// 1x monitor gets the same physical glyph size as a Retina laptop.
     private(set) var fontScale: Double = 0
@@ -111,9 +125,22 @@ final class AppConfig {
     private(set) var compactSidebar = false
     /// `off`, `local` (token for mutations) or `trusted` (same-uid only).
     private(set) var socketMode: SocketMode = .local
+    /// Palette name for the portable window. This shell keeps the key so a save
+    /// here does not drop it, and leaves its palette to the Ghostty config.
+    private(set) var theme: String = ""
+    /// Terminal background opacity, 0.3 (very transparent) to 1.0 (solid).
+    private(set) var opacity: Double = 1.0
+    /// Background blur radius, 0 to 64; 0 turns blur off.
+    private(set) var backgroundBlur: Int = 0
 
     private init() {
         load()
+    }
+
+    /// A config read from one file instead of the default path. `shared` is
+    /// what the app uses; this exists so tests do not touch the user's file.
+    init(url: URL) {
+        load(from: url)
     }
 
     func setSocketMode(_ mode: SocketMode) {
@@ -121,7 +148,19 @@ final class AppConfig {
     }
 
     func setFontSize(_ value: Double) {
-        fontSize = min(max(value, 8), 72)
+        fontSize = min(max(value, Self.fontSizeRange.lowerBound), Self.fontSizeRange.upperBound)
+    }
+
+    func setTheme(_ value: String) {
+        theme = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func setOpacity(_ value: Double) {
+        opacity = min(max(value, 0.3), 1.0)
+    }
+
+    func setBackgroundBlur(_ value: Int) {
+        backgroundBlur = min(max(value, 0), 64)
     }
 
     func setFontScale(_ value: Double) {
@@ -170,6 +209,15 @@ final class AppConfig {
         if let value = object["compactSidebar"] as? Bool {
             setCompactSidebar(value)
         }
+        if let value = object["theme"] as? String {
+            setTheme(value)
+        }
+        if let value = object["opacity"] as? NSNumber {
+            setOpacity(value.doubleValue)
+        }
+        if let value = object["backgroundBlur"] as? NSNumber {
+            setBackgroundBlur(value.intValue)
+        }
         if let value = object["socket"] as? String, let mode = SocketMode(rawValue: value) {
             socketMode = mode
         }
@@ -190,6 +238,9 @@ final class AppConfig {
         object["fontSize"] = fontSize
         object["fontScale"] = fontScale
         object["compactSidebar"] = compactSidebar
+        object["theme"] = theme
+        object["opacity"] = opacity
+        object["backgroundBlur"] = backgroundBlur
         object["socket"] = socketMode.rawValue
         let data = try JSONSerialization.data(
             withJSONObject: object,

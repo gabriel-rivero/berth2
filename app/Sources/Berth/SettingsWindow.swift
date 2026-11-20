@@ -28,8 +28,10 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     }
 
     private override init() {
+        // One shortcut row per action on top of the font, scale, sidebar and
+        // socket rows, so the sheet is tall enough to keep Save clear of the grid.
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 460, height: 680),
+            contentRect: NSRect(x: 0, y: 0, width: 460, height: 780),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false)
@@ -138,7 +140,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
 
     @objc private func save() {
         guard let size = Double(fontField.stringValue.trimmingCharacters(in: .whitespaces)),
-              (8...72).contains(size)
+              AppConfig.fontSizeRange.contains(size)
         else {
             NSSound.beep()
             fontField.becomeFirstResponder()

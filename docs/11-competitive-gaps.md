@@ -38,6 +38,8 @@ is portable-only, and every macOS gap is UI-only.
 | | styled and coloured underlines, strikethrough | ● | ● | ● | iTerm2, Ghostty, WezTerm |
 | | OSC 8 hyperlinks | ● | ● | ● | ● |
 | | OSC 52 clipboard write / read | ● / ● | ● / ● | ● | ● |
+| | theme list, light/dark, window opacity | ● | ● | ● | iTerm2, Ghostty, kitty |
+| | background blur | ○ | ● | ● | Ghostty, kitty |
 | | focus reporting, cursor shapes (DECSCUSR) | ● | ● | ● | ● |
 | | iTerm2 / kitty / sixel images | ● | ● | ● / ● / ○ | ● |
 | | resize reflow of wrapped lines | ○ | ● | ● | ● |
@@ -57,7 +59,7 @@ is portable-only, and every macOS gap is UI-only.
 | | geometric (arrow-key) pane focus | ○ | ○ | ● | cmux, iTerm2 |
 | | workspace groups, reorder, colours | ● | ◐ (no create UI) | ● | — |
 | | quake / dropdown hotkey window | ○ | ○ | ● | Ghostty, iTerm2, kitty |
-| **Workflow** | command palette | ● (15 verbs) | ● (13 verbs) | ● (indexes everything) | ● |
+| **Workflow** | command palette | ● (18 verbs) | ● (13 verbs) | ● (indexes everything) | ● |
 | | shell integration (OSC 133), jump to prompt | ○ | ○ | ● | ● |
 | | command blocks / per-command status | ○ | ○ | ◐ | Warp, kitty marks |
 | | declarative layouts, custom commands | ○ | ○ | ● | WezTerm, kitty, Warp |

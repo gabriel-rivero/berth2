@@ -73,4 +73,68 @@ final class AppConfigTests: XCTestCase {
         let left = try String(contentsOf: url, encoding: .utf8)
         XCTAssertEqual(left, original)
     }
+
+    // MARK: - Appearance
+
+    /// A fresh instance reads only the file it is given, so these tests never
+    /// depend on the user's real ~/.config/berth/config.json.
+    func testConfigWithoutAFileUsesTheAppearanceDefaults() {
+        let config = AppConfig(url: tempURL())
+        XCTAssertEqual(config.theme, "")
+        XCTAssertEqual(config.opacity, 1.0)
+        XCTAssertEqual(config.backgroundBlur, 0)
+        XCTAssertEqual(config.fontSize, AppConfig.defaultFontSize)
+    }
+
+    func testOpacityBelowRangeClampsToTheMinimum() {
+        let config = AppConfig(url: tempURL())
+        config.setOpacity(0.1)
+        XCTAssertEqual(config.opacity, 0.3, accuracy: 0.0001)
+    }
+
+    func testOpacityAboveRangeClampsToTheMaximum() {
+        let config = AppConfig(url: tempURL())
+        config.setOpacity(1.5)
+        XCTAssertEqual(config.opacity, 1.0, accuracy: 0.0001)
+    }
+
+    func testBackgroundBlurOutsideRangeClampsToItsBounds() {
+        let config = AppConfig(url: tempURL())
+        config.setBackgroundBlur(-4)
+        XCTAssertEqual(config.backgroundBlur, 0)
+        config.setBackgroundBlur(200)
+        XCTAssertEqual(config.backgroundBlur, 64)
+    }
+
+    func testThemeIsStoredTrimmed() {
+        let config = AppConfig(url: tempURL())
+        config.setTheme("  Dracula\n")
+        XCTAssertEqual(config.theme, "Dracula")
+    }
+
+    func testSaveAndReloadRoundTripsAppearanceAndKeepsUnrelatedKey() throws {
+        let url = tempURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let existing = """
+        {"theme": "old", "futureKey": {"a": 1}}
+        """
+        try existing.write(to: url, atomically: true, encoding: .utf8)
+
+        let config = AppConfig(url: url)
+        config.setTheme("Dracula")
+        config.setOpacity(0.85)
+        config.setBackgroundBlur(20)
+        try config.save(to: url)
+
+        let object = try read(url)
+        XCTAssertEqual(object["theme"] as? String, "Dracula")
+        XCTAssertEqual(object["opacity"] as? Double, 0.85)
+        XCTAssertEqual(object["backgroundBlur"] as? Int, 20)
+        XCTAssertEqual((object["futureKey"] as? [String: Any])?["a"] as? Int, 1)
+
+        let reloaded = AppConfig(url: url)
+        XCTAssertEqual(reloaded.theme, "Dracula")
+        XCTAssertEqual(reloaded.opacity, 0.85, accuracy: 0.0001)
+        XCTAssertEqual(reloaded.backgroundBlur, 20)
+    }
 }

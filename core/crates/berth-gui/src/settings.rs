@@ -3,7 +3,8 @@
 //! The panel edits the same document the macOS shell reads, so it writes only
 //! the keys it owns and leaves the rest of the file alone.
 
-use crate::config::{Action, Config, MAX_FONT_SIZE, MIN_FONT_SIZE};
+use crate::config::{Action, Config, MAX_FONT_SIZE, MIN_FONT_SIZE, MIN_OPACITY};
+use crate::theme::THEMES;
 
 /// Values the display-scale row cycles through. `0` means automatic.
 const SCALES: [f32; 9] = [0.0, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0];
@@ -14,6 +15,8 @@ const SOCKET_MODES: [Option<&str>; 3] = [Some("local"), Some("trusted"), Some("o
 pub enum Field {
     FontSize,
     FontScale,
+    Theme,
+    Opacity,
     Shell,
     CompactSidebar,
     CloseExitedPanes,
@@ -38,6 +41,10 @@ pub enum Change {
     None,
     /// Font metrics changed; the renderer must be rebuilt.
     Font,
+    /// The palette changed; the window must adopt the new tokens.
+    Theme,
+    /// Window opacity changed; the platform window must be told.
+    Opacity,
     /// Layout or bindings changed; only a redraw is needed.
     View,
     /// The shell for new panes changed; the host must be told.
@@ -60,6 +67,16 @@ pub fn rows(config: &Config, recording: Option<Action>, notice: Option<&str>) ->
             } else {
                 "auto".to_string()
             },
+        },
+        Row {
+            field: Field::Theme,
+            label: "Theme".into(),
+            value: theme_name(config).to_string(),
+        },
+        Row {
+            field: Field::Opacity,
+            label: "Window opacity".into(),
+            value: format!("{:.0}%", config.opacity * 100.0),
         },
         Row {
             field: Field::Shell,
@@ -142,6 +159,17 @@ pub fn rows(config: &Config, recording: Option<Action>, notice: Option<&str>) ->
     rows
 }
 
+/// The palette name to show, defaulting the empty and unknown cases to the
+/// first entry in the list.
+fn theme_name(config: &Config) -> &str {
+    let name = config.theme.trim();
+    if THEMES.contains(&name) {
+        name
+    } else {
+        THEMES[0]
+    }
+}
+
 /// Move a numeric or cycling value by one step.
 pub fn adjust(config: &mut Config, field: Field, delta: i32) -> Change {
     match field {
@@ -152,6 +180,25 @@ pub fn adjust(config: &mut Config, field: Field, delta: i32) -> Change {
             }
             config.font_size = size;
             Change::Font
+        }
+        Field::Theme => {
+            let names = THEMES;
+            let index = names
+                .iter()
+                .position(|name| *name == theme_name(config))
+                .unwrap_or(0) as i32;
+            let next = (index + delta).rem_euclid(names.len() as i32) as usize;
+            config.theme = names[next].to_string();
+            Change::Theme
+        }
+        Field::Opacity => {
+            let step = f32::from(delta as i16) * 0.05;
+            let opacity = (config.opacity + step).clamp(MIN_OPACITY, 1.0);
+            if (opacity - config.opacity).abs() < f32::EPSILON {
+                return Change::None;
+            }
+            config.opacity = opacity;
+            Change::Opacity
         }
         Field::FontScale => {
             let index = SCALES
@@ -245,7 +292,7 @@ mod tests {
     fn given_the_settings_rows_when_built_then_every_action_has_a_row() {
         let config = Config::default();
         let rows = rows(&config, None, None);
-        assert_eq!(rows.len(), 10 + Action::ALL.len());
+        assert_eq!(rows.len(), 12 + Action::ALL.len());
         assert_eq!(rows[0].label, "Font size");
     }
 
@@ -271,6 +318,35 @@ mod tests {
         assert_eq!(config.font_size, MAX_FONT_SIZE - 1.0);
         config.font_size = MIN_FONT_SIZE;
         assert_eq!(adjust(&mut config, Field::FontSize, -1), Change::None);
+    }
+
+    #[test]
+    fn given_the_theme_when_adjusted_then_it_cycles_through_the_list() {
+        let mut config = Config::default();
+        assert_eq!(adjust(&mut config, Field::Theme, 1), Change::Theme);
+        assert_eq!(config.theme, "berth-light");
+        assert_eq!(adjust(&mut config, Field::Theme, 1), Change::Theme);
+        assert_eq!(config.theme, "berth-dark");
+        config.theme = "not-a-theme".into();
+        assert_eq!(adjust(&mut config, Field::Theme, 1), Change::Theme);
+        assert_eq!(config.theme, "berth-light");
+    }
+
+    #[test]
+    fn given_the_opacity_when_adjusted_then_it_steps_and_clamps() {
+        let mut config = Config::default();
+        assert_eq!(adjust(&mut config, Field::Opacity, -1), Change::Opacity);
+        assert!((config.opacity - 0.95).abs() < 0.001);
+        for _ in 0..30 {
+            adjust(&mut config, Field::Opacity, -1);
+        }
+        assert_eq!(config.opacity, MIN_OPACITY);
+        assert_eq!(adjust(&mut config, Field::Opacity, -1), Change::None);
+        for _ in 0..40 {
+            adjust(&mut config, Field::Opacity, 1);
+        }
+        assert_eq!(config.opacity, 1.0);
+        assert_eq!(adjust(&mut config, Field::Opacity, 1), Change::None);
     }
 
     #[test]

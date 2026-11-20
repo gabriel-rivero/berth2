@@ -82,9 +82,10 @@ this order, one item per session: item 1 builds the CSI side-channel scanner tha
    shaped as one run, so a face with ligatures draws them. `fontWeight`, `lineHeight`,
    `fontFeatures` and per-face `fontMetrics` are read from `config.json`, and SGR 5 text
    blinks.
-6. **Appearance and zoom**: a theme list with light/dark selection and a persisted choice
-   (portable currently ships one hard-coded palette), window opacity and background blur,
-   and font-zoom chords on both shells.
+6. **Appearance and zoom** — landed, unreleased. `theme` picks `berth-dark` or
+   `berth-light` and persists, `opacity` fades the window on macOS, and
+   `backgroundBlur` reaches Ghostty in the AppKit shell. `Cmd/Ctrl + =`, `-` and `0`
+   zoom the font on both shells and keep the choice.
 7. **Resize reflow**: re-wrap wrapped lines on width change so shrinking a pane does not
    garble history. The largest item here and the one allowed to move to 0.16.
 8. **Bell**: `bell = none | visual | audio`.

@@ -51,6 +51,7 @@ mod shells;
 mod sync_output;
 mod theme;
 mod ui;
+mod window;
 
 use config::Config;
 use font::{CellSize, FontRenderer};
@@ -343,7 +344,7 @@ fn main() {
         state,
         host,
         server,
-        theme: Theme::default(),
+        theme: config.theme(),
         config,
         font: None,
         chrome_font: None,
@@ -731,6 +732,7 @@ impl ApplicationHandler<UserEvent> for Gui {
         self.context = Some(context);
         self.surface = Some(surface);
         trace_phase(self.started, "adapter");
+        crate::window::set_opacity(&window, self.config.opacity);
         self.window = Some(window);
         self.request_redraw();
     }
@@ -3035,6 +3037,9 @@ impl Gui {
                 });
             }
             Command::Search => self.open_search(),
+            Command::ZoomIn => self.zoom_font(1.0),
+            Command::ZoomOut => self.zoom_font(-1.0),
+            Command::ZoomReset => self.reset_zoom(),
         }
         self.request_redraw();
     }
@@ -3406,14 +3411,52 @@ impl Gui {
         ));
     }
 
+    /// Zoom chords step the point size and keep the choice, like the settings
+    /// row does.
+    fn zoom_font(&mut self, delta: f32) {
+        let size =
+            (self.config.font_size + delta).clamp(config::MIN_FONT_SIZE, config::MAX_FONT_SIZE);
+        self.set_font_size(size);
+    }
+
+    fn reset_zoom(&mut self) {
+        self.set_font_size(config::DEFAULT_FONT_SIZE);
+    }
+
+    fn set_font_size(&mut self, size: f32) {
+        if (size - self.config.font_size).abs() < f32::EPSILON {
+            return;
+        }
+        self.config.font_size = size;
+        self.invalidate_fonts();
+        if let Err(error) = settings::save(&self.config) {
+            log::line(&format!("settings save failed: {error}"));
+        }
+        self.request_redraw();
+    }
+
+    /// Drop the cached renderers so the next frame rebuilds them at the new
+    /// metrics, and let each pane resize against the new cell.
+    fn invalidate_fonts(&mut self) {
+        self.font = None;
+        self.chrome_font = None;
+        self.sized.clear();
+    }
+
     fn apply_setting(&mut self, change: settings::Change) {
         if change == settings::Change::None {
             return;
         }
         if change == settings::Change::Font {
-            self.font = None;
-            self.chrome_font = None;
-            self.sized.clear();
+            self.invalidate_fonts();
+        }
+        if change == settings::Change::Theme {
+            self.theme = self.config.theme();
+        }
+        if change == settings::Change::Opacity
+            && let Some(window) = &self.window
+        {
+            crate::window::set_opacity(window, self.config.opacity);
         }
         if change == settings::Change::Shell {
             // Panes already running keep their program; the next one uses it.

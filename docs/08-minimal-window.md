@@ -150,16 +150,16 @@ the macOS window's 12pt labels.
 
 **Panels**
 
-- `⌘⇧P` opens the command palette: a fuzzy-matched list of all 15 configurable
+- `⌘⇧P` opens the command palette: a fuzzy-matched list of all 18 configurable
   actions with their current chord, arrow keys to move, Enter to run, Escape to
   close. `Ctrl+Shift+P` outside macOS.
 - `⌘I` opens the attention list: unacknowledged notifications newest first, with
   the level colour, body and workspace. Enter acknowledges the notification,
   selects its workspace and focuses the surface that raised it.
-- `⌘,` opens settings: font size, display scale, compact sidebar, close on exit,
-  socket mode, and all 15 shortcuts. Arrows adjust or cycle a value, Enter
-  toggles or starts recording a chord, Backspace unbinds. Every change applies
-  live and is written to `config.json` with the keys the window does not own
+- `⌘,` opens settings: font size, display scale, theme, window opacity, compact
+  sidebar, close on exit, socket mode, and all 18 shortcuts. Arrows adjust or cycle a
+  value, Enter toggles or starts recording a chord, Backspace unbinds. Every change
+  applies live and is written to `config.json` with the keys the window does not own
   preserved.
 - Long panels scroll to follow the selection. Clicking outside a panel or
   focusing another window closes it.
@@ -224,7 +224,8 @@ full audited inventory.
   Kitty keyboard protocol, styled text, OSC 8 hyperlinks, cursor shapes, focus reporting
   and OSC 52 read are supported; OSC 133 shell integration is not. The design is in
   [docs/11-competitive-gaps.md](11-competitive-gaps.md); it is 0.15 work.
-- **One palette.** The theme is hard-coded; ligatures render through shaping runs.
+- **Two palettes.** `theme` picks `berth-dark` or `berth-light`, `opacity` fades the
+  window, and the zoom chords resize the font; ligatures render through shaping runs.
 - **No copy mode, paste history or command blocks.** Selection is mouse-only.
 - **No installers on macOS or Windows.** Linux has a `.deb` and a `PKGBUILD`; there is no
   AppImage, Flatpak, Windows installer or auto-update.

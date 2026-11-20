@@ -171,6 +171,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         BerthCoreHost.shared.toggleSidebar()
     }
 
+    @objc func zoomIn(_ sender: Any?) {
+        applyFontSize(AppConfig.shared.fontSize + 1)
+    }
+
+    @objc func zoomOut(_ sender: Any?) {
+        applyFontSize(AppConfig.shared.fontSize - 1)
+    }
+
+    @objc func zoomReset(_ sender: Any?) {
+        applyFontSize(AppConfig.defaultFontSize)
+    }
+
     /// Jump to the agent most recently asking for a human. Repeating the
     /// shortcut cycles: the agent you are already on is skipped when possible.
     @objc func jumpAttention(_ sender: Any?) {
@@ -244,6 +256,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func split(direction: String) {
         guard let id = BerthCoreHost.shared.focusedSurfaceID else { return }
         send("surface.split", ["surface_id": id, "direction": direction, "focus": true])
+    }
+
+    /// Zoom steps by one point and clamps at the settings window's range, so
+    /// the two paths cannot drift. A failed save keeps the live size in effect.
+    private func applyFontSize(_ size: Double) {
+        AppConfig.shared.setFontSize(size)
+        do {
+            try AppConfig.shared.save()
+        } catch {
+            BerthLog.app.error(
+                "could not save font size: \(error.localizedDescription, privacy: .public)")
+        }
+        BerthCoreHost.shared.applyFontSizeToAllSurfaces()
     }
 
     private func cycleTab(_ step: Int) {

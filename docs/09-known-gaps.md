@@ -24,13 +24,14 @@ app itself has the gaps listed in
   keyboard protocol, styled text, OSC 8 hyperlinks, cursor shapes, focus in/out and OSC 52
   read are in. The remaining gap is OSC 133 shell integration. The AppKit shell inherits
   it all from Ghostty.
-- **Font options and ligatures.** `fontFamily` picks the face at `fontSize` ×
+- **Font options, ligatures and zoom.** `fontFamily` picks the face at `fontSize` ×
   `fontScale`; `fontWeight`, `lineHeight`, `fontFeatures` and per-face `fontMetrics`
   tune it. Adjacent cells with the same style are shaped as one run, so ligatures
-  render. There is no font zoom.
-- **One palette.** The window ships a hard-coded dark theme and a fixed ANSI table; there
-  is no theme selection or light mode. The AppKit shell reads the user's Ghostty config
-  instead.
+  render. `Cmd/Ctrl + =`, `-` and `0` zoom.
+- **Two palettes.** `theme` selects `berth-dark` or `berth-light`, and `opacity` fades
+  the window on macOS. The terminal's 16-colour ANSI table is still fixed, and the
+  portable window cannot blur what is behind it: its software renderer writes opaque
+  pixels, so `backgroundBlur` applies only to the AppKit shell.
 - **Text effects stop short of per-cell fonts.** Strikethrough, underline colour, single,
   double, curly, dotted and dashed underlines, and blink are in. There is no per-cell
   font change. Hyperlinks open only http(s), mailto, ftp(s) and local paths; other

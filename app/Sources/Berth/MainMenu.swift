@@ -115,6 +115,10 @@ enum MainMenu {
         mainMenu.addItem(viewItem)
         let viewMenu = NSMenu(title: "View")
         viewItem.submenu = viewMenu
+        add(viewMenu, "Zoom In", #selector(AppDelegate.zoomIn(_:)), .zoomIn)
+        add(viewMenu, "Zoom Out", #selector(AppDelegate.zoomOut(_:)), .zoomOut)
+        add(viewMenu, "Actual Size", #selector(AppDelegate.zoomReset(_:)), .zoomReset)
+        viewMenu.addItem(.separator())
         add(viewMenu, "Command Palette", #selector(AppDelegate.showPalette(_:)), .palette)
         add(viewMenu, "Toggle Sidebar", #selector(AppDelegate.toggleSidebar(_:)), .toggleSidebar)
 

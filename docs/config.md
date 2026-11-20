@@ -17,7 +17,10 @@ socket mode is read at launch.
     "jumpAttention": "cmd+shift+u",
     "showAttention": "cmd+i",
     "toggleSidebar": "cmd+opt+s",
-    "settings": "cmd+,"
+    "settings": "cmd+,",
+    "zoomIn": "cmd+=",
+    "zoomOut": "cmd+-",
+    "zoomReset": "cmd+0"
   },
   "fontSize": 14,
   "fontScale": 0,
@@ -26,6 +29,9 @@ socket mode is read at launch.
   "lineHeight": 1.35,
   "fontFeatures": ["calt", "liga"],
   "fontMetrics": {"MesloLGS NF": {"width": 9, "height": 20}},
+  "theme": "berth-dark",
+  "opacity": 1.0,
+  "backgroundBlur": 0,
   "compactSidebar": false,
   "closeExitedPanes": true,
   "restoreLaunchFlags": true,
@@ -76,6 +82,22 @@ It does not read the Ghostty config, so `font-family` set only in
 `~/.config/ghostty/config` does not apply there, and neither do opacity or
 padding. Ligatures render through shaping runs: adjacent cells with the same
 style are shaped as one string, so a face with `calt`/`liga` draws them.
+
+## Appearance
+
+- `theme` selects the palette: `berth-dark` (the default) or `berth-light`. An
+  unknown name keeps the dark palette. The settings panel cycles the list and
+  writes the choice back.
+- `opacity` is the window opacity, `0.3…1.0`. One is opaque. The portable window
+  applies it on macOS; Linux and Windows keep the window opaque because winit does
+  not expose it there.
+- `backgroundBlur` is a blur radius, `0…64`, passed to Ghostty by the AppKit shell.
+  The portable renderer writes opaque pixels, so it cannot show what is behind the
+  window and ignores the key.
+- `zoomIn`, `zoomOut` and `zoomReset` are ordinary shortcuts: they step the font
+  size by one point, or return it to the configured `fontSize`, and write
+  `fontSize` so the choice survives a relaunch. The defaults are `cmd+=`, `cmd+-`
+  and `cmd+0` on macOS and `ctrl+=`, `ctrl+-`, `ctrl+0` elsewhere.
 
 ## Portable window shortcuts
 
