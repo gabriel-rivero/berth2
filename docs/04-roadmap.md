@@ -62,20 +62,20 @@ tagged; the AppKit shell inherits these from Ghostty already. Work through the l
 this order, one item per session: item 1 builds the CSI side-channel scanner that items
 2 and 3 reuse, and each item lands with its tests and a changelog entry.
 
-1. **Synchronized output (DECSET 2026)** — landed, unreleased. The PTY reader's CSI
+1. **Synchronized output (DECSET 2026)** — landed in 0.15.0. The PTY reader's CSI
    side channel records begin/end, `screen_view` carries the flag, and the window keeps
    the previous frame until the program ends it or 500 ms passes, so full-screen TUIs
    stop tearing and a crashed client cannot freeze the pane.
-2. **Kitty keyboard protocol** — landed, unreleased. The scanner tracks the flags a
+2. **Kitty keyboard protocol** — landed in 0.15.1. The scanner tracks the flags a
    program pushes, sets or pops (with separate main and alternate-screen stacks),
    answers `CSI ? u`, and the encoder honours the flags: `CSI u` for modified keys and
    disambiguated Escape, release and repeat events, alternate keys and associated text.
    Modifier-only key events are not reported. Agents and Neovim/Helix bind it.
-3. **Styled text** — landed, unreleased. SGR 9/29 strikethrough, SGR 4:1..5 underline
+3. **Styled text** — landed in 0.15.2. SGR 9/29 strikethrough, SGR 4:1..5 underline
    styles (single, double, curly, dotted, dashed), SGR 58 underline colour, and OSC 8
    hyperlink spans are recorded on the cells they style. Hover underlines a hyperlink
    and Cmd/Ctrl-click opens it; text URL detection is the fallback.
-4. **Cursor and focus** — landed, unreleased. DECSCUSR selects block, underline and bar
+4. **Cursor and focus** — landed in 0.15.3. DECSCUSR selects block, underline and bar
    cursors with their blink state, CSI ?1004 reports focus in/out for the focused pane,
    and an OSC 52 read opens a confirmation dialog before returning the clipboard.
 5. **Fonts and ligatures**: shape runs rather than single cells, with `fontWeight`,

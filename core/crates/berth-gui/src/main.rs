@@ -3582,26 +3582,21 @@ impl Gui {
             }),
             Overlay::ClipboardRead {
                 surface_id,
-                selection,
                 selected,
+                ..
             } => {
                 let label = lock(&self.state)
                     .surface(surface_id)
                     .map(|surface| surface.title.clone())
                     .filter(|title| !title.is_empty())
                     .unwrap_or_else(|| surface_id.clone());
-                let kind = if selection.starts_with('p') {
-                    "primary selection"
-                } else {
-                    "clipboard"
-                };
                 Some(PanelContent {
                     title: "Clipboard read".to_string(),
                     query: None,
                     rows: vec![
                         panel::PanelRow {
                             label: "Allow".to_string(),
-                            detail: format!("send the {kind} to {label}"),
+                            detail: format!("send the clipboard to {label}"),
                             color: None,
                         },
                         panel::PanelRow {
@@ -3767,7 +3762,8 @@ impl Gui {
         self.overlay = Some(Overlay::ClipboardRead {
             surface_id,
             selection,
-            selected: 0,
+            // Start on Deny so an Enter already in flight cannot approve it.
+            selected: 1,
         });
         self.request_redraw();
     }
