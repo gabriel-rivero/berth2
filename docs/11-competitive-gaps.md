@@ -19,8 +19,8 @@ the split:
 - **AppKit shell**: Ghostty owns emulation, rendering and input, so it inherits the whole
   modern protocol set. Berth's gaps there are UI, not VT.
 - **Portable window (`berth-gui`)**: its own renderer over the `vt100` crate, which is why
-  it has a good terminal and a narrow protocol surface (no Kitty keyboard protocol, no
-  OSC 8, no ligatures). Synchronized output is in as of 0.15.
+  it has a good terminal and a narrow protocol surface (no OSC 8, no ligatures).
+  Synchronized output and the Kitty keyboard protocol are in as of 0.15.
 
 That split is the single most important fact in this document: every VT-level gap below
 is portable-only, and every macOS gap is UI-only.
@@ -33,7 +33,7 @@ is portable-only, and every macOS gap is UI-only.
 | --- | --- | :-: | :-: | :-: | --- |
 | **Emulation** | true colour, wide chars, RTL text | ● | ● | ● | ● |
 | | ligatures | ○ | ● | ● | Ghostty, WezTerm, kitty |
-| | Kitty keyboard protocol | ○ | ● | ● | most 2026 GUI terminals |
+| | Kitty keyboard protocol | ● | ● | ● | most 2026 GUI terminals |
 | | synchronized output (DECSET 2026) | ● | ● | ● | near-universal |
 | | styled and coloured underlines, strikethrough | ○ | ● | ● | iTerm2, Ghostty, WezTerm |
 | | OSC 8 hyperlinks | ○ | ● | ● | ● |
@@ -88,11 +88,11 @@ is portable-only, and every macOS gap is UI-only.
 
 ## 3. The gaps that matter, in order
 
-1. **The portable terminal is behind on protocol, not features.** Kitty keyboard, OSC 8,
-   styled underlines, focus reporting and cursor shapes are what modern TUIs and agents
-   test for; synchronized output is the first of these to land. This is a bounded parsing
-   and painting job, and it is the cheapest way to stop the portable window feeling like a
-   different product.
+1. **The portable terminal is behind on protocol, not features.** OSC 8, styled
+   underlines, focus reporting and cursor shapes are what modern TUIs and agents test
+   for; synchronized output and the kitty keyboard protocol are the first of these to
+   land. This is a bounded parsing and painting job, and it is the cheapest way to stop
+   the portable window feeling like a different product.
 2. **Multiple windows, pane zoom, tab tear-off.** Every competitor has them; Berth has one
    window and no zoom. This is the most frequent shape of "I can't work like this" for a
    terminal workspace, and the protocol already models the tree, so it is a model and

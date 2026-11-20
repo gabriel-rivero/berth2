@@ -219,9 +219,9 @@ full audited inventory.
 
 - **One window, one visible workspace.** No multi-window, no detachable panes, no pane
   zoom.
-- **The protocol floor is otherwise xterm only.** Synchronized output (DECSET 2026) is
-  supported; there is no Kitty keyboard protocol, no OSC 8 spans, no focus reporting, no
-  cursor shapes, no OSC 52 read, no OSC 133. The design is in
+- **The protocol floor is otherwise xterm only.** Synchronized output (DECSET 2026) and
+  the Kitty keyboard protocol are supported; there is no OSC 8 spans, focus reporting,
+  cursor shapes, OSC 52 read, or OSC 133. The design is in
   [docs/11-competitive-gaps.md](11-competitive-gaps.md); it is 0.15 work.
 - **One palette, no ligatures.** The theme is hard-coded and each cell is shaped alone.
 - **No copy mode, paste history or command blocks.** Selection is mouse-only.

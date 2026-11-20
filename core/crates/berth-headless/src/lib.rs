@@ -9,6 +9,7 @@
 //! a display or Ghostty.
 
 pub mod keys;
+pub mod kitty;
 
 use std::collections::HashMap;
 use std::fs;
@@ -82,6 +83,7 @@ mod csi;
 mod sixel;
 
 use csi::{Csi, CsiScanner};
+use kitty::KittyKeyboard;
 
 #[derive(Debug, Clone, Default)]
 pub struct ScreenView {
@@ -105,6 +107,8 @@ pub struct ScreenView {
     /// DECSET 2026: the program is holding a frame open, so a renderer should
     /// keep showing the previous one until the flag clears.
     pub is_synchronized_output_enabled: bool,
+    /// Kitty keyboard protocol flags the program enabled.
+    pub kitty_keyboard_flags: kitty::KittyFlags,
 }
 
 /// How much pointer traffic the program wants. Mirrors `vt100`.
@@ -159,6 +163,8 @@ pub struct ScreenMeta {
     /// DECSET 2026: the program brackets a frame with begin/end and asks the
     /// renderer not to paint between them.
     pub is_synchronized_output_enabled: bool,
+    /// Kitty keyboard protocol flags the program enabled.
+    pub kitty_keyboard_flags: kitty::KittyFlags,
     /// Replies the terminal owes the program (cursor position, device
     /// attributes). The reader drains them back to the PTY.
     pub responses: Vec<String>,
@@ -629,7 +635,13 @@ impl PtyHost {
         }
         let images = lock(&surface.images).clone();
         let placeholders = lock(&surface.kitty).values().cloned().collect();
-        let is_synchronized_output_enabled = lock(&surface.meta).is_synchronized_output_enabled;
+        let (is_synchronized_output_enabled, kitty_keyboard_flags) = {
+            let meta = lock(&surface.meta);
+            (
+                meta.is_synchronized_output_enabled,
+                meta.kitty_keyboard_flags,
+            )
+        };
         Ok(ScreenView {
             cols,
             rows,
@@ -654,6 +666,7 @@ impl PtyHost {
             images,
             placeholders,
             is_synchronized_output_enabled,
+            kitty_keyboard_flags,
         })
     }
 
@@ -677,6 +690,7 @@ impl PtyHost {
             notification: meta.notification.take(),
             cell_pixels: meta.cell_pixels,
             is_synchronized_output_enabled: meta.is_synchronized_output_enabled,
+            kitty_keyboard_flags: meta.kitty_keyboard_flags,
             // Replies belong to the reader, which writes them to the PTY; the
             // window must not take them or the program waits forever.
             responses: Vec::new(),
@@ -921,7 +935,7 @@ impl SurfaceOps for PtyHost {
     }
 
     fn send_key(&self, surface_id: &str, key: &str, mods: &[String]) -> Result<(), CoreError> {
-        self.write_bytes(surface_id, &keys::encode(key, mods))
+        self.send_key_event(surface_id, &keys::KeyInput::press(key, mods))
     }
 
     fn read_text(
@@ -1049,6 +1063,20 @@ impl SurfaceOps for PtyHost {
 }
 
 impl PtyHost {
+    /// Send one key event, encoded with the kitty flags the program enabled.
+    pub fn send_key_event(
+        &self,
+        surface_id: &str,
+        input: &keys::KeyInput<'_>,
+    ) -> Result<(), CoreError> {
+        let flags = lock(&self.surface(surface_id)?.meta).kitty_keyboard_flags;
+        let bytes = keys::encode_with_flags(input, flags);
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        self.write_bytes(surface_id, &bytes)
+    }
+
     /// Write raw bytes to a surface, for input the key encoder does not model
     /// (mouse reports).
     pub fn send_bytes(&self, surface_id: &str, bytes: &[u8]) -> Result<(), CoreError> {
@@ -1608,6 +1636,10 @@ mod meta_tests {
             lock(&self.meta).is_synchronized_output_enabled
         }
 
+        fn kitty_flags(&self) -> kitty::KittyFlags {
+            lock(&self.meta).kitty_keyboard_flags
+        }
+
         fn share(&self) -> ReaderShare {
             ReaderShare {
                 screen: Arc::clone(&self.screen),
@@ -1753,6 +1785,48 @@ mod meta_tests {
         let mut scanner = SideChannelScanner::default();
         fixture.feed(&mut scanner, b"\x1b[?1;2026;25h");
         assert!(fixture.is_synchronized_output_enabled());
+    }
+
+    #[test]
+    fn given_a_kitty_flag_push_then_the_current_flags_are_exposed() {
+        let fixture = ScannerFixture::new();
+        let mut scanner = SideChannelScanner::default();
+        fixture.feed(&mut scanner, b"\x1b[>5u");
+        assert_eq!(fixture.kitty_flags().bits(), 5);
+        fixture.feed(&mut scanner, b"\x1b[<u");
+        assert_eq!(fixture.kitty_flags().bits(), 0);
+    }
+
+    #[test]
+    fn given_a_kitty_set_then_only_the_named_flags_change() {
+        let fixture = ScannerFixture::new();
+        let mut scanner = SideChannelScanner::default();
+        fixture.feed(&mut scanner, b"\x1b[=1;1u");
+        assert_eq!(fixture.kitty_flags().bits(), 1);
+        fixture.feed(&mut scanner, b"\x1b[=2;2u");
+        assert_eq!(fixture.kitty_flags().bits(), 3);
+        fixture.feed(&mut scanner, b"\x1b[=1;3u");
+        assert_eq!(fixture.kitty_flags().bits(), 2);
+    }
+
+    #[test]
+    fn given_a_kitty_query_then_the_current_flags_are_written_back() {
+        let fixture = ScannerFixture::new();
+        let mut scanner = SideChannelScanner::default();
+        fixture.feed(&mut scanner, b"\x1b[>13u\x1b[?u");
+        assert_eq!(lock(&fixture.meta).responses, vec!["\x1b[?13u".to_string()]);
+    }
+
+    #[test]
+    fn given_the_alternate_screen_then_its_keyboard_stack_is_separate() {
+        let fixture = ScannerFixture::new();
+        let mut scanner = SideChannelScanner::default();
+        fixture.feed(&mut scanner, b"\x1b[>1u\x1b[?1049h");
+        assert_eq!(fixture.kitty_flags().bits(), 0);
+        fixture.feed(&mut scanner, b"\x1b[>2u");
+        assert_eq!(fixture.kitty_flags().bits(), 2);
+        fixture.feed(&mut scanner, b"\x1b[?1049l");
+        assert_eq!(fixture.kitty_flags().bits(), 1);
     }
 
     #[test]
@@ -1954,6 +2028,7 @@ struct SideChannelScanner {
     capture_esc: bool,
     capture_overflow: bool,
     csi: CsiScanner,
+    keyboard: KittyKeyboard,
     esc: bool,
     pending: KittyPending,
 }
@@ -2056,7 +2131,7 @@ impl SideChannelScanner {
                 } else {
                     self.normal.push(byte);
                     if let Some(sequence) = self.csi.feed(byte) {
-                        observe_csi(&sequence, &share.meta);
+                        observe_csi(&mut self.keyboard, &sequence, &share.meta);
                     }
                 }
                 continue;
@@ -2080,17 +2155,52 @@ fn flush_normal(screen: &Arc<Mutex<Parser>>, normal: &mut Vec<u8>) {
     }
 }
 
-/// DECSET 2026 is a private mode `vt100` drops. Record it so a renderer can
-/// keep the previous frame instead of painting a half-updated grid.
-fn observe_csi(sequence: &Csi, meta: &Arc<Mutex<ScreenMeta>>) {
+/// DECSET 2026 and the kitty keyboard protocol are both carried in CSI
+/// sequences `vt100` drops. Record them for the renderer and the key encoder.
+fn observe_csi(keyboard: &mut KittyKeyboard, sequence: &Csi, meta: &Arc<Mutex<ScreenMeta>>) {
     const SYNCHRONIZED_OUTPUT: u16 = 2026;
-    let Some(change) = sequence.private_mode_change() else {
-        return;
-    };
-    if !change.modes.contains(&SYNCHRONIZED_OUTPUT) {
+    const ALTERNATE_SCREENS: [u16; 3] = [47, 1047, 1049];
+
+    let change = sequence.private_mode_change();
+    let prefix = sequence.body.first().copied();
+    let is_kitty_control =
+        sequence.final_byte == b'u' && matches!(prefix, Some(b'?' | b'>' | b'=' | b'<'));
+    let is_mutation = is_kitty_control && prefix != Some(b'?');
+    if change.is_none() && !is_kitty_control {
         return;
     }
-    lock(meta).is_synchronized_output_enabled = change.is_enabled;
+
+    if let Some(change) = &change
+        && change
+            .modes
+            .iter()
+            .any(|mode| ALTERNATE_SCREENS.contains(mode))
+    {
+        keyboard.set_alternate_screen(change.is_enabled);
+    }
+    let synchronized_output = change.as_ref().and_then(|change| {
+        change
+            .modes
+            .contains(&SYNCHRONIZED_OUTPUT)
+            .then_some(change.is_enabled)
+    });
+    let reply = if is_kitty_control {
+        keyboard.observe(sequence)
+    } else {
+        None
+    };
+    if change.is_none() && reply.is_none() && !is_mutation {
+        return;
+    }
+
+    let mut meta = lock(meta);
+    if let Some(is_enabled) = synchronized_output {
+        meta.is_synchronized_output_enabled = is_enabled;
+    }
+    if let Some(reply) = reply {
+        meta.responses.push(reply);
+    }
+    meta.kitty_keyboard_flags = keyboard.current();
 }
 
 /// A DCS is sixel when the part before `q` is only its numeric parameters.

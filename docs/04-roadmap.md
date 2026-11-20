@@ -66,9 +66,11 @@ this order, one item per session: item 1 builds the CSI side-channel scanner tha
    side channel records begin/end, `screen_view` carries the flag, and the window keeps
    the previous frame until the program ends it or 500 ms passes, so full-screen TUIs
    stop tearing and a crashed client cannot freeze the pane.
-2. **Kitty keyboard protocol**: progressive enhancement, `CSI u` for modified keys, key
-   release events, disambiguated Escape; track the flags a program sets, answer the
-   query, and advertise support in DA1. Agents and Neovim/Helix bind it.
+2. **Kitty keyboard protocol** — landed, unreleased. The scanner tracks the flags a
+   program pushes, sets or pops (with separate main and alternate-screen stacks),
+   answers `CSI ? u`, and the encoder honours every enhancement: `CSI u` for modified
+   keys and disambiguated Escape, release and repeat events, alternate keys and
+   associated text. Agents and Neovim/Helix bind it.
 3. **Styled text**: strikethrough, curly/dotted/dashed underline, underline colour
    (SGR 4:x, 58), and OSC 8 hyperlinks tracked by the parser instead of the text scan;
    hover underline and Cmd/Ctrl-click.

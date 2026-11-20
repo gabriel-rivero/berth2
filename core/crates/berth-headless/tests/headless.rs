@@ -319,3 +319,99 @@ fn given_synchronized_output_from_a_pty_then_the_screen_view_reports_it() {
         std::thread::sleep(Duration::from_millis(20));
     }
 }
+
+/// Once a program enables the kitty flags, `surface.send_key` must encode with
+/// them on the PTY.
+#[cfg(unix)]
+#[test]
+fn given_kitty_flags_when_a_key_is_sent_then_the_csi_u_form_reaches_the_pty() {
+    use berth_core::{ReadScope, SpawnRequest};
+
+    let host = PtyHost::new();
+    let surface_id = format!("surf-kitty-key-{}", std::process::id());
+    host.spawn(SpawnRequest {
+        cwd: None,
+        argv: vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            "stty raw -echo 2>/dev/null; printf '\\033[>1u'; \
+             dd bs=1 count=7 2>/dev/null | od -An -tx1 | tr -d ' \\n'; sleep 1"
+                .into(),
+        ],
+        env: vec![("BERTH_SURFACE_ID".into(), surface_id.clone())],
+        cols: 80,
+        rows: 24,
+    })
+    .expect("spawn a program that enables the kitty flags");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let view = host.screen_view(&surface_id).expect("screen view");
+        if view.kitty_keyboard_flags.bits() == 1 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the program never enabled the kitty flags"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    host.send_key(&surface_id, "c", &["ctrl".to_string()])
+        .expect("send ctrl+c");
+
+    loop {
+        let text = host
+            .read_text(&surface_id, ReadScope::Screen, 1 << 16)
+            .expect("read screen")
+            .text;
+        if text.contains("1b5b39393b3575") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the program never received the CSI u key: {text:?}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// The kitty query must be answered on the PTY, not only recorded in the UI.
+#[cfg(unix)]
+#[test]
+fn given_a_kitty_keyboard_query_then_the_flags_are_answered_on_the_pty() {
+    use berth_core::{ReadScope, SpawnRequest};
+
+    let host = PtyHost::new();
+    let surface_id = format!("surf-kitty-query-{}", std::process::id());
+    host.spawn(SpawnRequest {
+        cwd: None,
+        argv: vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            "stty raw -echo 2>/dev/null; printf '\\033[>1u\\033[?u'; \
+             dd bs=1 count=5 2>/dev/null | od -An -tx1 | tr -d ' \\n'; sleep 1"
+                .into(),
+        ],
+        env: vec![("BERTH_SURFACE_ID".into(), surface_id.clone())],
+        cols: 80,
+        rows: 24,
+    })
+    .expect("spawn a program that queries the keyboard protocol");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let text = host
+            .read_text(&surface_id, ReadScope::Screen, 1 << 16)
+            .expect("read screen")
+            .text;
+        if text.contains("1b5b3f3175") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the program never received the flag reply: {text:?}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}

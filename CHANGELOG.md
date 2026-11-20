@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- **Kitty keyboard protocol in the portable window.** The PTY reader tracks the
+  progressive-enhancement flags a program pushes, sets or pops, answers `CSI ? u` so the
+  DA1-based detection used by Neovim and Helix succeeds, and keeps separate main and
+  alternate-screen stacks. Key events use `CSI u` with the requested event types (press,
+  repeat, release), alternate keys and associated text; Escape is disambiguated, and
+  Enter, Tab and Backspace keep their legacy bytes unless "report all keys" is on. Neovim, Helix and agents that query the protocol now receive
+  the keys they bind.
+
 ## 0.15.0 — 2026-11-20
 
 ### Features

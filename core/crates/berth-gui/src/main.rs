@@ -21,6 +21,7 @@ use std::time::{Duration, Instant};
 
 use berth_core::model::Orientation;
 use berth_core::{AppState, CoreError, ReadScope, Request, Response, SurfaceOps, paths};
+use berth_headless::keys::{KeyAction, KeyInput};
 use berth_headless::{
     Dimension, MouseEncoding, MouseMode, PtyHost, RestorePolicy, restore_session_with, save_session,
 };
@@ -29,7 +30,7 @@ use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, Ime, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
-use winit::keyboard::{Key, ModifiersState, NamedKey};
+use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 use winit::window::{CursorIcon, Window, WindowId};
 
 mod a11y;
@@ -797,9 +798,10 @@ impl ApplicationHandler<UserEvent> for Gui {
                 self.request_redraw();
             }
             WindowEvent::MouseWheel { delta, .. } => self.wheel(delta),
-            WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
-                self.key(event);
-            }
+            WindowEvent::KeyboardInput { event, .. } => match event.state {
+                ElementState::Pressed => self.key(event),
+                ElementState::Released => self.key_release(event),
+            },
             _ => {}
         }
     }
@@ -3730,7 +3732,6 @@ impl Gui {
         let Some(surface_id) = self.active_surface() else {
             return;
         };
-        let mods = self.modifier_names();
         // Cmd/Super belongs to the platform shell; the window only claims the
         // line motions macOS terminals provide.
         if self.modifiers.super_key() {
@@ -3744,26 +3745,45 @@ impl Gui {
             return;
         }
 
-        if let Key::Named(named) = &event.logical_key
-            && let Some(key) = named_key(*named)
-        {
-            let _ = self.host.send_key(&surface_id, key, &mods);
+        let action = if event.repeat {
+            KeyAction::Repeat
+        } else {
+            KeyAction::Press
+        };
+        self.send_key_event(&surface_id, &event, action);
+    }
+
+    /// A release reaches the PTY only when the program asked for event types.
+    fn key_release(&mut self, event: KeyEvent) {
+        if self.overlay.is_some() || self.modifiers.super_key() {
             return;
         }
+        let Some(surface_id) = self.active_surface() else {
+            return;
+        };
+        self.send_key_event(&surface_id, &event, KeyAction::Release);
+    }
 
-        match &event.logical_key {
-            Key::Character(character) => {
-                if self.modifiers.control_key() || self.modifiers.alt_key() {
-                    let _ = self.host.send_key(&surface_id, character, &mods);
-                } else if let Some(text) = &event.text {
-                    let _ = self.host.send_text(&surface_id, text);
-                }
-            }
-            _ => {
-                if let Some(text) = &event.text {
-                    let _ = self.host.send_text(&surface_id, text);
-                }
-            }
+    /// Encode one key event for the surface's keyboard protocol.
+    fn send_key_event(&mut self, surface_id: &str, event: &KeyEvent, action: KeyAction) {
+        let key = key_name(&event.logical_key).unwrap_or_default();
+        if key.is_empty() && event.text.is_none() {
+            return;
+        }
+        let mods = self.modifier_names();
+        let base_layout = match event.physical_key {
+            PhysicalKey::Code(code) => base_layout_char(code),
+            _ => None,
+        };
+        let input = KeyInput {
+            key,
+            modifiers: &mods,
+            action,
+            text: event.text.as_deref(),
+            base_layout,
+        };
+        if let Err(error) = self.host.send_key_event(surface_id, &input) {
+            log::line(&format!("key input {surface_id}: {error}"));
         }
     }
 
@@ -3924,6 +3944,71 @@ fn named_key(named: NamedKey) -> Option<&'static str> {
     })
 }
 
+/// The key name the encoder takes: a layout character, or a named key.
+fn key_name(key: &Key) -> Option<&str> {
+    match key {
+        Key::Named(named) => named_key(*named),
+        Key::Character(characters) => Some(characters.as_str()),
+        _ => None,
+    }
+}
+
+/// The base PC-101 layout character for a physical key, reported as the kitty
+/// protocol's alternate key. Layouts that are not PC-101 report nothing.
+fn base_layout_char(code: KeyCode) -> Option<char> {
+    Some(match code {
+        KeyCode::KeyA => 'a',
+        KeyCode::KeyB => 'b',
+        KeyCode::KeyC => 'c',
+        KeyCode::KeyD => 'd',
+        KeyCode::KeyE => 'e',
+        KeyCode::KeyF => 'f',
+        KeyCode::KeyG => 'g',
+        KeyCode::KeyH => 'h',
+        KeyCode::KeyI => 'i',
+        KeyCode::KeyJ => 'j',
+        KeyCode::KeyK => 'k',
+        KeyCode::KeyL => 'l',
+        KeyCode::KeyM => 'm',
+        KeyCode::KeyN => 'n',
+        KeyCode::KeyO => 'o',
+        KeyCode::KeyP => 'p',
+        KeyCode::KeyQ => 'q',
+        KeyCode::KeyR => 'r',
+        KeyCode::KeyS => 's',
+        KeyCode::KeyT => 't',
+        KeyCode::KeyU => 'u',
+        KeyCode::KeyV => 'v',
+        KeyCode::KeyW => 'w',
+        KeyCode::KeyX => 'x',
+        KeyCode::KeyY => 'y',
+        KeyCode::KeyZ => 'z',
+        KeyCode::Digit0 => '0',
+        KeyCode::Digit1 => '1',
+        KeyCode::Digit2 => '2',
+        KeyCode::Digit3 => '3',
+        KeyCode::Digit4 => '4',
+        KeyCode::Digit5 => '5',
+        KeyCode::Digit6 => '6',
+        KeyCode::Digit7 => '7',
+        KeyCode::Digit8 => '8',
+        KeyCode::Digit9 => '9',
+        KeyCode::Minus => '-',
+        KeyCode::Equal => '=',
+        KeyCode::BracketLeft => '[',
+        KeyCode::BracketRight => ']',
+        KeyCode::Backslash => '\\',
+        KeyCode::Semicolon => ';',
+        KeyCode::Quote => '\'',
+        KeyCode::Backquote => '`',
+        KeyCode::Comma => ',',
+        KeyCode::Period => '.',
+        KeyCode::Slash => '/',
+        KeyCode::Space => ' ',
+        _ => return None,
+    })
+}
+
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
@@ -3933,6 +4018,27 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// The protocol names the tab step by direction rather than a signed delta.
 fn cycle_direction(delta: i32) -> &'static str {
     if delta < 0 { "prev" } else { "next" }
+}
+
+#[cfg(test)]
+mod key_name_tests {
+    use super::{base_layout_char, key_name};
+    use winit::keyboard::{Key, KeyCode, NamedKey};
+
+    #[test]
+    fn given_a_physical_key_then_its_base_layout_character_is_reported() {
+        assert_eq!(base_layout_char(KeyCode::KeyA), Some('a'));
+        assert_eq!(base_layout_char(KeyCode::Digit1), Some('1'));
+        assert_eq!(base_layout_char(KeyCode::BracketLeft), Some('['));
+        assert_eq!(base_layout_char(KeyCode::F1), None);
+    }
+
+    #[test]
+    fn given_a_key_then_the_encoder_name_is_returned() {
+        assert_eq!(key_name(&Key::Named(NamedKey::Enter)), Some("enter"));
+        assert_eq!(key_name(&Key::Character("é".into())), Some("é"));
+        assert_eq!(key_name(&Key::Named(NamedKey::Shift)), None);
+    }
 }
 
 #[cfg(test)]

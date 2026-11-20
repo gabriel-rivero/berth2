@@ -20,12 +20,11 @@ app itself has the gaps listed in
 
 ### Terminal rendering
 
-- **The protocol floor is incomplete.** Synchronized output (DECSET 2026) is in, but
-  otherwise the window sends and understands xterm only. No Kitty keyboard protocol, no
-  focus in/out (CSI ?1004), no cursor shapes (DECSCUSR), no OSC 8 hyperlink spans (link
-  clicking is a text heuristic, `links.rs`), no OSC 52 read, and no OSC 133 shell
-  integration. Modern TUIs and agents degrade or tear without these. The AppKit shell
-  inherits all of them from Ghostty.
+- **The protocol floor is incomplete.** Synchronized output (DECSET 2026) and the Kitty
+  keyboard protocol are in. The remaining gaps are focus in/out (CSI ?1004), cursor
+  shapes (DECSCUSR), OSC 8 hyperlink spans (link clicking is a text heuristic,
+  `links.rs`), OSC 52 read, and OSC 133 shell integration. Modern TUIs and agents
+  degrade without these. The AppKit shell inherits all of them from Ghostty.
 - **One font family, no ligatures.** `fontFamily` picks the face (first
   installed name wins, else system monospace) at `fontSize` × `fontScale`. There
   is no weight, line-height or zoom control, and no per-font metric tuning.
@@ -146,8 +145,8 @@ app itself has the gaps listed in
   CI-only.
 - `send_text` is deliberately raw; clients must send `\r` or use `send-key
   enter`.
-- Key encoding covers the documented named keys, not every xterm modifier
-  combination or kitty keyboard protocol.
+- Key encoding covers the documented named keys and the kitty keyboard protocol;
+  other xterm modifier combinations are not modelled.
 - Debian/Arch packages exist; there is no systemd unit, launch agent or
   autostart. The log keeps one rotated file.
 
