@@ -276,6 +276,9 @@ pub struct Config {
     pub scrollback_lines: usize,
     /// Decode terminal image protocols and paint them. Read at launch.
     pub graphics: bool,
+    /// Program a new terminal runs, as argv. Empty means the platform default
+    /// shell (`$SHELL` on Unix, `%ComSpec%` on Windows).
+    pub shell: Vec<String>,
     /// Extra arguments appended to a provider's resume command, by provider id.
     pub resume_args: std::collections::HashMap<String, Vec<String>>,
     /// Providers whose OS notifications are silenced; attention stays in-app.
@@ -298,6 +301,7 @@ impl Default for Config {
             copy_on_select: true,
             scrollback_lines: 4_000,
             graphics: true,
+            shell: Vec::new(),
             resume_args: std::collections::HashMap::new(),
             mute_providers: Vec::new(),
             sidebar_width: 200.0,
@@ -329,6 +333,26 @@ impl FamilyNames {
     }
 }
 
+/// `shell` takes a program path, or a program plus arguments. A single string
+/// is the program alone, so a Windows path with spaces needs no quoting.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ShellSpec {
+    Program(String),
+    Argv(Vec<String>),
+}
+
+impl ShellSpec {
+    fn into_argv(self) -> Vec<String> {
+        let mut argv = match self {
+            Self::Program(program) => vec![program.trim().to_string()],
+            Self::Argv(argv) => argv,
+        };
+        argv.retain(|part| !part.is_empty());
+        argv
+    }
+}
+
 /// The raw file. Unknown keys are ignored by serde's default behavior.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -343,6 +367,7 @@ struct FileConfig {
     copy_on_select: Option<bool>,
     scrollback_lines: Option<usize>,
     graphics: Option<bool>,
+    shell: Option<ShellSpec>,
     resume_args: Option<std::collections::HashMap<String, Vec<String>>>,
     mute_providers: Option<Vec<String>>,
     sidebar_width: Option<f64>,
@@ -407,6 +432,7 @@ impl Config {
                 .unwrap_or(defaults.scrollback_lines)
                 .min(100_000),
             graphics: file.graphics.unwrap_or(defaults.graphics),
+            shell: file.shell.map(ShellSpec::into_argv).unwrap_or_default(),
             resume_args: file.resume_args.unwrap_or(defaults.resume_args),
             mute_providers: file.mute_providers.unwrap_or(defaults.mute_providers),
             sidebar_width: file
@@ -485,6 +511,12 @@ impl Config {
             serde_json::json!(self.scrollback_lines),
         );
         object.insert("graphics".into(), serde_json::json!(self.graphics));
+        if self.shell.is_empty() {
+            // Cycling back to the default must clear a previously saved shell.
+            object.remove("shell");
+        } else {
+            object.insert("shell".into(), serde_json::json!(self.shell));
+        }
         if !self.mute_providers.is_empty() {
             object.insert(
                 "muteProviders".into(),
@@ -656,6 +688,36 @@ mod tests {
         assert_eq!(saved["futureKey"]["a"], 1);
         assert_eq!(saved["shortcuts"]["newTab"], "ctrl+alt+t");
         assert!(saved["shortcuts"]["splitRight"].is_string());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn given_a_shell_as_a_program_when_parsed_then_it_is_a_one_element_argv() {
+        let config =
+            Config::parse(r#"{"shell": "C:\\Program Files\\Git\\bin\\bash.exe"}"#).unwrap();
+        assert_eq!(
+            config.shell,
+            vec![r"C:\Program Files\Git\bin\bash.exe".to_string()]
+        );
+    }
+
+    #[test]
+    fn given_a_shell_as_an_argv_when_parsed_then_the_arguments_survive() {
+        let config = Config::parse(r#"{"shell": ["wsl.exe", "-d", "Ubuntu"]}"#).unwrap();
+        assert_eq!(config.shell, vec!["wsl.exe", "-d", "Ubuntu"]);
+    }
+
+    #[test]
+    fn given_a_saved_shell_when_cleared_then_the_key_is_removed() {
+        let path = temp_path("shell");
+        let mut config = Config::parse(r#"{"shell": ["zsh", "-l"], "fontSize": 12}"#).unwrap();
+        assert_eq!(config.shell, vec!["zsh", "-l"]);
+        config.shell.clear();
+        config.save_to(&path).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(saved.get("shell").is_none());
+        assert_eq!(saved["fontSize"], 12.0);
         let _ = std::fs::remove_file(&path);
     }
 

@@ -14,6 +14,7 @@ const SOCKET_MODES: [Option<&str>; 3] = [Some("local"), Some("trusted"), Some("o
 pub enum Field {
     FontSize,
     FontScale,
+    Shell,
     CompactSidebar,
     CloseExitedPanes,
     RestoreLaunchFlags,
@@ -39,6 +40,8 @@ pub enum Change {
     Font,
     /// Layout or bindings changed; only a redraw is needed.
     View,
+    /// The shell for new panes changed; the host must be told.
+    Shell,
 }
 
 /// The rows of the settings panel, in display order.
@@ -57,6 +60,11 @@ pub fn rows(config: &Config, recording: Option<Action>, notice: Option<&str>) ->
             } else {
                 "auto".to_string()
             },
+        },
+        Row {
+            field: Field::Shell,
+            label: "Shell".into(),
+            value: crate::shells::label_for(&config.shell),
         },
         Row {
             field: Field::CompactSidebar,
@@ -169,6 +177,16 @@ pub fn adjust(config: &mut Config, field: Field, delta: i32) -> Change {
             config.socket = SOCKET_MODES[next].map(str::to_string);
             Change::View
         }
+        Field::Shell => {
+            let choices = crate::shells::choices();
+            let index = choices
+                .iter()
+                .position(|choice| choice.argv == config.shell)
+                .unwrap_or(0) as i32;
+            let next = (index + delta).rem_euclid(choices.len() as i32) as usize;
+            config.shell = choices[next].argv.clone();
+            Change::Shell
+        }
         Field::CompactSidebar
         | Field::CloseExitedPanes
         | Field::RestoreLaunchFlags
@@ -227,7 +245,7 @@ mod tests {
     fn given_the_settings_rows_when_built_then_every_action_has_a_row() {
         let config = Config::default();
         let rows = rows(&config, None, None);
-        assert_eq!(rows.len(), 9 + Action::ALL.len());
+        assert_eq!(rows.len(), 10 + Action::ALL.len());
         assert_eq!(rows[0].label, "Font size");
     }
 
@@ -279,6 +297,20 @@ mod tests {
         assert_eq!(config.socket.as_deref(), Some("off"));
         adjust(&mut config, Field::SocketMode, 1);
         assert_eq!(config.socket.as_deref(), Some("local"));
+    }
+
+    #[test]
+    fn given_the_shell_when_cycled_past_the_end_then_it_returns_to_the_default() {
+        let mut config = Config::default();
+        let choices = crate::shells::choices();
+        for _ in 0..choices.len() {
+            assert_eq!(adjust(&mut config, Field::Shell, 1), Change::Shell);
+        }
+        assert!(config.shell.is_empty());
+        if choices.len() > 1 {
+            adjust(&mut config, Field::Shell, 1);
+            assert_eq!(config.shell, choices[1].argv);
+        }
     }
 
     #[test]

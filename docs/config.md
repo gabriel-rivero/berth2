@@ -88,13 +88,49 @@ capture, so the window ships a Ctrl-based default table instead:
 
 A value overrides the default for that action; an empty string unbinds it. The
 settings panel (`⌘,` / `Ctrl+,`) edits this table, the font size, the display
-scale, the sidebar density, close-on-exit and the socket mode, and writes the
-same file. Fixed
+scale, the shell, the sidebar density, close-on-exit and the socket mode, and
+writes the same file. A shifted symbol is spelled with its unshifted key
+(`ctrl+shift+]`), and Shift+letter chords are case-insensitive. Fixed
 bindings that do not appear in the table: `Super+1…9` selects a workspace, and
 `Super+C`/`Ctrl+Shift+C` copy and `Super+V`/`Ctrl+Shift+V` paste.
 
 The portable window also stores `sidebarWidth` when the sidebar edge is dragged;
 the macOS shell ignores that key.
+
+## Shell
+
+`shell` is the program a new terminal runs. Omit it for the platform default:
+`$SHELL` on Linux and macOS, `%ComSpec%` (cmd.exe) on Windows.
+
+```json
+{ "shell": "C:\\Program Files\\Git\\bin\\bash.exe" }
+```
+
+A string is the program alone, so a Windows path with spaces needs no quoting.
+Extra arguments need the list form:
+
+```json
+{ "shell": ["C:\\Program Files\\Git\\bin\\bash.exe", "--login", "-i"] }
+```
+
+The portable window's settings row cycles through the shells it can find,
+`default` first:
+
+| found by probing | Windows | Linux / macOS |
+| --- | --- | --- |
+| `pwsh` | `%ProgramFiles%\PowerShell\7\pwsh.exe` | — |
+| `windows powershell` | `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe` | — |
+| `git bash` | `%ProgramFiles%\Git\bin\bash.exe`, `%LOCALAPPDATA%\Programs\Git\bin\bash.exe` | — |
+| `msys2 zsh`, `msys2 bash` | `C:\msys64\usr\bin\…` | — |
+| `cygwin zsh`, `cygwin bash` | `C:\cygwin64\bin\…` | — |
+| `wsl` | `%SystemRoot%\System32\wsl.exe` | — |
+| `zsh`, `fish`, `nu`, `bash` | — | `/etc/shells`, then `PATH` |
+
+Only programs that exist are offered. Bash entries run as `--login -i` and zsh
+as `-l`, so the profile loads. Agent panes are unaffected: their argv comes from
+the launch or resume command. A change applies to panes created afterwards,
+including restored workspaces whose shell was not recorded; panes already
+running keep their program. The macOS app does not read this key yet.
 
 
 ## Sidebar

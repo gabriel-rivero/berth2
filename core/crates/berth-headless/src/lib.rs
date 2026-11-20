@@ -509,6 +509,10 @@ pub struct PtyHost {
     transport: Mutex<Transport>,
     scrollback: usize,
     graphics: bool,
+    /// Program for a plain terminal surface (a spawn with no argv). Empty
+    /// means the platform default. A GUI sets this from `config.json` so the
+    /// user can run bash, zsh or WSL instead of PowerShell or `/bin/sh`.
+    default_shell: Mutex<Vec<String>>,
     /// Fired by the read and exit threads. A GUI shell turns this into a
     /// repaint, so it never has to poll the surfaces for changes.
     waker: SharedWaker,
@@ -540,8 +544,15 @@ impl PtyHost {
             transport: Mutex::new(Transport::default()),
             scrollback,
             graphics,
+            default_shell: Mutex::new(Vec::new()),
             waker: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Choose the program a new terminal runs. An empty list keeps the
+    /// platform default. Takes effect for panes spawned after the call.
+    pub fn set_default_shell(&self, argv: Vec<String>) {
+        *lock(&self.default_shell) = argv;
     }
 
     /// Install the repaint hook. Surfaces spawned before this call still pick
@@ -787,12 +798,17 @@ impl SurfaceOps for PtyHost {
             .map_err(|error| CoreError::internal(format!("openpty: {error}")))?;
         let PtyPair { slave, master } = pair;
 
-        let mut command = if req.argv.is_empty() {
-            CommandBuilder::new_default_prog()
-        } else {
+        let shell = lock(&self.default_shell).clone();
+        let mut command = if !req.argv.is_empty() {
             let mut command = CommandBuilder::new(&req.argv[0]);
             command.args(&req.argv[1..]);
             command
+        } else if !shell.is_empty() {
+            let mut command = CommandBuilder::new(&shell[0]);
+            command.args(&shell[1..]);
+            command
+        } else {
+            CommandBuilder::new_default_prog()
         };
         if let Some(cwd) = req.cwd.as_deref().filter(|cwd| !cwd.is_empty()) {
             command.cwd(cwd);

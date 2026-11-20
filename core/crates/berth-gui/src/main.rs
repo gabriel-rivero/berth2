@@ -9,6 +9,10 @@
 //! notifications all come from `AppState`, and every user action goes back
 //! through `berth_core::dispatch` so events are emitted on one path.
 
+// A double-click must not open a console window; `console::attach_parent_console`
+// reconnects to a terminal when the binary is started from one.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -30,6 +34,7 @@ use winit::window::{CursorIcon, Window, WindowId};
 
 mod a11y;
 mod config;
+mod console;
 mod desktop;
 mod font;
 mod keys;
@@ -40,6 +45,7 @@ mod mouse;
 mod paint;
 mod panel;
 mod settings;
+mod shells;
 mod theme;
 mod ui;
 
@@ -181,6 +187,7 @@ fn print_help() {
 }
 
 fn main() {
+    console::attach_parent_console();
     let args = match Args::parse() {
         Ok(args) => args,
         Err(error) => {
@@ -232,6 +239,7 @@ fn main() {
         config.graphics,
     ));
     host.set_transport(token.clone(), Some(paths::display(&socket)));
+    host.set_default_shell(config.shell.clone());
 
     let event_loop = match EventLoop::<UserEvent>::with_user_event().build() {
         Ok(event_loop) => event_loop,
@@ -3252,6 +3260,10 @@ impl Gui {
             self.font = None;
             self.chrome_font = None;
             self.sized.clear();
+        }
+        if change == settings::Change::Shell {
+            // Panes already running keep their program; the next one uses it.
+            self.host.set_default_shell(self.config.shell.clone());
         }
         if let Err(error) = settings::save(&self.config) {
             log::line(&format!("settings save failed: {error}"));

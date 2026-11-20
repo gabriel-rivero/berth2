@@ -235,3 +235,51 @@ fn spawn_type_and_read_back_through_the_protocol() {
     server.stop();
     let _ = std::fs::remove_dir_all(&cwd);
 }
+
+/// A plain terminal spawn carries no argv; the host's default shell fills the
+/// gap. This is the path `shell` in `config.json` takes in the portable window.
+#[test]
+fn given_a_default_shell_when_a_plain_terminal_spawns_then_it_runs_that_program() {
+    use berth_core::{ReadScope, SpawnRequest};
+
+    let host = PtyHost::new();
+    #[cfg(windows)]
+    let argv: Vec<String> = vec![
+        "cmd.exe".into(),
+        "/c".into(),
+        "echo berth-default-shell".into(),
+    ];
+    #[cfg(unix)]
+    let argv: Vec<String> = vec![
+        "/bin/sh".into(),
+        "-c".into(),
+        "echo berth-default-shell".into(),
+    ];
+    host.set_default_shell(argv);
+
+    let surface_id = format!("surf-default-shell-{}", std::process::id());
+    host.spawn(SpawnRequest {
+        cwd: None,
+        argv: Vec::new(),
+        env: vec![("BERTH_SURFACE_ID".into(), surface_id.clone())],
+        cols: 80,
+        rows: 24,
+    })
+    .expect("spawn with the configured shell");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let text = host
+            .read_text(&surface_id, ReadScope::Screen, 1 << 16)
+            .expect("read screen")
+            .text;
+        if text.contains("berth-default-shell") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the configured shell never printed its marker: {text:?}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
