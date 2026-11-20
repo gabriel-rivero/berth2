@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+
+- Next/previous tab in the portable window sent `surface.cycle` with `delta`, but the
+  method takes a `direction` (`next`/`prev`); the request was rejected as `bad_request`
+  and the chord did nothing. The window now sends the protocol's spelling of the step.
+
 ## 0.14.1 — 2026-11-20
 
 ### Features

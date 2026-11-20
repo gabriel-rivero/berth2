@@ -2560,9 +2560,10 @@ impl Gui {
         let Some(surface_id) = self.active_surface() else {
             return;
         };
+        let direction = cycle_direction(delta);
         let params = serde_json::json!({
             "surface_id": surface_id,
-            "delta": delta,
+            "direction": direction,
         });
         if let Err(error) = self.dispatch("surface.cycle", params) {
             eprintln!("berth-gui: cycle tab: {error}");
@@ -3907,6 +3908,22 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// The protocol names the tab step by direction rather than a signed delta.
+fn cycle_direction(delta: i32) -> &'static str {
+    if delta < 0 { "prev" } else { "next" }
+}
+
+#[cfg(test)]
+mod cycle_tests {
+    use super::cycle_direction;
+
+    #[test]
+    fn given_a_step_when_cycling_tabs_then_it_becomes_a_protocol_direction() {
+        assert_eq!(cycle_direction(1), "next");
+        assert_eq!(cycle_direction(-1), "prev");
+    }
 }
 
 #[cfg(test)]
