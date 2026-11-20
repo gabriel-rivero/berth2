@@ -18,10 +18,9 @@ the split:
 
 - **AppKit shell**: Ghostty owns emulation, rendering and input, so it inherits the whole
   modern protocol set. Berth's gaps there are UI, not VT.
-- **Portable window (`berth-gui`)**: its own renderer over the `vt100` crate, which is why
-  it has a good terminal and a narrow protocol surface (no ligatures). Synchronized
-  output, the Kitty keyboard protocol, styled text and OSC 8 hyperlinks are in as of
-  0.15.
+- **Portable window (`berth-gui`)**: its own renderer over the `vt100` crate, with
+  shaping runs for ligatures. Synchronized output, the Kitty keyboard protocol, styled
+  text and OSC 8 hyperlinks are in as of 0.15.
 
 That split is the single most important fact in this document: every VT-level gap below
 is portable-only, and every macOS gap is UI-only.
@@ -33,7 +32,7 @@ is portable-only, and every macOS gap is UI-only.
 | Area | Feature | Portable | AppKit | cmux | Common elsewhere |
 | --- | --- | :-: | :-: | :-: | --- |
 | **Emulation** | true colour, wide chars, RTL text | ● | ● | ● | ● |
-| | ligatures | ○ | ● | ● | Ghostty, WezTerm, kitty |
+| | ligatures | ● | ● | ● | Ghostty, WezTerm, kitty |
 | | Kitty keyboard protocol | ● | ● | ● | most 2026 GUI terminals |
 | | synchronized output (DECSET 2026) | ● | ● | ● | near-universal |
 | | styled and coloured underlines, strikethrough | ● | ● | ● | iTerm2, Ghostty, WezTerm |

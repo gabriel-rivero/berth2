@@ -223,7 +223,7 @@ full audited inventory.
   Kitty keyboard protocol, styled text, OSC 8 hyperlinks, cursor shapes, focus reporting
   and OSC 52 read are supported; OSC 133 shell integration is not. The design is in
   [docs/11-competitive-gaps.md](11-competitive-gaps.md); it is 0.15 work.
-- **One palette, no ligatures.** The theme is hard-coded and each cell is shaped alone.
+- **One palette.** The theme is hard-coded; ligatures render through shaping runs.
 - **No copy mode, paste history or command blocks.** Selection is mouse-only.
 - **No installers on macOS or Windows.** Linux has a `.deb` and a `PKGBUILD`; there is no
   AppImage, Flatpak, Windows installer or auto-update.

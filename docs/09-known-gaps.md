@@ -24,17 +24,17 @@ app itself has the gaps listed in
   keyboard protocol, styled text, OSC 8 hyperlinks, cursor shapes, focus in/out and OSC 52
   read are in. The remaining gap is OSC 133 shell integration. The AppKit shell inherits
   it all from Ghostty.
-- **One font family, no ligatures.** `fontFamily` picks the face (first
-  installed name wins, else system monospace) at `fontSize` × `fontScale`. There
-  is no weight, line-height or zoom control, and no per-font metric tuning.
-  Ligatures cannot render: each cell is shaped and cached on its own.
+- **Font options and ligatures.** `fontFamily` picks the face at `fontSize` ×
+  `fontScale`; `fontWeight`, `lineHeight`, `fontFeatures` and per-face `fontMetrics`
+  tune it. Adjacent cells with the same style are shaped as one run, so ligatures
+  render. There is no font zoom.
 - **One palette.** The window ships a hard-coded dark theme and a fixed ANSI table; there
   is no theme selection or light mode. The AppKit shell reads the user's Ghostty config
   instead.
-- **Text effects stop short of blink.** Strikethrough, underline colour, and single,
-  double, curly, dotted and dashed underlines are in. There is no blink, and no
-  per-cell font change. Hyperlinks open only http(s), mailto, ftp(s) and local paths;
-  other schemes are refused.
+- **Text effects stop short of per-cell fonts.** Strikethrough, underline colour, single,
+  double, curly, dotted and dashed underlines, and blink are in. There is no per-cell
+  font change. Hyperlinks open only http(s), mailto, ftp(s) and local paths; other
+  schemes are refused.
 - **No audio bell.** Bells flash a pane ring; OSC 9/777 notifications also reach the
   desktop on macOS and Linux.
 - **Partial graphics protocols.** iTerm2 inline images, kitty graphics and

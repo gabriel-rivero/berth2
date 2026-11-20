@@ -508,3 +508,39 @@ fn given_cursor_focus_and_clipboard_requests_then_the_screen_view_reports_them()
         std::thread::sleep(Duration::from_millis(20));
     }
 }
+
+/// SGR 5 must reach the cell, not just the style map.
+#[cfg(unix)]
+#[test]
+fn given_blinking_text_then_the_screen_view_marks_the_cell() {
+    use berth_core::SpawnRequest;
+
+    let host = PtyHost::new();
+    let surface_id = format!("surf-blink-{}", std::process::id());
+    host.spawn(SpawnRequest {
+        cwd: None,
+        argv: vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            "printf '\\033[5mB\\033[25m'; sleep 1".into(),
+        ],
+        env: vec![("BERTH_SURFACE_ID".into(), surface_id.clone())],
+        cols: 80,
+        rows: 24,
+    })
+    .expect("spawn a writer of SGR 5");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let view = host.screen_view(&surface_id).expect("screen view");
+        if view.cells.first().is_some_and(|cell| cell.contents == "B") {
+            assert!(view.cells[0].blink, "the cell did not carry SGR 5");
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the blinking text never reached the grid"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}

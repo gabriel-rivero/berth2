@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- **Font options, ligatures and blink in the portable window.** `fontWeight`,
+  `lineHeight`, `fontFeatures` and per-face `fontMetrics` are read from `config.json`.
+  Adjacent cells with the same style are shaped as one run, so faces with ligatures draw
+  them, and text with SGR 5 blinks with the cursor phase.
+
 ## 0.15.3 — 2026-11-20
 
 ### Features

@@ -22,6 +22,10 @@ socket mode is read at launch.
   "fontSize": 14,
   "fontScale": 0,
   "fontFamily": ["MesloLGS NF", "JetBrains Mono"],
+  "fontWeight": 400,
+  "lineHeight": 1.35,
+  "fontFeatures": ["calt", "liga"],
+  "fontMetrics": {"JetBrains Mono": {"width": 9, "height": 20}},
   "compactSidebar": false,
   "closeExitedPanes": true,
   "restoreLaunchFlags": true,
@@ -56,11 +60,22 @@ when the window moves to a display with a different scale factor.
   system monospace. Terminal and chrome (tabs, sidebar) use the same list. It
   applies at startup and when the window rebuilds its fonts, so restart after
   editing it.
+- `fontWeight` is the normal-text weight, a number `100…900` or a name such as
+  `"medium"` or `"semi-bold"`. Bold cells use at least 700.
+- `lineHeight` is the line height as a multiple of the font size, clamped to
+  `0.8…3`. The default is `1.35`.
+- `fontFeatures` is a list of OpenType tags to enable, such as `["calt", "liga"]`,
+  or `"-liga"` to disable one. Four-character tags only; invalid entries are
+  skipped.
+- `fontMetrics` overrides the measured cell for one family, as
+  `{"Fira Code": {"width": 9, "height": 20}}`. Only the family that shapes
+  normal text changes the grid; the other keys are ignored. Values are clamped
+  to `1…256`.
 
 It does not read the Ghostty config, so `font-family` set only in
 `~/.config/ghostty/config` does not apply there, and neither do opacity or
-padding. Ligatures do not render: the portable window shapes and caches one cell
-at a time, so a face with ligatures draws them as separate glyphs.
+padding. Ligatures render through shaping runs: adjacent cells with the same
+style are shaped as one string, so a face with `calt`/`liga` draws them.
 
 ## Portable window shortcuts
 

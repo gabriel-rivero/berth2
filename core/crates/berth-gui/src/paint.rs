@@ -755,6 +755,9 @@ impl<'a> Painter<'a> {
         let cols = usize::from(view.cols).min(area.w / cell.width.max(1));
         let rows = usize::from(view.rows).min(area.h / cell.height.max(1));
         let cursor_visible = options.cursor_visible && !view.cursor_hidden && view.scrollback == 0;
+        let cursor_cell = cursor_visible.then(|| {
+            usize::from(view.cursor.0) * usize::from(view.cols) + usize::from(view.cursor.1)
+        });
         let mut placeholder_counts: std::collections::HashMap<u32, usize> =
             std::collections::HashMap::new();
         // Placeholder areas carry no explicit size, so the grid extent comes
@@ -783,7 +786,7 @@ impl<'a> Painter<'a> {
         }
         for row in 0..rows {
             let base = row * usize::from(view.cols);
-            let runs = rtl_runs(&view.cells, base, cols);
+            let runs = shaping_runs(&view.cells, base, cols, cursor_cell);
             for col in 0..cols {
                 let index = row * usize::from(view.cols) + col;
                 let Some(cell_view) = view.cells.get(index) else {
@@ -813,6 +816,7 @@ impl<'a> Painter<'a> {
                     fg = options.theme.inactive(fg);
                 }
                 let decoration = fg;
+                let blink_off = cell_view.blink && !options.blink_on;
                 self.fill(Rect::new(origin.0, origin.1, cell.width, cell.height), bg);
                 if cell_view.wide {
                     // Fill both halves before the glyph: a wide glyph such as an
@@ -833,7 +837,8 @@ impl<'a> Painter<'a> {
                     );
                 }
                 let text = cell_view.contents.as_str();
-                if text.starts_with('\u{10EEEE}')
+                if !blink_off
+                    && text.starts_with('\u{10EEEE}')
                     && let Some(fg) = cell_view.fg
                 {
                     let id = (u32::from(fg[0]) << 16) | (u32::from(fg[1]) << 8) | u32::from(fg[2]);
@@ -870,11 +875,13 @@ impl<'a> Painter<'a> {
                 };
                 let in_run = runs.iter().any(|run| col >= run.start && col < run.end);
                 let mut painted = false;
-                if !in_run && let Some(ch) = single_char(text) {
-                    painted = self.block_glyph(origin, cell, ch, fg);
-                }
-                if !in_run && !painted && !text.is_empty() && text != " " {
-                    self.glyph(font, origin, text, style, fg);
+                if !blink_off {
+                    if !in_run && let Some(ch) = single_char(text) {
+                        painted = self.block_glyph(origin, cell, ch, fg);
+                    }
+                    if !in_run && !painted && !text.is_empty() && text != " " {
+                        self.glyph(font, origin, text, style, fg);
+                    }
                 }
                 let hovered = options.hover_link.is_some()
                     && cell_view.hyperlink.as_deref() == options.hover_link;
@@ -892,7 +899,7 @@ impl<'a> Painter<'a> {
                 } else {
                     cell.width
                 };
-                if underline_style != UnderlineStyle::None {
+                if !blink_off && underline_style != UnderlineStyle::None {
                     let color = if hovered && cell_view.underline_style == UnderlineStyle::None {
                         options.theme.accent
                     } else {
@@ -900,7 +907,7 @@ impl<'a> Painter<'a> {
                     };
                     self.underline(origin, width, underline_style, color, cell.height);
                 }
-                if cell_view.strikethrough {
+                if !blink_off && cell_view.strikethrough {
                     let y = origin.1 + cell.height / 2;
                     self.fill(Rect::new(origin.0, y, width, 1), decoration);
                 }
@@ -1304,6 +1311,8 @@ pub struct ScreenOptions<'a> {
     pub search: Option<(usize, usize, usize)>,
     /// The URL under the pointer, so every cell of it underlines on hover.
     pub hover_link: Option<&'a str>,
+    /// The text blink phase: false hides blinking cells for this frame.
+    pub blink_on: bool,
 }
 
 fn rgb(color: [u8; 3]) -> u32 {
@@ -1368,12 +1377,79 @@ fn block_coverage(ch: char) -> Option<&'static [(u8, u8, u8, u8)]> {
     })
 }
 
-/// One right-to-left phrase on a row, shaped and drawn as a single string.
+/// One shaped run on a row, drawn as a single string.
 #[derive(Debug, PartialEq, Eq)]
-struct RtlRun {
+struct ShapeRun {
     start: usize,
     end: usize,
     text: String,
+}
+
+/// Every run that should be shaped as one string: right-to-left script first,
+/// then adjacent left-to-right cells with the same style. A ligature needs the
+/// latter; a space or a style change breaks it.
+fn shaping_runs(
+    cells: &[CellView],
+    base: usize,
+    cols: usize,
+    cursor: Option<usize>,
+) -> Vec<ShapeRun> {
+    let mut runs = rtl_runs(cells, base, cols, cursor);
+    let row = &cells[base.min(cells.len())..(base + cols).min(cells.len())];
+    let mut left = 0;
+    while left < row.len() {
+        if runs.iter().any(|run| left >= run.start && left < run.end) {
+            left += 1;
+            continue;
+        }
+        if !can_shape_ltr(&row[left], base + left, cursor) {
+            left += 1;
+            continue;
+        }
+        let first = &row[left];
+        let mut text = String::new();
+        let mut right = left;
+        while right < row.len()
+            && !runs.iter().any(|run| right >= run.start && right < run.end)
+            && can_shape_ltr(&row[right], base + right, cursor)
+            && same_run_style(first, &row[right])
+        {
+            text.push_str(&row[right].contents);
+            right += 1;
+        }
+        if right - left >= 2 {
+            runs.push(ShapeRun {
+                start: left,
+                end: right,
+                text,
+            });
+        }
+        left = right.max(left + 1);
+    }
+    runs.sort_by_key(|run| run.start);
+    runs
+}
+
+fn can_shape_ltr(cell: &CellView, index: usize, cursor: Option<usize>) -> bool {
+    let first = cell.contents.chars().next();
+    cursor != Some(index)
+        && !cell.wide
+        && !cell.wide_continuation
+        && !cell.blink
+        && !cell.contents.is_empty()
+        && cell.contents != " "
+        && !cell.contents.starts_with('\u{10EEEE}')
+        && first
+            .is_some_and(|character| block_coverage(character).is_none() && !is_rtl_char(character))
+}
+
+fn same_run_style(first: &CellView, cell: &CellView) -> bool {
+    first.bold == cell.bold
+        && first.italic == cell.italic
+        && first.dim == cell.dim
+        && first.inverse == cell.inverse
+        && first.fg == cell.fg
+        && first.blink == cell.blink
 }
 
 /// Group a row into right-to-left runs.
@@ -1381,7 +1457,7 @@ struct RtlRun {
 /// A run starts at an RTL letter and carries the spaces between RTL words and
 /// punctuation glued to the preceding letter. Table padding ends it, so the
 /// phrase stays right-aligned inside its own field instead of the whole row.
-fn rtl_runs(cells: &[CellView], base: usize, cols: usize) -> Vec<RtlRun> {
+fn rtl_runs(cells: &[CellView], base: usize, cols: usize, cursor: Option<usize>) -> Vec<ShapeRun> {
     let row = &cells[base.min(cells.len())..(base + cols).min(cells.len())];
     let mut runs = Vec::new();
     let mut i = 0;
@@ -1403,6 +1479,8 @@ fn rtl_runs(cells: &[CellView], base: usize, cols: usize) -> Vec<RtlRun> {
                 || cell.dim != first.dim
                 || cell.inverse != first.inverse
                 || cell.fg != first.fg
+                || cell.blink != first.blink
+                || cursor == Some(base + j)
             {
                 break;
             }
@@ -1438,7 +1516,7 @@ fn rtl_runs(cells: &[CellView], base: usize, cols: usize) -> Vec<RtlRun> {
             break;
         }
         if j > i {
-            runs.push(RtlRun {
+            runs.push(ShapeRun {
                 start: i,
                 end: j,
                 text,
@@ -1519,6 +1597,46 @@ mod tests {
     }
 
     #[test]
+    fn given_a_blink_cell_when_the_phase_is_off_then_no_glyph_is_painted() {
+        let mut font = FontRenderer::new(16.0, &[], crate::font::Options::default());
+        let cell = font.cell();
+        let mut buffer = vec![0u32; cell.width * cell.height];
+        let view = ScreenView {
+            cols: 1,
+            rows: 1,
+            cursor_hidden: true,
+            cells: vec![CellView {
+                contents: "B".to_string(),
+                blink: true,
+                ..CellView::default()
+            }],
+            ..ScreenView::default()
+        };
+        let theme = Theme::default();
+        let options = ScreenOptions {
+            theme: &theme,
+            focused: true,
+            cursor_visible: false,
+            selection: None,
+            exited: false,
+            search: None,
+            hover_link: None,
+            blink_on: false,
+        };
+        let mut painter = Painter::new(&mut buffer, cell.width, cell.height);
+        painter.screen(
+            &mut font,
+            &view,
+            Rect::new(0, 0, cell.width, cell.height),
+            &options,
+        );
+        assert!(
+            buffer.iter().all(|pixel| *pixel == 0),
+            "a blinking cell painted during the off phase"
+        );
+    }
+
+    #[test]
     fn given_each_cursor_shape_then_the_rect_matches_the_shape() {
         let cell = CellSize {
             width: 10,
@@ -1556,7 +1674,7 @@ mod tests {
             "ا", "ل", "ت", "ب", "غ", " ", "ض", "ا", "ر", " ", "ب", "ا", "ل", "ص", "ح", "ة", ".",
             " ", " ", "x",
         ]);
-        let runs = rtl_runs(&cells, 0, cells.len());
+        let runs = rtl_runs(&cells, 0, cells.len(), None);
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].start, 0);
         assert_eq!(runs[0].end, 17);
@@ -1566,13 +1684,61 @@ mod tests {
     #[test]
     fn given_a_latin_row_then_no_rtl_run_is_grouped() {
         let cells = row(&["a", "r", "_", "S", "A", " ", "x"]);
-        assert!(rtl_runs(&cells, 0, cells.len()).is_empty());
+        assert!(rtl_runs(&cells, 0, cells.len(), None).is_empty());
+    }
+
+    #[test]
+    fn given_adjacent_latin_cells_then_they_shape_as_one_run() {
+        let cells = row(&["f", "i", "x"]);
+        let runs = shaping_runs(&cells, 0, cells.len(), None);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(
+            (runs[0].start, runs[0].end, runs[0].text.as_str()),
+            (0, 3, "fix")
+        );
+    }
+
+    #[test]
+    fn given_a_space_or_style_change_then_the_run_breaks() {
+        let cells = row(&["a", "b", " ", "c", "d"]);
+        let runs = shaping_runs(&cells, 0, cells.len(), None);
+        assert_eq!(runs.len(), 2, "{runs:?}");
+        assert_eq!(runs[0].text, "ab");
+        assert_eq!(runs[1].text, "cd");
+
+        let mut cells = row(&["a", "b", "c", "d"]);
+        cells[2].bold = true;
+        cells[3].bold = true;
+        let runs = shaping_runs(&cells, 0, cells.len(), None);
+        assert_eq!(runs.len(), 2, "{runs:?}");
+        assert_eq!(runs[0].text, "ab");
+        assert_eq!(runs[1].text, "cd");
+    }
+
+    #[test]
+    fn given_a_blink_or_cursor_cell_then_it_is_not_shaped_in_a_run() {
+        let mut cells = row(&["a", "b", "c", "d"]);
+        cells[1].blink = true;
+        let runs = shaping_runs(&cells, 0, cells.len(), None);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].text, "cd");
+
+        let cells = row(&["a", "b", "c", "d"]);
+        let runs = shaping_runs(&cells, 0, cells.len(), Some(1));
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].text, "cd");
+    }
+
+    #[test]
+    fn given_a_block_glyph_then_it_is_not_shaped_in_a_run() {
+        let cells = row(&["█", "█"]);
+        assert!(shaping_runs(&cells, 0, cells.len(), None).is_empty());
     }
 
     #[test]
     fn given_arabic_followed_by_table_padding_then_the_padding_stays_out() {
         let cells = row(&["ا", "ب", " ", " ", " ", "│"]);
-        let runs = rtl_runs(&cells, 0, cells.len());
+        let runs = rtl_runs(&cells, 0, cells.len(), None);
         assert_eq!(runs.len(), 1);
         assert_eq!((runs[0].start, runs[0].end), (0, 2));
     }
@@ -1582,14 +1748,14 @@ mod tests {
         let mut cells = row(&["ا", "ب", "ج"]);
         cells[1].bold = true;
         cells[2].bold = true;
-        assert_eq!(rtl_runs(&cells, 0, cells.len()).len(), 2);
+        assert_eq!(rtl_runs(&cells, 0, cells.len(), None).len(), 2);
     }
 
     #[test]
     fn given_a_row_offset_then_run_indices_are_relative_to_the_row() {
         let mut cells = row(&["x", "ا", "ب"]);
         cells.extend(row(&["c"]));
-        let runs = rtl_runs(&cells, 1, 2);
+        let runs = rtl_runs(&cells, 1, 2, None);
         assert_eq!((runs[0].start, runs[0].end), (0, 2));
         assert_eq!(runs[0].text, "اب");
     }

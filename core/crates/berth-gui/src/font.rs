@@ -13,8 +13,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use cosmic_text::{
-    Attrs, Buffer, Family, FamilyOwned, FontSystem, Metrics, Shaping, Stretch, Style, SwashCache,
-    SwashContent, Weight,
+    Attrs, Buffer, Family, FamilyOwned, FeatureTag, FontFeatures, FontSystem, Metrics, Shaping,
+    Stretch, Style, SwashCache, SwashContent, Weight, Wrap,
 };
 
 /// The uniform grid cell, in physical pixels.
@@ -29,6 +29,48 @@ pub struct CellSize {
 pub struct TextStyle {
     pub bold: bool,
     pub italic: bool,
+}
+
+/// Renderer options from `config.json`.
+#[derive(Clone, Debug)]
+pub struct Options {
+    /// Base weight for normal text, 100..=900.
+    pub weight: u16,
+    /// Line height as a multiple of the font size.
+    pub line_height: f32,
+    /// OpenType features and whether each is enabled.
+    pub features: Vec<([u8; 4], bool)>,
+    /// Per-family cell overrides, keyed by the face name.
+    pub metrics: Vec<(String, FaceMetrics)>,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            weight: 400,
+            line_height: 1.35,
+            features: Vec::new(),
+            metrics: Vec::new(),
+        }
+    }
+}
+
+/// `fontMetrics` for one face. Only the primary face changes the grid.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FaceMetrics {
+    pub width: Option<usize>,
+    pub height: Option<usize>,
+}
+
+/// Parse `"calt"` or `"-liga"` into a feature tag and its state.
+pub fn parse_feature(text: &str) -> Option<([u8; 4], bool)> {
+    let text = text.trim();
+    let (enabled, tag) = match text.strip_prefix('-') {
+        Some(tag) => (false, tag),
+        None => (true, text.strip_prefix('+').unwrap_or(text)),
+    };
+    let tag: [u8; 4] = tag.as_bytes().try_into().ok()?;
+    Some((tag, enabled))
 }
 
 impl TextStyle {
@@ -83,10 +125,10 @@ pub struct FontSlot {
 }
 
 impl FontSlot {
-    pub fn spawn(pixels: f32, families: Vec<String>) -> Self {
+    pub fn spawn(pixels: f32, families: Vec<String>, options: Options) -> Self {
         let job = std::thread::Builder::new()
             .name("berth-font".into())
-            .spawn(move || FontRenderer::new(pixels, &families))
+            .spawn(move || FontRenderer::new(pixels, &families, options))
             .ok();
         Self { job, ready: None }
     }
@@ -107,6 +149,9 @@ pub struct FontRenderer {
     buffer: Buffer,
     metrics: Metrics,
     cell: CellSize,
+    weight: u16,
+    features: FontFeatures,
+    metrics_overrides: Vec<(String, FaceMetrics)>,
     /// Shaping order: the configured faces that are installed, in order, then
     /// the generic families. Text comes from the first, icons and powerline
     /// glyphs from whichever face actually has them.
@@ -161,11 +206,21 @@ fn resolve_families(font_system: &FontSystem, names: &[String]) -> Vec<FamilyOwn
 
 /// Styled attributes for one cell. `family` is passed in because the caller
 /// owns the name; the renderer must stay free to borrow itself mutably.
-fn attrs_for(family: Family<'_>, style: TextStyle) -> Attrs<'_> {
-    let mut attrs = Attrs::new().family(family);
-    if style.bold {
-        attrs = attrs.weight(Weight::BOLD);
-    }
+fn attrs_for<'a>(
+    family: Family<'a>,
+    style: TextStyle,
+    weight: u16,
+    features: &FontFeatures,
+) -> Attrs<'a> {
+    let weight = if style.bold {
+        Weight(weight.max(700))
+    } else {
+        Weight(weight)
+    };
+    let mut attrs = Attrs::new()
+        .family(family)
+        .weight(weight)
+        .font_features(features.clone());
     if style.italic {
         attrs = attrs.style(Style::Italic);
     }
@@ -195,16 +250,21 @@ impl FontRenderer {
     /// Build a renderer at `font_size` pixels. Text comes from the first
     /// configured name the system knows; the rest supply what it lacks.
     /// `font_size` is already scaled for the display, not points.
-    pub fn new(font_size: f32, families: &[String]) -> Self {
+    pub fn new(font_size: f32, families: &[String], options: Options) -> Self {
         let font_size = font_size.max(4.0);
-        let metrics = Metrics::relative(font_size, 1.35);
+        let metrics = Metrics::relative(font_size, options.line_height.clamp(0.8, 3.0));
         let started = std::time::Instant::now();
         let (locale, database) = shared_database();
         let database_ms = started.elapsed().as_millis();
         let mut font_system = FontSystem::new_with_locale_and_db(locale, database);
         let resolved = resolve_families(&font_system, families);
         let mut buffer = Buffer::new(&mut font_system, metrics);
+        buffer.set_wrap(Wrap::None);
         buffer.set_size(Some(f32::MAX), Some(metrics.line_height * 2.0));
+        let mut features = FontFeatures::new();
+        for (tag, enabled) in &options.features {
+            features.set(FeatureTag::new(tag), u32::from(*enabled));
+        }
 
         let mut renderer = Self {
             font_system,
@@ -215,11 +275,15 @@ impl FontRenderer {
                 width: 1,
                 height: 1,
             },
+            weight: options.weight.clamp(100, 900),
+            features,
+            metrics_overrides: options.metrics,
             families: resolved,
             cache: HashMap::new(),
             faces: HashMap::new(),
         };
         renderer.cell = renderer.measure_cell();
+        renderer.apply_primary_metrics();
         // Which face the config actually resolved to; the first thing to check
         // when a window looks like it ignored `fontFamily`.
         crate::log::line(&format!(
@@ -230,6 +294,29 @@ impl FontRenderer {
             started.elapsed().as_millis()
         ));
         renderer
+    }
+
+    /// Apply a `fontMetrics` entry for the family that shapes normal text.
+    fn apply_primary_metrics(&mut self) {
+        let Some(FamilyOwned::Name(name)) = self.families.first() else {
+            return;
+        };
+        let Some(metrics) = self
+            .metrics_overrides
+            .iter()
+            .find(|(family, _)| family.eq_ignore_ascii_case(name))
+            .map(|(_, metrics)| *metrics)
+        else {
+            return;
+        };
+        if let Some(width) = metrics.width {
+            self.cell.width = width.max(1);
+        }
+        if let Some(height) = metrics.height {
+            self.cell.height = height.max(1);
+            self.metrics.line_height = self.cell.height as f32;
+            self.buffer.set_metrics(self.metrics);
+        }
     }
 
     pub fn cell(&self) -> CellSize {
@@ -244,7 +331,12 @@ impl FontRenderer {
             .first()
             .cloned()
             .unwrap_or(FamilyOwned::Monospace);
-        let attrs = attrs_for(primary.as_family(), TextStyle::NORMAL);
+        let attrs = attrs_for(
+            primary.as_family(),
+            TextStyle::NORMAL,
+            self.weight,
+            &self.features,
+        );
         self.buffer
             .set_size(Some(f32::MAX), Some(self.metrics.line_height * 2.0));
         self.buffer
@@ -325,7 +417,7 @@ impl FontRenderer {
     fn render_cell(&mut self, text: &str, style: TextStyle) -> Option<Raster> {
         let families = self.families.clone();
         for (index, family) in families.iter().enumerate() {
-            let attrs = attrs_for(family.as_family(), style);
+            let attrs = attrs_for(family.as_family(), style, self.weight, &self.features);
             // A named face must draw the glyph itself. cosmic-text otherwise
             // substitutes another installed font, which is how a powerline
             // separator ended up as a 6x7 box from an unrelated face.
@@ -355,9 +447,9 @@ impl FontRenderer {
         let id = self.font_system.db().query(&fontdb::Query {
             families: &[family.as_family()],
             weight: if style.bold {
-                Weight::BOLD
+                Weight(self.weight.max(700))
             } else {
-                Weight::NORMAL
+                Weight(self.weight)
             },
             stretch: Stretch::Normal,
             style: if style.italic {
@@ -472,7 +564,7 @@ impl FontRenderer {
     fn render_run(&mut self, text: &str, width: usize, style: TextStyle) -> Option<Raster> {
         let families = self.families.clone();
         for family in &families {
-            let attrs = attrs_for(family.as_family(), style);
+            let attrs = attrs_for(family.as_family(), style, self.weight, &self.features);
             if let Some(raster) = self.shape_run(text, width, &attrs) {
                 return Some(raster);
             }
@@ -607,7 +699,98 @@ mod tests {
     use super::*;
 
     fn renderer() -> FontRenderer {
-        FontRenderer::new(16.0, &[])
+        FontRenderer::new(16.0, &[], Options::default())
+    }
+
+    #[test]
+    fn given_a_line_height_then_the_cell_height_follows_it() {
+        let short = FontRenderer::new(
+            16.0,
+            &[],
+            Options {
+                line_height: 1.0,
+                ..Options::default()
+            },
+        );
+        let tall = FontRenderer::new(
+            16.0,
+            &[],
+            Options {
+                line_height: 2.0,
+                ..Options::default()
+            },
+        );
+        assert!(tall.cell().height > short.cell().height);
+    }
+
+    #[test]
+    fn given_a_feature_string_then_it_parses_tag_and_state() {
+        assert_eq!(parse_feature("calt"), Some((*b"calt", true)));
+        assert_eq!(parse_feature("-liga"), Some((*b"liga", false)));
+        assert_eq!(parse_feature("+ss01"), Some((*b"ss01", true)));
+        assert_eq!(parse_feature("liga!"), None);
+        assert_eq!(parse_feature("abc"), None);
+    }
+
+    #[test]
+    fn given_a_primary_face_metric_override_then_the_cell_uses_it() {
+        let installed = {
+            let system = FontSystem::new();
+            system
+                .db()
+                .faces()
+                .find_map(|face| face.families.first().map(|(name, _)| name.clone()))
+                .expect("the font database is never empty")
+        };
+        let font = FontRenderer::new(
+            16.0,
+            std::slice::from_ref(&installed),
+            Options {
+                metrics: vec![(
+                    installed.clone(),
+                    FaceMetrics {
+                        width: Some(11),
+                        height: Some(23),
+                    },
+                )],
+                ..Options::default()
+            },
+        );
+        assert_eq!((font.cell().width, font.cell().height), (11, 23));
+    }
+
+    #[test]
+    fn given_a_run_that_fills_its_box_then_the_last_glyph_is_not_wrapped_away() {
+        let mut font = renderer();
+        let cell = font.cell();
+        let raster = font
+            .raster_run("iiii", cell.width * 4, TextStyle::NORMAL)
+            .expect("a run raster");
+        let mut right = 0;
+        match &raster.bitmap {
+            Bitmap::Mask(mask) => {
+                for y in 0..raster.height {
+                    for x in 0..raster.width {
+                        if mask[y * raster.width + x] > 0 {
+                            right = right.max(x);
+                        }
+                    }
+                }
+            }
+            Bitmap::Color(rgba) => {
+                for y in 0..raster.height {
+                    for x in 0..raster.width {
+                        if rgba[(y * raster.width + x) * 4 + 3] > 0 {
+                            right = right.max(x);
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            right >= cell.width * 3,
+            "the last glyph was wrapped out of the run: ink ends at {right}"
+        );
     }
 
     #[test]
@@ -633,7 +816,12 @@ mod tests {
             .first()
             .cloned()
             .unwrap_or(FamilyOwned::Monospace);
-        let attrs = attrs_for(primary.as_family(), TextStyle::NORMAL);
+        let attrs = attrs_for(
+            primary.as_family(),
+            TextStyle::NORMAL,
+            font.weight,
+            &font.features,
+        );
         font.buffer
             .set_size(Some(f32::MAX), Some(font.metrics.line_height * 2.0));
         font.buffer.set_text(text, &attrs, Shaping::Advanced, None);
@@ -659,7 +847,7 @@ mod tests {
             // Without the face this test only re-checks the generic fallback.
             return;
         }
-        let mut font = FontRenderer::new(16.0, &["VictorMono NFM".to_string()]);
+        let mut font = FontRenderer::new(16.0, &["VictorMono NFM".to_string()], Options::default());
         assert!(matches!(font.families.first(), Some(FamilyOwned::Name(_))));
         assert_eq!(
             advance_of(&mut font, "M"),
@@ -805,8 +993,11 @@ mod tests {
             // second; a machine with either missing cannot exercise it.
             return;
         }
-        let mut font =
-            FontRenderer::new(13.0, &["Monaco".to_string(), "VictorMono NFM".to_string()]);
+        let mut font = FontRenderer::new(
+            13.0,
+            &["Monaco".to_string(), "VictorMono NFM".to_string()],
+            Options::default(),
+        );
         assert!(
             matches!(font.families.first(), Some(FamilyOwned::Name(name)) if name.as_str() == "Monaco"),
             "the icon-less face must lead the list: {:?}",
@@ -839,7 +1030,7 @@ mod tests {
                 .find_map(|face| face.families.first().map(|(name, _)| name.clone()))
                 .expect("the font database is never empty")
         };
-        let mut font = FontRenderer::new(16.0, &[installed]);
+        let mut font = FontRenderer::new(16.0, &[installed], Options::default());
         assert!(font.raster("M", TextStyle::NORMAL).is_some());
         assert!(font.cell().width >= 4);
     }

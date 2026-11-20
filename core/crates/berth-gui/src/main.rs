@@ -691,10 +691,12 @@ impl ApplicationHandler<UserEvent> for Gui {
         self.font_job = Some(font::FontSlot::spawn(
             self.config.font_pixels(self.scale),
             self.config.font_family.clone(),
+            self.config.font_options(),
         ));
         self.chrome_job = Some(font::FontSlot::spawn(
             CHROME_FONT_SIZE * self.scale as f32,
             self.config.font_family.clone(),
+            self.config.font_options(),
         ));
         let context = match softbuffer::Context::new(window.clone()) {
             Ok(context) => context,
@@ -912,12 +914,8 @@ impl Gui {
         (self.started.elapsed().as_millis() as u64 / step.max(1)).is_multiple_of(2)
     }
 
-    fn cursor_blinks(&self) -> bool {
-        self.window_focused
-            && self
-                .active_surface()
-                .and_then(|surface_id| self.host.cursor_style(&surface_id).ok())
-                .is_some_and(|style| style.blinks)
+    fn needs_blink(&self) -> bool {
+        self.window_focused && !lock(&self.state).surfaces.is_empty()
     }
 
     /// Drop bells whose flash has finished, repainting once so the pane border
@@ -941,7 +939,7 @@ impl Gui {
                 None => at,
             });
         };
-        if self.cursor_blinks() {
+        if self.needs_blink() {
             consider(next_blink_edge(self.started, now));
         }
         for at in self.flashes.values() {
@@ -1153,7 +1151,11 @@ impl Gui {
         }
         if self.font.is_none() {
             let pixels = self.config.font_pixels(self.scale);
-            self.font = Some(FontRenderer::new(pixels, &self.config.font_family));
+            self.font = Some(FontRenderer::new(
+                pixels,
+                &self.config.font_family,
+                self.config.font_options(),
+            ));
         }
         self.font.as_mut().expect("font just created")
     }
@@ -1170,6 +1172,7 @@ impl Gui {
             self.chrome_font = Some(FontRenderer::new(
                 CHROME_FONT_SIZE * self.scale as f32,
                 &self.config.font_family,
+                self.config.font_options(),
             ));
         }
         self.chrome_font.as_mut().expect("chrome font just created")
@@ -1604,6 +1607,7 @@ impl Gui {
                     exited,
                     search,
                     hover_link,
+                    blink_on,
                 };
                 let font = self.font();
                 painter.screen(font, &screen, pane.content, &options);

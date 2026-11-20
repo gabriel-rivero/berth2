@@ -78,8 +78,10 @@ this order, one item per session: item 1 builds the CSI side-channel scanner tha
 4. **Cursor and focus** — landed in 0.15.3. DECSCUSR selects block, underline and bar
    cursors with their blink state, CSI ?1004 reports focus in/out for the focused pane,
    and an OSC 52 read opens a confirmation dialog before returning the clipboard.
-5. **Fonts and ligatures**: shape runs rather than single cells, with `fontWeight`,
-   `lineHeight`, font-feature and per-face metric keys, and honour blink.
+5. **Fonts and ligatures** — landed, unreleased. Adjacent cells with the same style are
+   shaped as one run, so a face with ligatures draws them. `fontWeight`, `lineHeight`,
+   `fontFeatures` and per-face `fontMetrics` are read from `config.json`, and SGR 5 text
+   blinks.
 6. **Appearance and zoom**: a theme list with light/dark selection and a persisted choice
    (portable currently ships one hard-coded palette), window opacity and background blur,
    and font-zoom chords on both shells.

@@ -30,6 +30,7 @@ pub struct ExtendedStyle {
     pub underline: UnderlineStyle,
     pub underline_color: Option<[u8; 3]>,
     pub hyperlink: Option<Arc<str>>,
+    pub blink: bool,
 }
 
 impl ExtendedStyle {
@@ -38,6 +39,7 @@ impl ExtendedStyle {
             && self.underline == UnderlineStyle::None
             && self.underline_color.is_none()
             && self.hyperlink.is_none()
+            && !self.blink
     }
 }
 
@@ -109,6 +111,8 @@ impl StyleState {
                 9 => self.current.strikethrough = true,
                 24 => self.current.underline = UnderlineStyle::None,
                 29 => self.current.strikethrough = false,
+                5 => self.current.blink = true,
+                25 => self.current.blink = false,
                 58 => {
                     if let Some((color, consumed)) = parse_color(&groups[index..]) {
                         self.current.underline_color = color;
@@ -570,6 +574,15 @@ mod tests {
         state.apply_sgr(b"9");
         state.apply_sgr(b"29");
         assert!(!state.current().strikethrough);
+    }
+
+    #[test]
+    fn given_blink_then_it_sets_and_clears() {
+        assert!(style(b"5").blink);
+        let mut state = StyleState::default();
+        state.apply_sgr(b"5");
+        state.apply_sgr(b"25");
+        assert!(!state.current().blink);
     }
 
     #[test]

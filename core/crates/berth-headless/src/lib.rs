@@ -56,6 +56,8 @@ pub struct CellView {
     pub underline_color: Option<[u8; 3]>,
     /// The OSC 8 hyperlink the cell belongs to.
     pub hyperlink: Option<Arc<str>>,
+    /// SGR 5: the glyph blinks with the cursor phase.
+    pub blink: bool,
 }
 
 /// A snapshot of the visible screen. Safe to hand to a renderer thread.
@@ -670,6 +672,7 @@ impl PtyHost {
                             underline_style,
                             underline_color: extended.and_then(|style| style.underline_color),
                             hyperlink: extended.and_then(|style| style.hyperlink.clone()),
+                            blink: extended.is_some_and(|style| style.blink),
                         }
                     }
                     None => CellView {
@@ -1995,6 +1998,24 @@ mod meta_tests {
         fixture.feed(&mut scanner, b"\x1b[38;5;9mab");
         let style = lock(&fixture.style);
         assert!(style.get(0, 0).is_none_or(|cell| !cell.strikethrough));
+    }
+
+    #[test]
+    fn given_blink_then_the_cell_carries_it() {
+        let fixture = ScannerFixture::new();
+        let mut scanner = SideChannelScanner::default();
+        fixture.feed(&mut scanner, b"\x1b[5mab");
+        assert!(
+            lock(&fixture.style)
+                .get(0, 0)
+                .is_some_and(|style| style.blink)
+        );
+        fixture.feed(&mut scanner, b"\x1b[25m\x1b[1;1Hab");
+        assert!(
+            lock(&fixture.style)
+                .get(0, 0)
+                .is_none_or(|style| !style.blink)
+        );
     }
 
     #[test]

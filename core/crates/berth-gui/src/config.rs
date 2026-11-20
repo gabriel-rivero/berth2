@@ -260,6 +260,14 @@ pub struct Config {
     /// Preferred terminal faces, first installed one wins. Empty keeps the
     /// system monospace.
     pub font_family: Vec<String>,
+    /// Base weight for normal text, 100..=900. Bold cells use at least 700.
+    pub font_weight: u16,
+    /// Line height as a multiple of the font size.
+    pub line_height: f32,
+    /// OpenType features, `"calt"` to enable or `"-liga"` to disable.
+    pub font_features: Vec<String>,
+    /// Per-family cell overrides, keyed by face name.
+    pub font_metrics: HashMap<String, FaceMetrics>,
     pub compact_sidebar: bool,
     /// Close a pane when its process exits instead of keeping the final screen
     /// with a banner. On by default, like a terminal tab.
@@ -294,6 +302,10 @@ impl Default for Config {
             font_size: DEFAULT_FONT_SIZE,
             font_scale: 0.0,
             font_family: Vec::new(),
+            font_weight: 400,
+            line_height: 1.35,
+            font_features: Vec::new(),
+            font_metrics: HashMap::new(),
             compact_sidebar: false,
             close_exited_panes: true,
             restore_launch_flags: true,
@@ -333,6 +345,65 @@ impl FamilyNames {
     }
 }
 
+/// `fontWeight` takes a numeric weight or a common name.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum WeightValue {
+    Number(f32),
+    Name(String),
+}
+
+impl WeightValue {
+    fn into_weight(self) -> u16 {
+        match self {
+            Self::Number(value) if value > 0.0 => (value.round() as u16).clamp(100, 900),
+            Self::Number(_) => 400,
+            Self::Name(name) => {
+                let name: String = name
+                    .chars()
+                    .filter(|character| character.is_ascii_alphanumeric())
+                    .collect::<String>()
+                    .to_ascii_lowercase();
+                match name.as_str() {
+                    "thin" => 100,
+                    "extralight" | "ultralight" => 200,
+                    "light" => 300,
+                    "medium" => 500,
+                    "semibold" | "demibold" => 600,
+                    "bold" => 700,
+                    "extrabold" | "ultrabold" => 800,
+                    "black" | "heavy" => 900,
+                    _ => 400,
+                }
+            }
+        }
+    }
+}
+
+/// `fontMetrics` overrides the measured cell for one family.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct FaceMetrics {
+    pub width: Option<usize>,
+    pub height: Option<usize>,
+}
+
+fn feature_tag(text: &str) -> Option<String> {
+    let text = text.trim();
+    let (enabled, tag) = match text.strip_prefix('-') {
+        Some(tag) => (false, tag),
+        None => (true, text.strip_prefix('+').unwrap_or(text)),
+    };
+    if tag.len() != 4 || !tag.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+        return None;
+    }
+    Some(if enabled {
+        tag.to_string()
+    } else {
+        format!("-{tag}")
+    })
+}
+
 /// `shell` takes a program path, or a program plus arguments. A single string
 /// is the program alone, so a Windows path with spaces needs no quoting.
 #[derive(Debug, Deserialize)]
@@ -360,6 +431,10 @@ struct FileConfig {
     font_size: Option<f32>,
     font_scale: Option<f32>,
     font_family: Option<FamilyNames>,
+    font_weight: Option<WeightValue>,
+    line_height: Option<f32>,
+    font_features: Option<Vec<String>>,
+    font_metrics: Option<HashMap<String, FaceMetrics>>,
     compact_sidebar: Option<bool>,
     close_exited_panes: Option<bool>,
     restore_launch_flags: Option<bool>,
@@ -416,6 +491,37 @@ impl Config {
                 .font_family
                 .map(FamilyNames::into_names)
                 .unwrap_or_default(),
+            font_weight: file
+                .font_weight
+                .map(WeightValue::into_weight)
+                .unwrap_or(defaults.font_weight),
+            line_height: file
+                .line_height
+                .filter(|height| *height > 0.0)
+                .unwrap_or(defaults.line_height)
+                .clamp(0.8, 3.0),
+            font_features: file
+                .font_features
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|feature| feature_tag(&feature))
+                .collect(),
+            font_metrics: file
+                .font_metrics
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|(name, metrics)| {
+                    let name = name.trim().to_string();
+                    if name.is_empty() {
+                        return None;
+                    }
+                    let metrics = FaceMetrics {
+                        width: metrics.width.map(|width| width.clamp(1, 256)),
+                        height: metrics.height.map(|height| height.clamp(1, 256)),
+                    };
+                    (metrics.width.is_some() || metrics.height.is_some()).then_some((name, metrics))
+                })
+                .collect(),
             compact_sidebar: file.compact_sidebar.unwrap_or(defaults.compact_sidebar),
             close_exited_panes: file
                 .close_exited_panes
@@ -455,6 +561,32 @@ impl Config {
             (2.0 / backing).clamp(0.75, 2.0)
         };
         (self.font_size as f64 * multiplier * backing) as f32
+    }
+
+    /// The renderer options this config selects.
+    pub fn font_options(&self) -> crate::font::Options {
+        crate::font::Options {
+            weight: self.font_weight,
+            line_height: self.line_height,
+            features: self
+                .font_features
+                .iter()
+                .filter_map(|feature| crate::font::parse_feature(feature))
+                .collect(),
+            metrics: self
+                .font_metrics
+                .iter()
+                .map(|(name, metrics)| {
+                    (
+                        name.clone(),
+                        crate::font::FaceMetrics {
+                            width: metrics.width,
+                            height: metrics.height,
+                        },
+                    )
+                })
+                .collect(),
+        }
     }
 
     pub fn sidebar_pixels(&self) -> f64 {
@@ -853,6 +985,80 @@ mod tests {
     #[test]
     fn given_no_font_family_when_parsed_then_the_system_face_is_kept() {
         assert!(Config::parse("{}").unwrap().font_family.is_empty());
+    }
+
+    #[test]
+    fn given_font_weight_forms_then_they_parse_and_clamp() {
+        assert_eq!(
+            Config::parse(r#"{"fontWeight": 650}"#).unwrap().font_weight,
+            650
+        );
+        assert_eq!(
+            Config::parse(r#"{"fontWeight": "semi-bold"}"#)
+                .unwrap()
+                .font_weight,
+            600
+        );
+        assert_eq!(
+            Config::parse(r#"{"fontWeight": 1000}"#)
+                .unwrap()
+                .font_weight,
+            900
+        );
+        assert_eq!(
+            Config::parse(r#"{"fontWeight": 10}"#).unwrap().font_weight,
+            100
+        );
+    }
+
+    #[test]
+    fn given_line_height_then_it_is_clamped_and_zero_keeps_the_default() {
+        let config = Config::parse(r#"{"lineHeight": 2.0}"#).unwrap();
+        assert!((config.line_height - 2.0).abs() < f32::EPSILON);
+        assert!(
+            (Config::parse(r#"{"lineHeight": 9}"#).unwrap().line_height - 3.0).abs() < f32::EPSILON
+        );
+        assert!(
+            (Config::parse(r#"{"lineHeight": 0}"#).unwrap().line_height - 1.35).abs()
+                < f32::EPSILON
+        );
+    }
+
+    #[test]
+    fn given_font_features_then_only_four_character_tags_survive() {
+        let config =
+            Config::parse(r#"{"fontFeatures": ["calt", "-liga", "bad", "+ss01"]}"#).unwrap();
+        assert_eq!(config.font_features, vec!["calt", "-liga", "ss01"]);
+    }
+
+    #[test]
+    fn given_font_metrics_then_values_are_clamped_and_empty_entries_dropped() {
+        let config = Config::parse(
+            r#"{"fontMetrics": {"Fira Code": {"width": 9, "height": 900}, "Empty": {}, " ": {"width": 7}}}"#,
+        )
+        .unwrap();
+        let metrics = config.font_metrics.get("Fira Code").expect("metrics");
+        assert_eq!((metrics.width, metrics.height), (Some(9), Some(256)));
+        assert!(!config.font_metrics.contains_key("Empty"));
+        assert!(!config.font_metrics.contains_key(" "));
+    }
+
+    #[test]
+    fn given_font_options_when_converted_then_weight_features_and_metrics_carry_over() {
+        let config = Config::parse(
+            r#"{"fontWeight": "medium", "fontFeatures": ["calt"], "fontMetrics": {"Mono": {"width": 9, "height": 21}}}"#,
+        )
+        .unwrap();
+        let options = config.font_options();
+        assert_eq!(options.weight, 500);
+        assert_eq!(options.features, vec![(*b"calt", true)]);
+        let metrics = options
+            .metrics
+            .iter()
+            .find(|(name, _)| name == "Mono")
+            .map(|(_, metrics)| *metrics)
+            .expect("metric");
+        assert_eq!((metrics.width, metrics.height), (Some(9), Some(21)));
     }
 
     #[test]
