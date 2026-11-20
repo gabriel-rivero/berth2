@@ -71,8 +71,9 @@ tagged; the AppKit shell inherits these from Ghostty already.
 - **Cursor and focus**: DECSCUSR shapes, focus in/out (CSI ?1004), OSC 52 read with a
   confirmation dialog.
 - **Ligatures**: shape runs rather than single cells, with a font-features key.
-- **Palette and zoom**: a theme list with light/dark selection and a persisted choice
-  (portable currently ships one hard-coded palette); font-zoom chords on both shells.
+- **Appearance and zoom**: a theme list with light/dark selection and a persisted choice
+  (portable currently ships one hard-coded palette), window opacity and background blur,
+  and font-zoom chords on both shells.
 - **Resize reflow**: re-wrap wrapped lines on width change so shrinking a pane does not
   garble history. The largest item here and the one allowed to move to 0.16.
 - **Bell**: `bell = none | visual | audio`.
@@ -91,7 +92,8 @@ Goal: the layout model cmux and every other terminal already have.
 - **Pane zoom**: maximise the focused pane and restore the tree, with the state visible
   in the status bar and surviving restore.
 - **Tab tear-off**: drag a tab out to a new window, and move surfaces across panes and
-  windows from the CLI (`surface.move` gains a window/pane target).
+  windows from the CLI (`surface.move` gains a window/pane target). Restart and duplicate
+  a tab from the palette and the tab menu.
 - **Tab overflow**: scrollable strip plus an overflow menu, replacing the current
   squeeze-and-truncate behaviour.
 - **Broadcast input**: type into every pane of the workspace, off by default, with a
@@ -117,12 +119,17 @@ Goal: the prompt becomes a place in the buffer, not a string in a stream.
 - **Copy mode**: vi-style keyboard selection, motions, yank in the portable window.
 - **Paste history**: the last N clipboards with a picker, never persisted to disk.
 - **Quick terminal**: a global-hotkey dropdown window per display, both shells.
-- **Palette depth**: workspace, tab and group commands, recent-choice ranking, and
-  user-defined commands from `config.json`.
+- **Commands and profiles**: user-defined commands from `config.json`, recent-choice
+  ranking, and named launch presets that replace the single `shell` key (argv, env, cwd,
+  shell, label) on both shells.
+- **Output rules and logging**: regex rules that style matching lines, as ConEmu's
+  Highlight and iTerm2's Triggers do, and a per-pane session log written to a file.
+- **Palette depth**: workspace, tab and group commands, and a palette that indexes the
+  new actions.
 
 **Done when:** a failing command can be found by jumping prompt to prompt and reading its
-status, a search in one pane reaches the others, and a selection can be made without the
-mouse.
+status, a search in one pane reaches the others, a selection can be made without the
+mouse, and a WSL/Git Bash/admin preset starts in one click.
 
 ## 0.18 — Durability and agent depth (≈3 weeks)
 
@@ -153,8 +160,9 @@ Goal: a product, not a repository.
   cask. Close the AppKit-only list: search, tab rename/reorder, group UI, geometric
   focus, terminal accessibility.
 - **Linux**: AppImage or Flatpak beside the .deb and PKGBUILD; AUR submission.
-- **Windows**: MSI or winget package, real toast notifications, peer-SID check on the
-  named pipe.
+- **Windows**: MSI or winget package, real toast notifications, taskbar progress and jump
+  lists, peer-SID check on the named pipe, and the Windows 11 default-terminal handoff so
+  `cmd` and `pwsh` open in Berth. Elevated panes stay a separate instance, not a PTY.
 - **Contract**: freeze the protocol at v1 with semver, regenerate
   `docs/schema/berth.schema.json`, and publish a typed client example.
 - **Docs**: every `config.json` key documented for both shells and a migration note for

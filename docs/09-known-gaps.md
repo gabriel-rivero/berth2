@@ -58,6 +58,12 @@ app itself has the gaps listed in
 - **The palette lists actions only.** It has no workspace or session commands
   beyond the 14 bound actions, and it does not remember recent choices.
 
+### Output and logs
+
+- **No output rules or session log.** Nothing styles matching lines (ConEmu's Highlight,
+  iTerm2's Triggers), and a pane's output cannot be written to a file; scrollback lives in
+  memory only.
+
 ### Layout, workspaces and tabs
 
 - **One window, one visible workspace.** No multiple windows, detachable

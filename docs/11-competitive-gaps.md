@@ -111,7 +111,62 @@ is portable-only, and every macOS gap is UI-only.
    unused, and there is no auto-update. This is the difference between a repo and a
    product, and it is mostly CI work.
 
-## 4. Where the competition is weak (our openings)
+## 4. ConEmu, the dead Windows incumbent
+
+Last release 2023-07-24 and no maintainer activity since; its issue tracker has been
+asking whether the project is over. It matters anyway: for a decade it was the Windows
+terminal people configured instead of `conhost`, it is the closest ancestor of this
+product's shape (tabs, splits, quake, task presets, a macro API), and its users are the
+one audience with no obvious successor. Windows Terminal replaced most of them; cmux does
+not run there; the portable window is the only terminal of this shape that does.
+
+| ConEmu feature | Berth today |
+| --- | --- |
+| Tabs, splits and nested panes, drag resize | ● both shells |
+| Quake dropdown on a global hotkey | ○ planned, 0.17 |
+| **Shell selection** (`shell`, settings cycle: Git Bash, pwsh, MSYS2, Cygwin, WSL) | ● 0.14.1 |
+| **Named task presets** (argv, env, cwd, shell, admin, hotkey) | ○ one shell per config |
+| **Elevated tabs** (`ConEmuC /sudo`) | ○ |
+| **Replace the default Windows terminal** | ○ |
+| Session/layout restore | ● tabs, cwd, splits; no scrollback |
+| Unicode, 256/true colour, mouse reporting, clipboard, paste guard | ● |
+| Progress in tab/sidebar (OSC 9;4) | ● |
+| Search in the buffer | ● portable, ○ AppKit |
+| Tab rename / restart / duplicate | ◐ rename only |
+| Hotkey rebinding | ● |
+| **Automation API** (`GuiMacro`, `ConEmuC -GuiMacro`) | ● superseded by socket, CLI and events |
+| Link and file-path detection | ● |
+| **Output highlight rules** (regex → line style) | ○ |
+| **Log console output to a file** | ○ |
+| **Window transparency / background** | ○ |
+| **Status bar and toolbar** | ○ |
+| **Taskbar progress and jump lists** | ○ |
+| Named configurations, portable XML settings | ◐ one `config.json` |
+| Attach/detach a running console | ○ planned as 0.18 durability |
+| Far Manager child GUI, DOSBox | N/A; ConPTY makes the hook layer obsolete |
+
+What is worth taking, in order:
+
+1. **Launch profiles.** `shell` is the first step toward ConEmu's Tasks. Windows users
+   start WSL, Git Bash, admin PowerShell and a specific project directory from one menu;
+   today that is one global key. A profile needs argv, env, cwd and a label, on both
+   shells.
+2. **Default-terminal handoff on Windows 11.** ConEmu had this from 2012. Without it the
+   portable window is an app you remember to open, not the thing `cmd` and `pwsh` open
+   into. It is the largest Windows adoption feature on the list.
+3. **Quake dropdown**, already scheduled for 0.17, and **taskbar progress plus jump
+   lists**, which is how a Windows user finds a running build again.
+4. **Output highlight rules and session logging.** Both are cheap, both exist in iTerm2
+   as Triggers and in ConEmu as Highlight and logging, and both are what an agent user
+   wants when a 2,000-line run ends in one red line.
+5. **Transparency and a status bar.** Polish, and the status bar is implied by the
+   portable window having no place to show chord mode, broadcast state or pane zoom.
+
+Elevated launch stays out of a pane: it needs a separate process at a different integrity
+level, and mixing that into the terminal's PTY model is how Windows terminal projects
+lose a week.
+
+## 5. Where the competition is weak (our openings)
 
 - **cmux costs memory and CPU at scale** and freezes under many tabs; its own issue
   tracker carries 16 GB for 187 surfaces. Berth's eight-pane budget of ~161 MB and idle
@@ -123,7 +178,7 @@ is portable-only, and every macOS gap is UI-only.
 - **macOS-only.** The portable window is the only agent-workspace terminal that runs on
   Linux and Windows. Parity work there has no direct competitor.
 
-## 5. Not gaps (do not reopen)
+## 6. Not gaps (do not reopen)
 
 Browser panes, cookie import, SSH workspaces, remote tmux mirroring, iOS, cloud VMs,
 teams, plugin marketplaces, a TUI client, telemetry. They are excluded in
@@ -132,7 +187,7 @@ competitor shipping one is not mistaken for a defect. Live-process durability is
 borderline case: it is deferred to 0.18 as an architectural question (own daemon versus
 attach), not as a copy of cmux's tmux fallback.
 
-## 6. Sources
+## 7. Sources
 
 - cmux: [docs](https://cmux.com/docs/concepts), [changelog](https://cmux.com/docs/changelog),
   [API](https://cmux.com/docs/api), [session restore](https://cmux.com/docs/session-restore),
@@ -147,3 +202,9 @@ attach), not as a copy of cmux's tmux fallback.
   [iTerm2](https://iterm2.com/features.html).
 - cmux weaknesses: [HN discussion](https://news.ycombinator.com/item?id=49206763),
   [memory issue #4607](https://github.com/manaflow-ai/cmux/issues/4607).
+- ConEmu: [documentation index](https://conemu.github.io/en/TableOfContents.html),
+  [tasks](https://conemu.github.io/en/Tasks.html),
+  [default terminal](https://conemu.github.io/en/DefaultTerminal.html),
+  [GuiMacro](https://conemu.github.io/en/GuiMacro.html),
+  [last release 230724](https://github.com/ConEmu/ConEmu/releases/tag/230724),
+  [maintenance question #2608](https://github.com/ConEmu/ConEmu/issues/2608).
