@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.14.1 — 2026-11-20
+
+### Features
+
+- `shell` in `config.json` chooses the program a new terminal runs, as a path or
+  an argv (`["C:\\Program Files\\Git\\bin\\bash.exe", "--login", "-i"]`). The
+  settings panel cycles through the shells it finds: Git Bash, pwsh, MSYS2 and
+  Cygwin zsh/bash and WSL on Windows, `/etc/shells` and `PATH` entries elsewhere.
+  Agent panes keep their own command; the macOS app does not read the key yet.
+
+### Fixes
+
+- `ctrl+shift+[` and `ctrl+shift+]` (previous/next tab on Linux and Windows) are
+  recognised. The keyboard reports the shifted character (`{`, `}`), so the
+  chord spelling never matched and both bindings were dead. Every default chord
+  now has a test that types it the way winit reports it on a US layout.
+- `berth-gui` builds as a GUI-subsystem binary, so double-clicking it no longer
+  leaves a console window with `berth-gui: restored 1 session(s)` and the launch
+  banner above the terminal. Started from a terminal it still attaches to that
+  terminal for `--help`, `--version`, `--smoke-*` and errors, and redirected
+  stdout/stderr keep going to their file or pipe.
+
 ## 0.14.0 — 2026-11-19
 
 ### Security
