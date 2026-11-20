@@ -59,10 +59,11 @@ the macOS window's 12pt labels.
 
 - Repaints on change, not on a timer. Pty output, child exits and socket
   requests wake the event loop through one coalesced proxy event. Everything
-  else schedules its own next wake: the cursor blink, bell flash expiry, the
-  autosave debounce and the agent polls. An idle window costs under 1 % of a
-  core; a screenful of output costs a burst. A child printing without pause
-  cannot flood the loop, because at most one wake is in flight at a time.
+  else schedules its own next wake: the cursor blink while a pane has a blinking
+  cursor or blinking text, bell flash expiry, the autosave debounce and the agent
+  polls. An idle window costs under 1 % of a core; a screenful of output costs a
+  burst. A child printing without pause cannot flood the loop, because at most
+  one wake is in flight at a time.
 - Real text: bold, italic, dim, underline, inverse, wide characters and 256/RGB
   colours, with a block cursor that blinks and hides when the pane is unfocused
   or the view is scrolled. Right-to-left phrases are shaped once per run, so
