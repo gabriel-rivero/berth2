@@ -2,30 +2,31 @@
 # Cut a Berth release: bump versions, run the checks, commit, tag, and build
 # the local platform's artifacts into ~/Downloads.
 #
-# Usage: scripts/release.sh <version> [--no-build] [--build-only] [--push]
+# Usage: scripts/release.sh <version> [--no-build] [--build-only] [--no-push]
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 usage() {
   cat >&2 <<'EOF'
-usage: scripts/release.sh <version> [--no-build] [--build-only] [--push]
+usage: scripts/release.sh <version> [--no-build] [--build-only] [--no-push]
 
   version      semver, for example 0.15.1
   --no-build   bump, test, commit and tag only
   --build-only build and copy artifacts for the current version
-  --push       push HEAD and the tag to origin
+  --no-push    keep the tag local instead of pushing it
 EOF
 }
 
 VERSION=""
 DO_BUILD=1
 BUILD_ONLY=0
-DO_PUSH=0
+DO_PUSH=1
 for arg in "$@"; do
   case "$arg" in
     --no-build) DO_BUILD=0 ;;
     --build-only) BUILD_ONLY=1 ;;
+    --no-push) DO_PUSH=0 ;;
     --push) DO_PUSH=1 ;;
     -h|--help)
       usage
@@ -218,5 +219,12 @@ if [ "$BUILD_ONLY" -eq 1 ]; then
 fi
 
 if [ "$DO_PUSH" -eq 1 ]; then
-  git push origin HEAD "refs/tags/v$VERSION"
+  branch="$(git rev-parse --abbrev-ref HEAD)"
+  git push origin "refs/tags/v$VERSION"
+  if [ "$branch" = "main" ]; then
+    git push origin main
+    echo "==> pushed v$VERSION and main"
+  else
+    echo "==> pushed v$VERSION; merge $branch to main and push main"
+  fi
 fi

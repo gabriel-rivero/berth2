@@ -51,9 +51,13 @@ Only the macOS Swift shell needs `make`; the Rust artifacts are built with
 
 Use `--no-build` when only the version bump, commit, and tag are wanted (for
 example in CI). Use `--build-only` to rebuild and copy artifacts for the
-current version after a failed build; it skips the bump, commit, and tag. Use
-`--push` only when the user asked to publish; it pushes `HEAD` and the tag, and
-CI turns a `v*` tag into a GitHub release. A local tag is not a published
+current version after a failed build; it skips the bump, commit, and tag.
+
+The script pushes the annotated tag by default. When it runs on `main` it also
+pushes `main`; from a worktree it pushes the tag and prints the merge step, so
+merge the release commit to `main` and push `main` in the same session. Pass
+`--no-push` to keep the tag local, for example when a review gate must clear
+before anything leaves the machine. CI turns a pushed `v*` tag into a GitHub
 release.
 
 On macOS the app build needs the Ghostty engine. A fresh worktree does not
@@ -69,5 +73,6 @@ missing too, run `scripts/fetch-engine.sh` first.
 - On Linux and Windows, list the exact files in `~/Downloads`.
 - If the artifact build fails after tagging, report it plainly: the tag exists,
   the artifact does not. Fix the build; do not move or delete the tag silently.
-- If the release commit was made in a worktree, merge it to `main` before any
-  push. Report the version, tag, commit, artifact paths, and test result.
+- If the release commit was made in a worktree, merge it to `main` and push
+  `main` in the same session. Report the version, tag, commit, artifact paths,
+  and test result.
