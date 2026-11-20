@@ -87,7 +87,9 @@ this order, one item per session: item 1 builds the CSI side-channel scanner tha
    `backgroundBlur` reaches Ghostty in the AppKit shell. `Cmd/Ctrl + =`, `-` and `0`
    zoom the font on both shells and keep the choice.
 7. **Resize reflow**: re-wrap wrapped lines on width change so shrinking a pane does not
-   garble history. The largest item here and the one allowed to move to 0.16.
+   garble history. The largest item here and the one allowed to move to 0.16. It moves:
+   `vt100` resizes by truncating and padding rows and keeps no logical line to re-wrap,
+   so reflow needs a grid that models wrap-aware lines, which is a 0.16 change.
 8. **Bell** — landed, unreleased. `bell` selects `none`, `visual` (the default pane-border
    flash) or `audio`, which plays the system bell sound. A repeated bell rings once per
    batch, not once per frame.
