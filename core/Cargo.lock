@@ -512,7 +512,6 @@ dependencies = [
  "berth-server",
  "cosmic-text",
  "ctrlc",
- "font8x8",
  "fontdb",
  "objc2 0.6.5",
  "png 0.17.16",
@@ -1189,12 +1188,6 @@ checksum = "835ae9d781464a79026cde387f9cbc650c9a4909d7cf7e658b127e3c35d2f35d"
 dependencies = [
  "bytemuck",
 ]
-
-[[package]]
-name = "font8x8"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "875488b8711a968268c7cf5d139578713097ca4635a76044e8fe8eedf831d07e"
 
 [[package]]
 name = "fontdb"
