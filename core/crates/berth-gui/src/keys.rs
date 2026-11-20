@@ -95,7 +95,14 @@ pub fn chord_key(key: &Key) -> Option<String> {
 
 /// The chord string a key press would be recorded as, in config spelling.
 pub fn chord_for(key: &Key, modifiers: ModifiersState) -> Option<String> {
-    let key = chord_key(key)?;
+    let mut key = chord_key(key)?;
+    if modifiers.shift_key()
+        && key.chars().count() == 1
+        && let Some(unshifted) = key.chars().next().and_then(unshift)
+    {
+        // Record the legend: Shift+] is written `ctrl+shift+]`, not `ctrl+shift+}`.
+        key = unshifted.to_string();
+    }
     let mut parts = Vec::new();
     if modifiers.super_key() {
         parts.push("cmd".to_string());
@@ -118,11 +125,59 @@ pub fn matches(binding: &Binding, key: &Key, modifiers: ModifiersState) -> bool 
     let Some(chord) = chord_key(key) else {
         return false;
     };
-    binding.key == chord
+    key_matches(binding, &chord)
         && binding.cmd == modifiers.super_key()
         && binding.ctrl == modifiers.control_key()
         && binding.alt == modifiers.alt_key()
         && binding.shift == modifiers.shift_key()
+}
+
+/// The logical key for a shifted symbol (`}` for Shift+`]`), so a chord can be
+/// spelled the way the key is legend-printed. US layouts are the ones the
+/// defaults are written for; other layouts report a different character and
+/// have to spell the chord as it prints.
+fn unshift(ch: char) -> Option<char> {
+    Some(match ch {
+        '!' => '1',
+        '@' => '2',
+        '#' => '3',
+        '$' => '4',
+        '%' => '5',
+        '^' => '6',
+        '&' => '7',
+        '*' => '8',
+        '(' => '9',
+        ')' => '0',
+        '_' => '-',
+        '+' => '=',
+        '{' => '[',
+        '}' => ']',
+        '|' => '\\',
+        ':' => ';',
+        '"' => '\'',
+        '<' => ',',
+        '>' => '.',
+        '?' => '/',
+        '~' => '`',
+        _ => return None,
+    })
+}
+
+fn key_matches(binding: &Binding, chord: &str) -> bool {
+    if binding.key == chord {
+        return true;
+    }
+    if !binding.shift {
+        return false;
+    }
+    let mut chars = chord.chars();
+    let Some(ch) = chars.next() else {
+        return false;
+    };
+    if chars.next().is_some() {
+        return false;
+    }
+    unshift(ch).is_some_and(|unshifted| binding.key == unshifted.to_string())
 }
 
 /// Resolve a key press into a window command, or `None` when it belongs to the
@@ -215,6 +270,86 @@ mod tests {
         }
         let command = resolve(&Key::Character("d".into()), modifiers, false, &shortcuts);
         assert_eq!(command, Some(Command::SplitRight));
+    }
+
+    #[test]
+    fn given_a_shifted_bracket_when_ctrl_shift_is_held_then_the_tab_chord_matches() {
+        let mut overrides = HashMap::new();
+        overrides.insert("nextTab".to_string(), "ctrl+shift+]".to_string());
+        overrides.insert("previousTab".to_string(), "ctrl+shift+[".to_string());
+        let shortcuts = Shortcuts::build(&overrides);
+        let modifiers = ModifiersState::CONTROL | ModifiersState::SHIFT;
+        // winit reports the character the layout prints, not the legend.
+        assert_eq!(
+            resolve(&Key::Character("}".into()), modifiers, false, &shortcuts),
+            Some(Command::NextTab)
+        );
+        assert_eq!(
+            resolve(&Key::Character("{".into()), modifiers, false, &shortcuts),
+            Some(Command::PreviousTab)
+        );
+    }
+
+    /// The logical key winit reports for a binding: letters arrive uppercase
+    /// with Shift, symbols arrive shifted (`}` for `]`).
+    fn logical_key_for(binding: &Binding) -> Key {
+        let key = match (binding.shift, binding.key.as_str()) {
+            (false, key) => key.to_string(),
+            (true, "]") => "}".into(),
+            (true, "[") => "{".into(),
+            (true, ",") => "<".into(),
+            (true, ".") => ">".into(),
+            (true, "/") => "?".into(),
+            (true, ";") => ":".into(),
+            (true, "'") => "\"".into(),
+            (true, "\\") => "|".into(),
+            (true, "`") => "~".into(),
+            (true, "-") => "_".into(),
+            (true, "=") => "+".into(),
+            (true, key) if key.len() == 1 => key.to_uppercase(),
+            (true, key) => key.to_string(),
+        };
+        Key::Character(key.into())
+    }
+
+    #[test]
+    fn given_every_default_chord_when_the_keyboard_reports_it_then_it_resolves() {
+        let shortcuts = Shortcuts::build(&HashMap::new());
+        for action in Action::ALL {
+            let binding = shortcuts
+                .binding(action)
+                .unwrap_or_else(|| panic!("{action:?} has no default"));
+            let mut modifiers = ModifiersState::empty();
+            if binding.cmd {
+                modifiers |= ModifiersState::SUPER;
+            }
+            if binding.ctrl {
+                modifiers |= ModifiersState::CONTROL;
+            }
+            if binding.alt {
+                modifiers |= ModifiersState::ALT;
+            }
+            if binding.shift {
+                modifiers |= ModifiersState::SHIFT;
+            }
+            assert_eq!(
+                resolve(&logical_key_for(binding), modifiers, false, &shortcuts),
+                Some(Command::for_action(action)),
+                "{action:?} ({binding:?}) does not resolve"
+            );
+        }
+    }
+
+    #[test]
+    fn given_a_shifted_symbol_when_recorded_then_it_is_spelled_as_its_legend() {
+        assert_eq!(
+            chord_for(
+                &Key::Character("}".into()),
+                ModifiersState::CONTROL | ModifiersState::SHIFT
+            )
+            .unwrap(),
+            "ctrl+shift+]"
+        );
     }
 
     #[test]
