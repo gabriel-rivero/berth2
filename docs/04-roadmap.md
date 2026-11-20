@@ -58,26 +58,29 @@ Items that did **not** close, and where they went:
 ## 0.15 — Terminal floor (≈3 weeks)
 
 Goal: stop being a 2019 terminal in a 2026 shell. Every item is portable-only unless
-tagged; the AppKit shell inherits these from Ghostty already.
+tagged; the AppKit shell inherits these from Ghostty already. Work through the list in
+this order, one item per session: item 1 builds the CSI side-channel scanner that items
+2 and 3 reuse, and each item lands with its tests and a changelog entry.
 
-- **Kitty keyboard protocol**: progressive enhancement, `CSI u` for modified keys, key
-  release events, disambiguated Escape; advertise it in DA1. Agents and Neovim/Helix bind
-  it.
-- **Synchronized output (DECSET 2026)**: hold paint between begin/end so full-screen
-  TUIs (Claude Code, docker, lazygit) stop tearing.
-- **Styled text**: strikethrough, curly/dotted/dashed underline, underline colour
-  (SGR 4:x, 58), and OSC 8 hyperlinks tracked by the parser instead of the text scan;
-  hover underline and Cmd/Ctrl-click.
-- **Cursor and focus**: DECSCUSR shapes, focus in/out (CSI ?1004), OSC 52 read with a
-  confirmation dialog.
-- **Fonts and ligatures**: shape runs rather than single cells, with `fontWeight`,
-  `lineHeight`, font-feature and per-face metric keys, and honour blink.
-- **Appearance and zoom**: a theme list with light/dark selection and a persisted choice
-  (portable currently ships one hard-coded palette), window opacity and background blur,
-  and font-zoom chords on both shells.
-- **Resize reflow**: re-wrap wrapped lines on width change so shrinking a pane does not
-  garble history. The largest item here and the one allowed to move to 0.16.
-- **Bell**: `bell = none | visual | audio`.
+1. **Synchronized output (DECSET 2026)**: observe begin/end in the PTY stream, hold paint
+   between them so full-screen TUIs (Claude Code, docker, lazygit) stop tearing, and
+   release the hold on a timeout so a crashed client cannot freeze the pane.
+2. **Kitty keyboard protocol**: progressive enhancement, `CSI u` for modified keys, key
+   release events, disambiguated Escape; track the flags a program sets, answer the
+   query, and advertise support in DA1. Agents and Neovim/Helix bind it.
+3. **Styled text**: strikethrough, curly/dotted/dashed underline, underline colour
+   (SGR 4:x, 58), and OSC 8 hyperlinks tracked by the parser instead of the text scan;
+   hover underline and Cmd/Ctrl-click.
+4. **Cursor and focus**: DECSCUSR shapes, focus in/out (CSI ?1004), OSC 52 read with a
+   confirmation dialog.
+5. **Fonts and ligatures**: shape runs rather than single cells, with `fontWeight`,
+   `lineHeight`, font-feature and per-face metric keys, and honour blink.
+6. **Appearance and zoom**: a theme list with light/dark selection and a persisted choice
+   (portable currently ships one hard-coded palette), window opacity and background blur,
+   and font-zoom chords on both shells.
+7. **Resize reflow**: re-wrap wrapped lines on width change so shrinking a pane does not
+   garble history. The largest item here and the one allowed to move to 0.16.
+8. **Bell**: `bell = none | visual | audio`.
 
 **Done when:** `nvim`, `lazygit`, `yazi`, `htop` and a Claude Code session render and
 respond identically to stock Ghostty at the same size, and a scripted transcript of each
