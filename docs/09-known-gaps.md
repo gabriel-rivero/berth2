@@ -49,9 +49,11 @@ app itself has the gaps listed in
 - **Accessibility covers the terminal only.** The focused pane is a `Terminal`
   node with its text; the sidebar, tabs and panels are not in the tree, and there
   is no high-contrast mode.
-- **Settings covers appearance, not shortcuts.** The `⌘,` panel edits font size,
-  display scale, sidebar density, exit/restore behaviour and the agent hooks;
-  key bindings still come from `config.json`.
+- **Settings stops at appearance and shortcuts.** The `⌘,` panel edits font size,
+  display scale, sidebar density, exit/restore, socket mode and every shortcut; font
+  family, theme, profiles and per-provider mute stay in `config.json`.
+- **No file drops.** Tab, workspace and divider drags are internal; a file or folder
+  dropped on a pane does nothing.
 - **Right-to-left text is shaped in terminal panes only.** Sidebar rows, tab
   labels and panel text still draw one character at a time, so an RTL workspace
   name or OSC title is not reordered there.
@@ -96,9 +98,9 @@ app itself has the gaps listed in
 - **Notifications are only in the attention list.** `⌘I` lists unacknowledged
   notifications (Enter jumps and acknowledges); there is no filter, grouping or
   bulk acknowledge, and the list is not reachable from the sidebar.
-- **No dock/taskbar badge or sound.** Desktop banners exist on macOS and Linux; the
-  Windows path is a stub that returns without notifying, so the attention list is the
-  only surface there. `notify_os` in the headless shell prints to stderr.
+- **No dock/taskbar badge, sound or menu-bar item.** Desktop banners exist on macOS and
+  Linux; the Windows path is a stub that returns without notifying, so the attention list
+  is the only surface there. `notify_os` in the headless shell prints to stderr.
 - **Mute is config-only.** `muteProviders` silences desktop notifications at
   launch; there is no Settings row. Usage needs a client to report it: `agent.usage`
   exists and the sidebar shows it, but the bundled hooks do not report tokens or cost
@@ -106,6 +108,8 @@ app itself has the gaps listed in
 
 ### Session and lifecycle
 
+- **No scrollback restore.** A relaunch respawns each terminal from its saved cwd and
+  argv; the buffer it had on screen is gone.
 - **Autosave is debounced.** A change is written 500 ms after the last event, and
   the same snapshot is appended to `journal.ndjson` (five kept). A crash inside
   the debounce loses the last interaction; a corrupt newest entry falls back to
@@ -195,7 +199,8 @@ UniFFI. Known gaps already tracked in the macOS docs:
 - Socket hardening: peer-uid and the token file are in the core and portable
   path, not in this shell's own `SocketServer.swift`, so the Swift app still
   exposes `BERTH_TOKEN` to children.
-- No Instruments profile run against the §9 budgets.
+- The 0.14 Instruments trace covers `berth-gui` only. The Swift shell has no profiling
+  run, and the portable numbers need a rerun once 0.15 touches the renderer.
 - Scrollback is intentionally not restored.
 - Most `config.json` keys are read only by the portable window
   (`fontFamily`, `closeExitedPanes`, `restoreLaunchFlags`, `copyOnSelect`,

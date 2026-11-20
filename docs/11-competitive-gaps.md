@@ -111,6 +111,9 @@ is portable-only, and every macOS gap is UI-only.
    unused, and there is no auto-update. This is the difference between a repo and a
    product, and it is mostly CI work.
 
+Every row of the matrix above is mapped to a milestone, or to a documented decision, in
+the coverage ledger at the end of [docs/04-roadmap.md](04-roadmap.md).
+
 ## 4. ConEmu, the dead Windows incumbent
 
 Last release 2023-07-24 and no maintainer activity since; its issue tracker has been

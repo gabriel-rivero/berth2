@@ -70,7 +70,8 @@ tagged; the AppKit shell inherits these from Ghostty already.
   hover underline and Cmd/Ctrl-click.
 - **Cursor and focus**: DECSCUSR shapes, focus in/out (CSI ?1004), OSC 52 read with a
   confirmation dialog.
-- **Ligatures**: shape runs rather than single cells, with a font-features key.
+- **Fonts and ligatures**: shape runs rather than single cells, with `fontWeight`,
+  `lineHeight`, font-feature and per-face metric keys, and honour blink.
 - **Appearance and zoom**: a theme list with light/dark selection and a persisted choice
   (portable currently ships one hard-coded palette), window opacity and background blur,
   and font-zoom chords on both shells.
@@ -101,7 +102,11 @@ Goal: the layout model cmux and every other terminal already have.
 - **Geometric focus**: arrow-key spatial navigation (M5 carryover).
 - **Window state**: persist geometry, monitor and sidebar width; a second launch brings
   the first window forward instead of exiting.
-- **Sidebar depth**: filter, one row per agent, colour and icon picker.
+- **Sidebar depth**: filter, one row per agent, colour and icon picker, and right-to-left
+  shaping for rows, tab labels and panel text (terminal panes already do this).
+- **Menus, status bar and pointer**: a menu bar and a status line that shows chord mode,
+  broadcast state, pane zoom and the focused pane's cwd and branch; a resize cursor over
+  dividers; right-click menus on tabs and panes; pane swap and move between splits.
 
 **Done when:** three windows with nested splits survive quit and relaunch with geometry
 and focus intact, and a pane can be zoomed, broadcast to, and torn into a window without
@@ -120,10 +125,13 @@ Goal: the prompt becomes a place in the buffer, not a string in a stream.
 - **Paste history**: the last N clipboards with a picker, never persisted to disk.
 - **Quick terminal**: a global-hotkey dropdown window per display, both shells.
 - **Commands and profiles**: user-defined commands from `config.json`, recent-choice
-  ranking, and named launch presets that replace the single `shell` key (argv, env, cwd,
-  shell, label) on both shells.
+  ranking, named launch presets that replace the single `shell` key (argv, env, cwd,
+  shell, label) on both shells, and saving the current tree as a named layout.
 - **Output rules and logging**: regex rules that style matching lines, as ConEmu's
   Highlight and iTerm2's Triggers do, and a per-pane session log written to a file.
+- **Scrollback restore**: opt-in and capped by bytes, so a relaunch keeps the last screen
+  of a pane instead of only its cwd.
+- **File drops**: dropping files and folders on a pane types their quoted paths.
 - **Palette depth**: workspace, tab and group commands, and a palette that indexes the
   new actions.
 
@@ -143,11 +151,18 @@ show its history.
   cost) and show it in a panel; the events already exist, this is storage and UI.
 - **Cost and token meter** per workspace, from `agent.usage`.
 - **Provider coverage**: add the providers that hook without per-project configuration
-  (Gemini CLI, Cursor CLI, Amp) to the current four.
+  (Gemini CLI, Cursor CLI, Amp) to the current four, and detect a provider behind a
+  wrapper script or a renamed argv.
 - **Journal**: replayable structural events, or an explicit decision to keep snapshots
   and say why in the protocol doc.
 - **Headless app-test loop** for the real GUI, so acceptance runs on CI (M5 carryover).
-- **Notification depth**: filters, bulk acknowledge, dock/taskbar badge, optional sound.
+- **Push instead of polling**: `SurfaceOps.surface_exited` and a screen-meta callback, so
+  a shell or the daemon does not poll; a graceful snapshot on SIGINT/SIGTERM.
+- **Notification depth**: filters, bulk acknowledge, dock/taskbar badge, optional sound, a
+  macOS menu-bar item, a mute row in Settings, and a notifications entry reachable from
+  the sidebar.
+- **Accessibility beyond the pane**: sidebar, tabs and panels in the AccessKit tree, and a
+  high-contrast mode.
 
 **Done when:** relaunching or updating the app leaves agent sessions alive, and a
 workspace's inbox shows every transition since it was created.
@@ -157,14 +172,22 @@ workspace's inbox shows every transition since it was created.
 Goal: a product, not a repository.
 
 - **macOS**: notarized Developer ID build in releases, Sparkle auto-update, Homebrew
-  cask. Close the AppKit-only list: search, tab rename/reorder, group UI, geometric
-  focus, terminal accessibility.
-- **Linux**: AppImage or Flatpak beside the .deb and PKGBUILD; AUR submission.
+  cask. Close the AppKit-only list: search, tab rename/reorder and overflow, group UI,
+  geometric focus, terminal accessibility. Move the shell's own socket onto
+  `berth-server`, so peer-uid and the token file apply there too, and read every
+  documented `config.json` key.
+- **Linux**: AppImage or Flatpak beside the .deb and PKGBUILD; AUR submission; a systemd
+  user unit and autostart entry.
 - **Windows**: MSI or winget package, real toast notifications, taskbar progress and jump
-  lists, peer-SID check on the named pipe, and the Windows 11 default-terminal handoff so
-  `cmd` and `pwsh` open in Berth. Elevated panes stay a separate instance, not a PTY.
+  lists, peer-SID check and a per-user pipe name, autostart, and the Windows 11
+  default-terminal handoff so `cmd` and `pwsh` open in Berth. Elevated panes stay a
+  separate instance, not a PTY.
 - **Contract**: freeze the protocol at v1 with semver, regenerate
-  `docs/schema/berth.schema.json`, and publish a typed client example.
+  `docs/schema/berth.schema.json`, publish typed client crates with an example, and close
+  the transport gaps: socket lock, per-client identity, audit trail, rate limit and
+  server-side protocol negotiation.
+- **Platform coverage**: mixed-DPI hotplug tested, and window smokes on Windows and macOS
+  CI, not only Xvfb and Weston.
 - **Docs**: every `config.json` key documented for both shells and a migration note for
   anyone on 0.x.
 
@@ -178,14 +201,55 @@ app updates itself, and an editor plugin can be written against a frozen schema.
 2. **Editor integration** — a `berth` shim so an agent in Neovim/Zed reports state
    without hooks.
 3. **Remote clients** — mobile or web read-only view over the same event stream.
-4. **Browser pane**, **SSH workspaces**, **remote tmux mirror** — only if the above is
+4. **Kitty graphics depth** (shared memory, z-index, direct placements) and **automatic
+   profile switching** per directory, only if a tool or workflow needs them.
+5. **Browser pane**, **SSH workspaces**, **remote tmux mirror** — only if the above is
    boring and stable.
 
 ## Explicitly deferred
 
-Webview panes; iOS; cloud VMs; teams; plugin system; TUI; telemetry; browser automation.
-Auto-update moved into 1.0. Notarized distribution ships with 1.0, when there is someone
-other than me installing it.
+Webview panes; iOS; cloud VMs; teams; plugin system; TUI; telemetry; browser automation;
+collapsible command blocks (prompt marks and jump-to-prompt land in 0.17); agent
+hibernation under memory pressure (the eight-pane budget is 161 MB); a task manager or
+process list (use the shell); Far Manager and DOSBox integration (ConPTY made the hook
+layer obsolete). Auto-update moved into 1.0. Notarized distribution ships with 1.0, when
+there is someone other than me installing it.
+
+## Coverage ledger
+
+Every gap in [docs/11-competitive-gaps.md](11-competitive-gaps.md) and
+[docs/09-known-gaps.md](09-known-gaps.md) maps to one row here. Anything that is not in a
+milestone is listed as deferred with its reason, so a missing feature is a decision and
+not an oversight.
+
+| Area | Owned by |
+| --- | --- |
+| Kitty keyboard, synchronized output, styled underlines, OSC 8, OSC 52 read, focus and cursor reporting | 0.15 |
+| Font weight, line height, metrics, ligatures, blink | 0.15 |
+| Themes, opacity and blur, font zoom | 0.15 |
+| Resize reflow, audio bell | 0.15 |
+| Scrollback restore, paste history, copy mode, search parity and cross-pane search | 0.17 |
+| OSC 133 prompt marks, jump-to-prompt, exit status | 0.17 |
+| Output highlight rules, session logging | 0.17 |
+| Launch profiles, custom commands, named layouts, palette depth | 0.17 |
+| Quake dropdown, file drops | 0.17 |
+| Multiple windows, pane zoom, pane swap, tab tear-off, tab overflow, restart and duplicate | 0.16 |
+| Broadcast input, geometric focus | 0.16 |
+| Menus, status bar, divider cursor, right-click menus, RTL chrome | 0.16 |
+| Window geometry, single-instance handoff, sidebar filter and pickers, per-agent rows | 0.16 |
+| Agent inbox, cost meter, provider coverage and detection, mute row | 0.18 |
+| Notification filters, bulk ack, badge, sound, menu-bar item | 0.18 |
+| Journal semantics, headless app test, push callbacks, graceful SIGTERM | 0.18 |
+| Accessibility beyond the pane, high contrast | 0.18 |
+| Live process durability (detached PTY host or tmux attach) | 0.18 |
+| Notarization, Sparkle, Homebrew, AppImage or Flatpak, AUR, Windows package, autostart | 1.0 |
+| AppKit parity (search, rename/reorder/overflow, groups, geometric focus, a11y, socket, config keys) | 1.0 |
+| Protocol freeze, typed clients, socket lock, client identity and audit, rate limit, negotiation | 1.0 |
+| Taskbar progress and jump lists, Windows 11 default-terminal handoff, elevated instance | 1.0 |
+| Mixed-DPI hotplug and Windows/macOS window CI | 1.0 |
+| Session search, editor shim, remote clients, kitty graphics depth, automatic profiles | After 1.0 |
+| Browser pane, SSH, remote tmux, webview, iOS, cloud, teams, plugins, TUI | Deferred by design |
+| Command blocks, agent hibernation, task manager, Far/DOSBox | Deferred by design |
 
 ## Kill criteria
 
