@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- **Resize reflow.** A column change captures the grid with a newline only where the
+  program broke the line, replays it at the new width, and restores the cursor and the
+  input modes, so narrowing a pane re-wraps history instead of cutting it off.
+  Full-screen programs keep the plain resize because they redraw on SIGWINCH.
+
 ## 0.15.5 — 2026-11-20
 
 ### Features

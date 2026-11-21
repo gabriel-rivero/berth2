@@ -86,10 +86,11 @@ this order, one item per session: item 1 builds the CSI side-channel scanner tha
    `berth-light` and persists, `opacity` fades the window on macOS, and
    `backgroundBlur` reaches Ghostty in the AppKit shell. `Cmd/Ctrl + =`, `-` and `0`
    zoom the font on both shells for the session; `fontSize` stays the base.
-7. **Resize reflow**: re-wrap wrapped lines on width change so shrinking a pane does not
-   garble history. The largest item here and the one allowed to move to 0.16. It moves:
-   `vt100` resizes by truncating and padding rows and keeps no logical line to re-wrap,
-   so reflow needs a grid that models wrap-aware lines, which is a 0.16 change.
+7. **Resize reflow**: landed in 0.15.6. A column change captures the grid with a newline
+   only where the program broke the line, replays it at the new width, and restores the
+   cursor and the input modes, so shrinking a pane re-wraps history instead of cutting
+   it. Alternate-screen programs keep the plain resize because they redraw on SIGWINCH,
+   and images skip it because their anchors are line-based.
 8. **Bell**: landed in 0.15.5. `bell` selects `none`, `visual` (the default pane-border
    flash) or `audio`, which plays the system bell sound. A repeated bell rings once per
    batch, not once per frame.

@@ -42,7 +42,7 @@ is portable-only, and every macOS gap is UI-only.
 | | background blur | ○ | ● | ● | Ghostty, kitty |
 | | focus reporting, cursor shapes (DECSCUSR) | ● | ● | ● | ● |
 | | iTerm2 / kitty / sixel images | ● | ● | ● / ● / ○ | ● |
-| | resize reflow of wrapped lines | ○ | ● | ● | ● |
+| | resize reflow of wrapped lines | ● | ● | ● | ● |
 | | audio bell option | ● | ● | ● | ● |
 | **Scrollback** | configurable depth, wheel, scrollbar | ● | ● | ● | ● |
 | | search | ● | ○ | ● | ● |

@@ -544,3 +544,65 @@ fn given_blinking_text_then_the_screen_view_marks_the_cell() {
         std::thread::sleep(Duration::from_millis(20));
     }
 }
+
+/// A narrow pane must re-wrap history instead of cutting it off.
+#[cfg(unix)]
+#[test]
+fn given_wrapped_output_when_the_surface_narrows_then_no_character_is_lost() {
+    use berth_core::{SpawnRequest, SurfaceOps};
+
+    const TOKEN: &str = "BEGINabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZEND";
+    let host = PtyHost::new();
+    let surface_id = format!("surf-reflow-{}", std::process::id());
+    host.spawn(SpawnRequest {
+        cwd: None,
+        argv: vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            format!("printf '{TOKEN}\\n'; sleep 5"),
+        ],
+        env: vec![("BERTH_SURFACE_ID".into(), surface_id.clone())],
+        cols: 80,
+        rows: 24,
+    })
+    .expect("spawn a writer of a long line");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !row_text(&host, &surface_id).contains(TOKEN) {
+        assert!(
+            Instant::now() < deadline,
+            "the long line never reached the grid:\n{}",
+            row_text(&host, &surface_id)
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    host.resize(&surface_id, 30, 24).expect("narrow the pane");
+    // Narrowing pushes the head of the line into history, so read both.
+    let text = all_text(&host, &surface_id);
+    assert!(
+        text.contains(TOKEN),
+        "the narrow pane lost characters:\n{text}"
+    );
+}
+
+/// History and visible rows, whitespace removed so a re-wrapped line matches.
+#[cfg(unix)]
+fn all_text(host: &PtyHost, surface_id: &str) -> String {
+    host.scrollback_lines(surface_id)
+        .expect("scrollback")
+        .join("")
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect()
+}
+
+/// Every cell of the visible screen, spaces kept, rows joined.
+#[cfg(unix)]
+fn row_text(host: &PtyHost, surface_id: &str) -> String {
+    let view = host.screen_view(surface_id).expect("screen view");
+    view.cells
+        .iter()
+        .map(|cell| cell.contents.as_str())
+        .collect::<String>()
+}

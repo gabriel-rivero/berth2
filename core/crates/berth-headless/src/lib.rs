@@ -92,6 +92,7 @@ pub struct KittyImage {
 }
 
 mod csi;
+mod reflow;
 mod sixel;
 
 use csi::{Csi, CsiScanner};
@@ -1072,10 +1073,19 @@ impl SurfaceOps for PtyHost {
                 pixel_height: pixel_height.min(u32::from(u16::MAX)) as u16,
             })
             .map_err(|error| CoreError::internal(format!("resize: {error}")))?;
-        lock(&surface.screen).set_size(
-            std::num::NonZeroU16::new(rows).expect("rows > 0"),
-            std::num::NonZeroU16::new(cols).expect("cols > 0"),
-        );
+        let images_clear = lock(&surface.images).is_empty();
+        let mut parser = lock(&surface.screen);
+        let (_, old_cols) = parser.screen().size();
+        let target_rows = std::num::NonZeroU16::new(rows).expect("rows > 0");
+        let target_cols = std::num::NonZeroU16::new(cols).expect("cols > 0");
+        let reflowed = (old_cols != target_cols && images_clear)
+            .then(|| reflow::reflowed(&parser, target_rows, target_cols))
+            .flatten();
+        match reflowed {
+            Some(fresh) => *parser = fresh,
+            None => parser.set_size(target_rows, target_cols),
+        }
+        drop(parser);
         lock(&surface.style).clear();
         if let Some((pixel_width, pixel_height)) = pixels {
             let width = (pixel_width / u32::from(cols)).min(u32::from(u16::MAX)) as u16;

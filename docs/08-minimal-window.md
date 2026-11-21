@@ -64,6 +64,11 @@ the macOS window's 12pt labels.
   polls. An idle window costs under 1 % of a core; a screenful of output costs a
   burst. A child printing without pause cannot flood the loop, because at most
   one wake is in flight at a time.
+- A column change re-wraps wrapped history instead of cutting it: the grid is captured
+  with a newline only where the program broke the line, replayed at the new width, and
+  the cursor and input modes are restored. Full-screen programs and panes with images
+  keep the plain resize. Hyperlink and underline-colour spans on existing rows are
+  dropped, because the style map is keyed to the old layout.
 - Real text: bold, italic, dim, underline, inverse, wide characters and 256/RGB
   colours, with a block cursor that blinks and hides when the pane is unfocused
   or the view is scrolled. Right-to-left phrases are shaped once per run, so
