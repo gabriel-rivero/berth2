@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+
+- The portable window no longer cuts the last letter of a word. The cell width rounds
+  up to the font's advance, so a shaped run stays inside its cells instead of losing
+  the tail of its final glyph.
+
 ## 0.15.6 — 2026-11-20
 
 ### Features

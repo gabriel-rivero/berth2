@@ -325,6 +325,9 @@ impl FontRenderer {
 
     /// Width of one cell's advance and height of one line, from the font's own
     /// metrics for a shaped sample.
+    ///
+    /// The advance rounds up: a cell narrower than its glyph made cosmic-text
+    /// clip the tail of a shaped run, which cut the last letter of a word.
     fn measure_cell(&mut self) -> CellSize {
         let primary = self
             .families
@@ -348,7 +351,7 @@ impl FontRenderer {
                 advance += glyph.w;
             }
         }
-        let width = (advance / 10.0).round().max(1.0) as usize;
+        let width = cell_width(advance / 10.0);
         CellSize {
             width,
             height: self
@@ -649,6 +652,12 @@ impl FontRenderer {
     }
 }
 
+/// Round a glyph advance up to whole pixels, so a cell never sits inside its
+/// own glyph. Rounding down made a shaped run overhang its box and lose ink.
+fn cell_width(advance: f32) -> usize {
+    advance.ceil().max(1.0) as usize
+}
+
 /// Cut a cell bitmap down to the painted box.
 fn crop(
     (left, top, box_width, box_height): (i32, i32, i32, i32),
@@ -860,6 +869,26 @@ mod tests {
             advance_of(&mut fallback, "i"),
             "the system monospace face is not monospaced"
         );
+    }
+
+    #[test]
+    fn given_a_fractional_advance_when_rounded_then_the_cell_never_shrinks_below_it() {
+        assert_eq!(cell_width(14.4), 15);
+        assert_eq!(cell_width(14.0), 14);
+        assert_eq!(cell_width(0.0), 1);
+    }
+
+    #[test]
+    fn given_a_face_with_a_fractional_advance_then_the_cell_fits_it() {
+        let mut font = FontRenderer::new(24.0, &[], Options::default());
+        let advance = advance_of(&mut font, "M");
+        if advance.fract() > f32::EPSILON {
+            assert!(
+                font.cell().width as f32 >= advance,
+                "cell {} is narrower than the {advance} advance",
+                font.cell().width
+            );
+        }
     }
 
     #[test]

@@ -2,7 +2,7 @@
 
 A native macOS terminal workspace for running coding agents side by side — built on Ghostty's renderer, with a typed agent lifecycle and a push-based protocol.
 
-Status: 0.15.6. The terminal floor landed across 0.15: synchronized output, the Kitty
+Status: 0.15.7. The terminal floor landed across 0.15: synchronized output, the Kitty
 keyboard protocol, styled text and OSC 8 hyperlinks, cursor shapes and focus reporting,
 font weights and per-face metrics with ligatures and blink, a light/dark theme list,
 window opacity, font zoom and a selectable bell. 0.15.6 adds resize reflow, so narrowing
@@ -18,7 +18,7 @@ make fetch-engine # macOS, Command Line Tools only: download the CI-built Ghostt
 make run          # macOS: bundle + launch
 ```
 
-The Rust half — `berth-core`, `berth-transport`, `berth-server`, `berth-headless`, `berth-gui` and the `berth` CLI — builds and tests on Linux, macOS and Windows, all at 0.15.6. `berth-headless` is the portable PTY/protocol shell; `berth-gui` is the visible window (winit + softbuffer + cosmic-text, no GPU): real system fonts with Unicode and emoji, scrollback, selection, clipboard, OSC title/cwd/bell/progress, draggable dividers, per-pane tabs and a workspace sidebar with groups, agent rows and progress, plus
+The Rust half — `berth-core`, `berth-transport`, `berth-server`, `berth-headless`, `berth-gui` and the `berth` CLI — builds and tests on Linux, macOS and Windows, all at 0.15.7. `berth-headless` is the portable PTY/protocol shell; `berth-gui` is the visible window (winit + softbuffer + cosmic-text, no GPU): real system fonts with Unicode and emoji, scrollback, selection, clipboard, OSC title/cwd/bell/progress, draggable dividers, per-pane tabs and a workspace sidebar with groups, agent rows and progress, plus
 mouse reporting, links, the command palette, attention list and settings panel.
 See [docs/07-headless-shell.md](docs/07-headless-shell.md) and [docs/08-minimal-window.md](docs/08-minimal-window.md). Feature parity with the Swift/AppKit shell is tracked in [docs/09-known-gaps.md](docs/09-known-gaps.md); the Swift shell remains the macOS default, and both shells speak the same protocol.
 
