@@ -447,17 +447,17 @@ impl<'a> Painter<'a> {
         cell.width
     }
 
-    /// Draw a shaped run of cells at `origin`, `width` pixels wide.
+    /// Draw a shaped run of cells at `origin`.
     fn glyph_run(
         &mut self,
         font: &mut FontRenderer,
         origin: (usize, usize),
-        text: &str,
-        width: usize,
+        run: &ShapeRun,
         style: TextStyle,
         color: u32,
     ) {
-        let Some(raster) = font.raster_run(text, width, style) else {
+        let width = (run.end - run.start) * font.cell().width;
+        let Some(raster) = font.raster_run(&run.text, width, &run.cells, run.rtl, style) else {
             return;
         };
         let x0 = origin.0 as i32 + raster.left;
@@ -937,14 +937,7 @@ impl<'a> Painter<'a> {
                     bold: first.bold,
                     italic: first.italic,
                 };
-                self.glyph_run(
-                    font,
-                    origin,
-                    &run.text,
-                    (run.end - run.start) * cell.width,
-                    style,
-                    fg,
-                );
+                self.glyph_run(font, origin, run, style, fg);
             }
         }
         if view.scrollback > 0 && view.scrollback_len > 0 {
@@ -1387,6 +1380,10 @@ struct ShapeRun {
     start: usize,
     end: usize,
     text: String,
+    /// Byte offset of each cell's text in `text`, so each glyph can go back on
+    /// its cell. Right-to-left runs rely on the shaper's own positions.
+    cells: Vec<usize>,
+    rtl: bool,
 }
 
 /// Every run that should be shaped as one string: right-to-left script first,
@@ -1412,12 +1409,14 @@ fn shaping_runs(
         }
         let first = &row[left];
         let mut text = String::new();
+        let mut cells = Vec::new();
         let mut right = left;
         while right < row.len()
             && !runs.iter().any(|run| right >= run.start && right < run.end)
             && can_shape_ltr(&row[right], base + right, cursor)
             && same_run_style(first, &row[right])
         {
+            cells.push(text.len());
             text.push_str(&row[right].contents);
             right += 1;
         }
@@ -1426,6 +1425,8 @@ fn shaping_runs(
                 start: left,
                 end: right,
                 text,
+                cells,
+                rtl: false,
             });
         }
         left = right.max(left + 1);
@@ -1527,6 +1528,8 @@ fn rtl_runs(cells: &[CellView], base: usize, cols: usize, cursor: Option<usize>)
                 start: i,
                 end: j,
                 text,
+                cells: Vec::new(),
+                rtl: true,
             });
         }
         i = j.max(i + 1);
@@ -1723,6 +1726,15 @@ mod tests {
     fn given_a_latin_row_then_no_rtl_run_is_grouped() {
         let cells = row(&["a", "r", "_", "S", "A", " ", "x"]);
         assert!(rtl_runs(&cells, 0, cells.len(), None).is_empty());
+    }
+
+    #[test]
+    fn given_a_run_then_each_cell_keeps_its_byte_offset() {
+        let cells = row(&["e\u{301}", "x"]);
+        let runs = shaping_runs(&cells, 0, cells.len(), None);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].cells, vec![0, 3]);
+        assert!(!runs[0].rtl);
     }
 
     #[test]

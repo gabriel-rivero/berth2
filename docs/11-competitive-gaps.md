@@ -1,6 +1,6 @@
 # Competitive gap analysis
 
-Audited 2026-11-20 at 0.15.7; 0.15 items are marked as they land. Berth's column is read
+Audited 2026-11-20 at 0.15.8; 0.15 items are marked as they land. Berth's column is read
 from source in this tree; the competitor columns come from vendor docs and release notes of
 the same month, not from memory. The purpose is to separate three things that get
 confused: **already shipped**, **missing and worth building**, and **deliberately not

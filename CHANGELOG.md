@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+
+- Terminal text now sits on the cell grid. A shaped run kept the font's natural
+  advances, which are narrower than the rounded cell, so a long word ended before
+  its last cell and the cursor sat past the text. Each glyph now lands on the cell
+  that holds it.
+
 ## 0.15.7 — 2026-11-21
 
 ### Fixes

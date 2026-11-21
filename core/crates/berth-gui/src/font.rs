@@ -111,6 +111,8 @@ struct CacheKey {
     italic: bool,
     /// Pixel width of a shaped text run; `None` for a single cell.
     run_width: Option<usize>,
+    /// Byte offset of each cell's text in a run, empty for a single cell.
+    cells: Vec<usize>,
 }
 
 /// The glyph cache ceiling. Beyond this the cache is dropped; a terminal screen
@@ -371,6 +373,7 @@ impl FontRenderer {
             bold: style.bold,
             italic: style.italic,
             run_width: None,
+            cells: Vec::new(),
         };
         if let Some(hit) = self.cache.get(&key) {
             return hit.clone();
@@ -388,10 +391,15 @@ impl FontRenderer {
     /// A cell cannot be shaped alone when the text is right to left: Arabic
     /// joins across cell boundaries and the shaped line sits at the run's
     /// right edge, not at each cell's origin.
+    /// `cells` holds the byte offset of each cell's text in `text`, so a glyph
+    /// can be put back on its cell. Right-to-left runs keep the shaper's
+    /// positions, which anchor the whole phrase to the box's right edge.
     pub fn raster_run(
         &mut self,
         text: &str,
         width: usize,
+        cells: &[usize],
+        rtl: bool,
         style: TextStyle,
     ) -> Option<Arc<Raster>> {
         let width = width.max(1);
@@ -400,6 +408,7 @@ impl FontRenderer {
             bold: style.bold,
             italic: style.italic,
             run_width: Some(width),
+            cells: cells.to_vec(),
         };
         if let Some(hit) = self.cache.get(&key) {
             return hit.clone();
@@ -407,7 +416,9 @@ impl FontRenderer {
         if self.cache.len() >= CACHE_LIMIT {
             self.cache.clear();
         }
-        let raster = self.render_run(text, width, style).map(Arc::new);
+        let raster = self
+            .render_run(text, width, cells, rtl, style)
+            .map(Arc::new);
         self.cache.insert(key, raster.clone());
         raster
     }
@@ -564,11 +575,18 @@ impl FontRenderer {
         Some(raster)
     }
 
-    fn render_run(&mut self, text: &str, width: usize, style: TextStyle) -> Option<Raster> {
+    fn render_run(
+        &mut self,
+        text: &str,
+        width: usize,
+        cells: &[usize],
+        rtl: bool,
+        style: TextStyle,
+    ) -> Option<Raster> {
         let families = self.families.clone();
         for family in &families {
             let attrs = attrs_for(family.as_family(), style, self.weight, &self.features);
-            if let Some(raster) = self.shape_run(text, width, &attrs) {
+            if let Some(raster) = self.shape_run(text, width, cells, rtl, &attrs) {
                 return Some(raster);
             }
         }
@@ -578,7 +596,18 @@ impl FontRenderer {
     /// Shape a whole run into a box exactly `width` pixels wide. Unlike a cell,
     /// the box keeps its alignment: a right-to-left run is anchored to its
     /// right edge, which is where the first printed cell belongs.
-    fn shape_run(&mut self, text: &str, width: usize, attrs: &Attrs<'_>) -> Option<Raster> {
+    ///
+    /// A left-to-right glyph moves to the cell that holds its cluster. Shaped
+    /// advances differ from the whole cell width, so the natural layout drifted
+    /// and left the cursor past the end of a long word.
+    fn shape_run(
+        &mut self,
+        text: &str,
+        width: usize,
+        cells: &[usize],
+        rtl: bool,
+        attrs: &Attrs<'_>,
+    ) -> Option<Raster> {
         let line_height = self.metrics.line_height;
         let margin_y = (self.cell.height / 2) as i32;
         let height = self.cell.height + (margin_y * 2) as usize;
@@ -591,9 +620,18 @@ impl FontRenderer {
         let mut color: Option<Vec<u8>> = None;
         let mut touched = false;
 
+        let cell_width = self.cell.width as f32;
         let run = self.buffer.layout_runs().next()?;
         for glyph in run.glyphs {
-            let physical = glyph.physical((0.0, run.line_y), 1.0);
+            // The shaper offsets a glyph from its shaping position plus its own
+            // logical offset; both are undone to land on the cluster's cell.
+            let logical = glyph.x + glyph.font_size * glyph.x_offset;
+            let snap = if rtl {
+                0.0
+            } else {
+                cell_at(cells, glyph.start) as f32 * cell_width - logical
+            };
+            let physical = glyph.physical((snap, run.line_y), 1.0);
             let Some(image) = self
                 .swash
                 .get_image(&mut self.font_system, physical.cache_key)
@@ -656,6 +694,13 @@ impl FontRenderer {
 /// own glyph. Rounding down made a shaped run overhang its box and lose ink.
 fn cell_width(advance: f32) -> usize {
     advance.ceil().max(1.0) as usize
+}
+
+/// Cell index of a glyph cluster, given the byte offset of each cell's text.
+fn cell_at(cells: &[usize], byte: usize) -> usize {
+    cells
+        .partition_point(|&start| start <= byte)
+        .saturating_sub(1)
 }
 
 /// Cut a cell bitmap down to the painted box.
@@ -773,7 +818,13 @@ mod tests {
         let mut font = renderer();
         let cell = font.cell();
         let raster = font
-            .raster_run("iiii", cell.width * 4, TextStyle::NORMAL)
+            .raster_run(
+                "iiii",
+                cell.width * 4,
+                &[0, 1, 2, 3],
+                false,
+                TextStyle::NORMAL,
+            )
             .expect("a run raster");
         let mut right = 0;
         match &raster.bitmap {
@@ -806,7 +857,7 @@ mod tests {
     fn given_an_arabic_phrase_when_shaped_as_a_run_then_it_has_ink_at_the_run_width() {
         let mut font = renderer();
         let raster = font
-            .raster_run("التبغ ضار بالصحة.", 200, TextStyle::NORMAL)
+            .raster_run("التبغ ضار بالصحة.", 200, &[], true, TextStyle::NORMAL)
             .expect("a system Arabic face should shape the run");
         assert_eq!(raster.width, 200);
         assert!(raster.height >= font.cell().height);
@@ -889,6 +940,48 @@ mod tests {
                 font.cell().width
             );
         }
+    }
+
+    #[test]
+    fn given_a_byte_offset_when_the_cell_is_found_then_it_follows_the_map() {
+        assert_eq!(cell_at(&[], 0), 0);
+        assert_eq!(cell_at(&[0, 1, 2], 0), 0);
+        assert_eq!(cell_at(&[0, 1, 2], 2), 2);
+        // A combining mark extends its cell's bytes, not the cell index.
+        assert_eq!(cell_at(&[0, 3], 3), 1);
+    }
+
+    #[test]
+    fn given_a_long_run_when_shaped_then_its_last_glyph_sits_on_the_cell_grid() {
+        let mut font = renderer();
+        let cell = font.cell();
+        let cells: Vec<usize> = (0..7).collect();
+        let single = font.raster("m", TextStyle::NORMAL).expect("m raster");
+        let mut single_right = 0;
+        if let Bitmap::Mask(mask) = &single.bitmap {
+            for (index, &alpha) in mask.iter().enumerate() {
+                if alpha > 0 {
+                    single_right = single_right.max((index % single.width) as i32);
+                }
+            }
+        }
+        let run = font
+            .raster_run("mmmmmmm", 7 * cell.width, &cells, false, TextStyle::NORMAL)
+            .expect("a run raster");
+        let mut right = 0;
+        if let Bitmap::Mask(mask) = &run.bitmap {
+            for (index, &alpha) in mask.iter().enumerate() {
+                if alpha > 0 {
+                    right = right.max((index % run.width) as i32);
+                }
+            }
+        }
+        // The shipped bug left the run on the font's advance, which is narrower
+        // than the cell, so the last letter ended short of the cursor's cell.
+        assert!(
+            right >= 6 * cell.width as i32 + single_right - 1,
+            "the last glyph ended at {right}, off the cell grid"
+        );
     }
 
     #[test]
