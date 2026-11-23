@@ -1,6 +1,6 @@
 # Known gaps and missing behavior
 
-Last audited: 2026-11-20, code at the 0.15.8 release; 0.15 items are marked as they land.
+Last audited: 2026-11-23, code at the 0.15.9 release; 0.15 items are marked as they land.
 The audit covers real text, scrollback,
 selection with auto-scroll, clipboard, mouse reporting, IME, links, OSC events,
 divider and sidebar dragging, the palette, attention and settings panels, agent
