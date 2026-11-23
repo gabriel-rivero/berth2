@@ -164,32 +164,124 @@ pub struct FontRenderer {
     faces: HashMap<(usize, bool, bool), Option<fontdb::ID>>,
 }
 
+/// Faces tried in order when `fontFamily` names nothing the system has. Each
+/// one carries programming ligatures, so the default draws them instead of
+/// falling back to a system monospace that has none.
+const DEFAULT_FAMILIES: &[&str] = &[
+    "JetBrains Mono",
+    "Fira Code",
+    "MesloLGS NF",
+    "Cascadia Code",
+    "Hack",
+    "VictorMono Nerd Font Mono",
+    "Iosevka",
+    "Monaspace Neon",
+    "Hasklig",
+    "Monoid",
+];
+
+/// The database's own spelling of `name` when an installed face carries it.
+/// The shaping lookup is not required to be case-insensitive, so echoing the
+/// user's casing can miss.
+fn installed_family(database: &fontdb::Database, name: &str) -> Option<String> {
+    let wanted = name.trim();
+    if wanted.is_empty() {
+        return None;
+    }
+    database.faces().find_map(|face| {
+        face.families
+            .iter()
+            .find(|(family, _)| family.eq_ignore_ascii_case(wanted))
+            .map(|(family, _)| family.clone())
+    })
+}
+
+/// The family the settings row reports for an unset `fontFamily`: the first
+/// preferred ligature face this system has, else the system monospace.
+pub fn default_family_name() -> String {
+    static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    NAME.get_or_init(|| {
+        let (_, database) = shared_database();
+        DEFAULT_FAMILIES
+            .iter()
+            .find_map(|name| installed_family(&database, name))
+            .unwrap_or_else(|| system_monospace_name(&database))
+    })
+    .clone()
+}
+
+/// Every installed family that declares itself monospaced, sorted for the
+/// settings picker. Hidden system faces (a leading dot) stay out of the list;
+/// the default row already reaches them. The list is cached because the font
+/// database only changes when the user installs a font and relaunches.
+pub fn installed_monospace_families() -> Vec<String> {
+    static NAMES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    NAMES
+        .get_or_init(|| {
+            let (_, database) = shared_database();
+            let mut names: Vec<String> = Vec::new();
+            for face in database.faces() {
+                if !face.monospaced {
+                    continue;
+                }
+                let Some((name, _)) = face.families.first() else {
+                    continue;
+                };
+                let hidden = name.starts_with('.')
+                    || name.contains("Emoji")
+                    || name.contains("emoji")
+                    || name.contains("Bitmap");
+                let known = names
+                    .iter()
+                    .any(|existing| existing.eq_ignore_ascii_case(name));
+                if !hidden && !known {
+                    names.push(name.clone());
+                }
+            }
+            names.sort_by_key(|name| name.to_lowercase());
+            names
+        })
+        .clone()
+}
+
+/// The family the generic `Monospace` resolves to, so the default row can name
+/// the face the user already sees.
+fn system_monospace_name(database: &fontdb::Database) -> String {
+    database
+        .query(&fontdb::Query {
+            families: &[fontdb::Family::Monospace],
+            weight: fontdb::Weight::NORMAL,
+            stretch: fontdb::Stretch::Normal,
+            style: fontdb::Style::Normal,
+        })
+        .and_then(|id| database.face(id))
+        .and_then(|face| face.families.first().map(|(name, _)| name.clone()))
+        .unwrap_or_else(|| "System monospace".to_string())
+}
+
 /// Every configured name that is installed, in the user's order, then the
 /// generic families. Shaping walks this list, so a Nerd Font later in
 /// `fontFamily` still supplies the icons and powerline separators the first
 /// face lacks. Names are matched case-insensitively; an unknown name is
 /// skipped rather than fatal, so a config copied from another machine opens.
+/// With nothing installed, the preferred ligature face leads.
 fn resolve_families(font_system: &FontSystem, names: &[String]) -> Vec<FamilyOwned> {
+    let database = font_system.db();
     let mut families: Vec<FamilyOwned> = Vec::new();
     for name in names {
-        let wanted = name.trim();
-        if wanted.is_empty() {
-            continue;
-        }
-        // Keep the database's own spelling: the shaping lookup is not required
-        // to be case-insensitive, so echoing the user's casing can miss.
-        let installed = font_system.db().faces().find_map(|face| {
-            face.families
-                .iter()
-                .find(|(family, _)| family.eq_ignore_ascii_case(wanted))
-                .map(|(family, _)| family.clone())
-        });
-        if let Some(installed) = installed {
+        if let Some(installed) = installed_family(database, name) {
             let family = FamilyOwned::Name(installed.into());
             if !families.contains(&family) {
                 families.push(family);
             }
         }
+    }
+    if families.is_empty()
+        && let Some(default) = DEFAULT_FAMILIES
+            .iter()
+            .find_map(|name| installed_family(database, name))
+    {
+        families.push(FamilyOwned::Name(default.into()));
     }
     if families.is_empty() {
         families.push(FamilyOwned::Monospace);
@@ -893,6 +985,39 @@ mod tests {
             .unwrap_or(0.0)
     }
 
+    /// Glyph ids a string shapes to with the leading face. A ligature shows up
+    /// as a substitution the font would not make for the characters alone.
+    fn run_glyph_ids(font: &mut FontRenderer, text: &str) -> Vec<u16> {
+        let primary = font
+            .families
+            .first()
+            .cloned()
+            .unwrap_or(FamilyOwned::Monospace);
+        let attrs = attrs_for(
+            primary.as_family(),
+            TextStyle::NORMAL,
+            font.weight,
+            &font.features,
+        );
+        font.buffer
+            .set_size(Some(f32::MAX), Some(font.metrics.line_height * 2.0));
+        font.buffer.set_text(text, &attrs, Shaping::Advanced, None);
+        font.buffer.shape_until_scroll(&mut font.font_system, false);
+        font.buffer
+            .layout_runs()
+            .next()
+            .map(|run| run.glyphs.iter().map(|glyph| glyph.glyph_id).collect())
+            .unwrap_or_default()
+    }
+
+    /// Name of the preferred face this system has, if any.
+    fn installed_default() -> Option<String> {
+        let (_, database) = shared_database();
+        DEFAULT_FAMILIES
+            .iter()
+            .find_map(|name| installed_family(&database, name))
+    }
+
     #[test]
     fn given_a_configured_face_when_shaped_then_every_glyph_advances_equally() {
         let installed = {
@@ -1044,22 +1169,48 @@ mod tests {
     }
 
     #[test]
-    fn given_no_family_names_when_resolved_then_the_system_monospace_leads() {
+    fn given_no_family_names_when_resolved_then_an_installed_ligature_face_leads() {
         let system = FontSystem::new();
-        assert_eq!(
-            resolve_families(&system, &[]).first(),
-            Some(&FamilyOwned::Monospace)
-        );
+        let expected = installed_default()
+            .map(|name| FamilyOwned::Name(name.into()))
+            .unwrap_or(FamilyOwned::Monospace);
+        assert_eq!(resolve_families(&system, &[]).first(), Some(&expected));
     }
 
     #[test]
-    fn given_an_uninstalled_family_name_when_resolved_then_it_falls_back_to_monospace() {
+    fn given_an_uninstalled_family_name_when_resolved_then_the_default_face_leads() {
         let system = FontSystem::new();
         let names = vec!["No Such Face 12345".to_string()];
-        assert_eq!(
-            resolve_families(&system, &names).first(),
-            Some(&FamilyOwned::Monospace)
-        );
+        let expected = installed_default()
+            .map(|name| FamilyOwned::Name(name.into()))
+            .unwrap_or(FamilyOwned::Monospace);
+        assert_eq!(resolve_families(&system, &names).first(), Some(&expected));
+    }
+
+    #[test]
+    fn given_the_default_face_then_a_run_uses_the_font_ligature() {
+        let Some(default) = installed_default() else {
+            // No preferred ligature face installed; the system monospace has
+            // no ligature table, so there is nothing to assert.
+            return;
+        };
+        let mut font = renderer();
+        let pair = run_glyph_ids(&mut font, "=>");
+        let mut separate = run_glyph_ids(&mut font, "=");
+        separate.extend(run_glyph_ids(&mut font, ">"));
+        assert_ne!(pair, separate, "{default} shaped `=>` without a ligature");
+    }
+
+    #[test]
+    fn given_the_installed_monospace_list_then_it_is_sorted_and_skips_hidden_faces() {
+        let names = installed_monospace_families();
+        let mut sorted = names.clone();
+        sorted.sort_by_key(|name| name.to_lowercase());
+        assert_eq!(names, sorted);
+        assert!(names.iter().all(|name| !name.starts_with('.')));
+        let mut unique = names.clone();
+        unique.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+        assert_eq!(names.len(), unique.len());
     }
 
     #[test]

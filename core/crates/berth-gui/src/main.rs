@@ -1154,9 +1154,7 @@ impl Gui {
         let scale = window.scale_factor();
         if (scale - self.scale).abs() > f64::EPSILON {
             self.scale = scale;
-            self.font = None;
-            self.chrome_font = None;
-            self.sized.clear();
+            self.invalidate_fonts();
         }
     }
 
@@ -3462,6 +3460,10 @@ impl Gui {
     fn invalidate_fonts(&mut self) {
         self.font = None;
         self.chrome_font = None;
+        // Drop pre-warmed renderers too, so a font or scale change is not
+        // overwritten by the job spawned at startup.
+        self.font_job = None;
+        self.chrome_job = None;
         self.sized.clear();
     }
 

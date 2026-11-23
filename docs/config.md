@@ -63,10 +63,14 @@ when the window moves to a display with a different scale factor.
 - `fontFamily` takes one name or a list, the shape Ghostty accepts. The first
   installed name draws the text; the rest fill in what it lacks, in order, so a
   Nerd Font later in the list supplies prompt icons and powerline separators.
-  An unknown name is skipped, and an empty list or no installed match keeps the
-  system monospace. Terminal and chrome (tabs, sidebar) use the same list. It
-  applies at startup and when the window rebuilds its fonts, so restart after
-  editing it.
+  An unknown name is skipped. An empty list, or no installed match, uses the
+  first installed face from a built-in ligature list (JetBrains Mono, Fira Code,
+  MesloLGS NF, Cascadia Code, Hack, Victor Mono, Iosevka and a few others)
+  before the system monospace. Terminal and chrome (tabs, sidebar) use the same
+  list. Settings → **Font** cycles the default and every installed monospace
+  face, applies the choice without a relaunch, and writes it here; the default
+  keeps any fallbacks already in the list. The row names the resolved default,
+  for example `Default (Monaco)` when no ligature face is installed.
 - `fontWeight` is the normal-text weight, a number `100…900` or a name such as
   `"medium"` or `"semi-bold"`. Bold cells use at least 700.
 - `lineHeight` is the line height as a multiple of the font size, clamped to

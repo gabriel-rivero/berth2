@@ -27,7 +27,8 @@ app itself has the gaps listed in
 - **Font options, ligatures and zoom.** `fontFamily` picks the face at `fontSize` ×
   `fontScale`; `fontWeight`, `lineHeight`, `fontFeatures` and per-face `fontMetrics`
   tune it. Adjacent cells with the same style are shaped as one run, so ligatures
-  render. `Cmd/Ctrl + =`, `-` and `0` zoom.
+  render, and the default prefers an installed ligature face. Settings → **Font**
+  cycles the installed monospace faces. `Cmd/Ctrl + =`, `-` and `0` zoom.
 - **Two palettes.** `theme` selects `berth-dark` or `berth-light`, and `opacity` fades
   the window on macOS. The terminal's 16-colour ANSI table is still fixed, and the
   portable window cannot blur what is behind it: its software renderer writes opaque

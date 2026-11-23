@@ -620,6 +620,20 @@ impl Config {
         }
     }
 
+    /// Pick the primary face for the next font rebuild. `None` returns to the
+    /// built-in default; a name moves to the front and keeps the fallbacks
+    /// that were already configured after it.
+    pub fn set_font_family(&mut self, primary: Option<String>) {
+        match primary {
+            None => self.font_family.clear(),
+            Some(name) => {
+                self.font_family
+                    .retain(|existing| !existing.eq_ignore_ascii_case(&name));
+                self.font_family.insert(0, name);
+            }
+        }
+    }
+
     /// The palette this config selects. An unknown name keeps the dark theme.
     pub fn theme(&self) -> crate::theme::Theme {
         crate::theme::Theme::named(&self.theme).unwrap_or_default()
@@ -702,7 +716,10 @@ impl Config {
             object.remove("opacity");
         }
         object.insert("bell".into(), serde_json::json!(self.bell.name()));
-        if !self.font_family.is_empty() {
+        if self.font_family.is_empty() {
+            // Picking the default must clear a family a previous save wrote.
+            object.remove("fontFamily");
+        } else {
             object.insert("fontFamily".into(), serde_json::json!(self.font_family));
         }
         object.insert(
@@ -1176,6 +1193,35 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert!(saved.get("fontFamily").is_none());
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn given_a_picked_font_when_cleared_then_save_drops_the_previous_key() {
+        let path = temp_path("clearfamily");
+        let mut config = Config {
+            font_family: vec!["Fira Code".to_string()],
+            ..Config::default()
+        };
+        config.save_to(&path).unwrap();
+        config.set_font_family(None);
+        config.save_to(&path).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(saved.get("fontFamily").is_none());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn given_picked_fonts_when_replaced_then_the_new_face_leads_and_fallbacks_stay() {
+        let mut config = Config {
+            font_family: vec!["Monaco".to_string(), "VictorMono NFM".to_string()],
+            ..Config::default()
+        };
+        config.set_font_family(Some("VictorMono NFM".to_string()));
+        assert_eq!(
+            config.font_family,
+            vec!["VictorMono NFM".to_string(), "Monaco".to_string()]
+        );
     }
 
     #[test]

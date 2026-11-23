@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- **Font picker in the portable settings.** The Font row cycles the built-in
+  default and every installed monospace face. The window rebuilds its glyphs on
+  the change, and the choice is written to `fontFamily` in `config.json`.
+
+### Fixes
+
+- **Ligatures now show with the default font.** An unset `fontFamily` fell back
+  to the system monospace, which on macOS is Monaco, and Monaco has no
+  programming ligatures, so `=>`, `!=` and `===` drew as separate glyphs
+  however they were shaped. The default now prefers an installed ligature face
+  (JetBrains Mono, Fira Code, Victor Mono, Meslo, Cascadia Code, Hack, Iosevka)
+  and keeps the system monospace last.
+
 ## 0.15.8 — 2026-11-21
 
 ### Fixes

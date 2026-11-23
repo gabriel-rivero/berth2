@@ -13,6 +13,7 @@ const SOCKET_MODES: [Option<&str>; 3] = [Some("local"), Some("trusted"), Some("o
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Field {
+    FontFamily,
     FontSize,
     FontScale,
     Theme,
@@ -60,6 +61,11 @@ pub fn rows(config: &Config, recording: Option<Action>, notice: Option<&str>) ->
         "Window opacity (macOS)"
     };
     let mut rows = vec![
+        Row {
+            field: Field::FontFamily,
+            label: "Font".into(),
+            value: font_label(config),
+        },
         Row {
             field: Field::FontSize,
             label: "Font size".into(),
@@ -181,9 +187,67 @@ fn theme_name(config: &Config) -> &str {
     }
 }
 
+/// The font row's value: the configured primary face, or the name the default
+/// resolves to so the row says which face the window actually uses.
+fn font_label(config: &Config) -> String {
+    match config.font_family.first() {
+        Some(name) => name.clone(),
+        None => format!("Default ({})", crate::font::default_family_name()),
+    }
+}
+
+/// The font row's choices: the built-in default, every installed monospace
+/// face, then any configured name this system lacks so it stays visible.
+fn font_choices(config: &Config) -> Vec<Option<String>> {
+    let mut choices: Vec<Option<String>> = vec![None];
+    let installed = crate::font::installed_monospace_families();
+    choices.extend(installed.iter().cloned().map(Some));
+    for name in &config.font_family {
+        let known = choices
+            .iter()
+            .flatten()
+            .any(|choice| choice.eq_ignore_ascii_case(name));
+        if !known {
+            choices.push(Some(name.clone()));
+        }
+    }
+    choices
+}
+
+/// Position of the configured primary face in the choice list.
+fn font_index(config: &Config, choices: &[Option<String>]) -> i32 {
+    let Some(current) = config.font_family.first() else {
+        return 0;
+    };
+    choices
+        .iter()
+        .position(|choice| {
+            choice
+                .as_deref()
+                .is_some_and(|name| name.eq_ignore_ascii_case(current))
+        })
+        .unwrap_or(0) as i32
+}
+
 /// Move a numeric or cycling value by one step.
 pub fn adjust(config: &mut Config, field: Field, delta: i32) -> Change {
     match field {
+        Field::FontFamily => {
+            let choices = font_choices(config);
+            let index = font_index(config, &choices);
+            let next = (index + delta).rem_euclid(choices.len() as i32) as usize;
+            let picked = choices[next].clone();
+            let unchanged = match (&picked, config.font_family.first()) {
+                (None, None) => true,
+                (Some(next), Some(current)) => next.eq_ignore_ascii_case(current),
+                _ => false,
+            };
+            if unchanged {
+                return Change::None;
+            }
+            config.set_font_family(picked);
+            Change::Font
+        }
         Field::FontSize => {
             let size = (config.font_size + delta as f32).clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
             if (size - config.font_size).abs() < f32::EPSILON {
@@ -313,8 +377,42 @@ mod tests {
     fn given_the_settings_rows_when_built_then_every_action_has_a_row() {
         let config = Config::default();
         let rows = rows(&config, None, None);
-        assert_eq!(rows.len(), 13 + Action::ALL.len());
-        assert_eq!(rows[0].label, "Font size");
+        assert_eq!(rows.len(), 14 + Action::ALL.len());
+        assert_eq!(rows[0].label, "Font");
+        assert_eq!(rows[1].label, "Font size");
+    }
+
+    #[test]
+    fn given_the_font_row_when_adjusted_then_it_cycles_installed_faces() {
+        let mut config = Config::default();
+        let choices = font_choices(&config);
+        assert_eq!(choices.first(), Some(&None));
+        if choices.len() < 2 {
+            // No installed monospace face beyond the default on this system.
+            assert_eq!(adjust(&mut config, Field::FontFamily, 1), Change::None);
+            return;
+        }
+        assert_eq!(adjust(&mut config, Field::FontFamily, 1), Change::Font);
+        assert_eq!(
+            config.font_family.first().map(String::as_str),
+            choices[1].as_deref()
+        );
+        assert_eq!(adjust(&mut config, Field::FontFamily, -1), Change::Font);
+        assert!(config.font_family.is_empty());
+    }
+
+    #[test]
+    fn given_an_uninstalled_configured_font_then_the_row_keeps_it_visible() {
+        let config = Config {
+            font_family: vec!["No Such Face 12345".to_string()],
+            ..Config::default()
+        };
+        let choices = font_choices(&config);
+        assert_eq!(
+            choices.last(),
+            Some(&Some("No Such Face 12345".to_string()))
+        );
+        assert_eq!(font_index(&config, &choices), choices.len() as i32 - 1);
     }
 
     #[test]
