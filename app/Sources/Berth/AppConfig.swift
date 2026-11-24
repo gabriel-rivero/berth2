@@ -70,6 +70,9 @@ enum ShortcutAction: String, CaseIterable {
     case zoomOut
     case zoomReset
     case settings
+    case search
+    case previousPrompt
+    case nextPrompt
 
     var title: String {
         switch self {
@@ -99,6 +102,9 @@ enum ShortcutAction: String, CaseIterable {
         case .zoomOut: return "Zoom Out"
         case .zoomReset: return "Actual Size"
         case .settings: return "Settings…"
+        case .search: return "Find…"
+        case .previousPrompt: return "Previous Prompt"
+        case .nextPrompt: return "Next Prompt"
         }
     }
 
@@ -130,6 +136,9 @@ enum ShortcutAction: String, CaseIterable {
         case .zoomOut: return "cmd+-"
         case .zoomReset: return "cmd+0"
         case .settings: return "cmd+,"
+        case .search: return "cmd+f"
+        case .previousPrompt: return "cmd+shift+up"
+        case .nextPrompt: return "cmd+shift+down"
         }
     }
 }

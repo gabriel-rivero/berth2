@@ -5,11 +5,13 @@
 //! the same on every platform.
 
 use berth_headless::cursor::CursorShape;
+use berth_headless::prompt::PromptKind;
 use berth_headless::style::UnderlineStyle;
 use berth_headless::{CellView, ScreenView};
 
 use crate::font::{Bitmap, CellSize, FontRenderer, Raster, TextStyle};
 use crate::layout::Rect;
+use crate::search::Span;
 use crate::theme::Theme;
 use crate::ui::{PaneView, RowKind, Selection, SidebarRow, WorkspaceView};
 
@@ -825,14 +827,23 @@ impl<'a> Painter<'a> {
                     let next = Rect::new(origin.0 + cell.width, origin.1, cell.width, cell.height);
                     self.fill(next, bg);
                 }
-                let search_hit = options.search.is_some_and(|(line, start, len)| {
-                    let absolute = view.scrollback_len - view.scrollback + row;
-                    absolute == line && col >= start && col < start + len
-                });
-                if selected || search_hit {
+                let absolute = view.scrollback_len - view.scrollback + row;
+                let within = |(line, start, len): &Span| {
+                    absolute == *line && col >= *start && col < *start + *len
+                };
+                let current_hit = options.search_current.is_some_and(|hit| within(&hit));
+                let other_hit = !current_hit && options.search.iter().any(within);
+                if selected || other_hit {
                     self.blend(
                         Rect::new(origin.0, origin.1, cell.width, cell.height),
                         options.theme.selection,
+                        SELECTION_ALPHA,
+                    );
+                }
+                if current_hit {
+                    self.blend(
+                        Rect::new(origin.0, origin.1, cell.width, cell.height),
+                        options.theme.accent,
                         SELECTION_ALPHA,
                     );
                 }
@@ -1232,6 +1243,48 @@ impl<'a> Painter<'a> {
             self.fill(pane.content, theme.terminal_bg);
         }
     }
+
+    /// Draw the prompt gutter: one tick per OSC 133 mark. A prompt is a full
+    /// tick, red when the command above it failed and green otherwise, and the
+    /// row a command's output started on gets a dim half tick. A program that
+    /// marks nothing leaves the gutter empty, so the columns cost nothing but
+    /// width.
+    pub fn prompt_gutter(
+        &mut self,
+        pane: &PaneView,
+        view: &ScreenView,
+        theme: Theme,
+        height: usize,
+    ) {
+        if pane.gutter.w == 0 || pane.gutter.h == 0 {
+            return;
+        }
+        self.fill(pane.gutter, theme.terminal_bg);
+        let first_line = view.scrollback_len.saturating_sub(view.scrollback);
+        let width = (pane.gutter.w / 3).max(1) * 2;
+        for mark in &view.prompt_marks {
+            let Some(row) = mark.line.checked_sub(first_line) else {
+                continue;
+            };
+            if row >= usize::from(view.rows) {
+                continue;
+            }
+            let y = pane.gutter.y + row * height;
+            let (top, tick_height, color) = match mark.kind {
+                PromptKind::Prompt if mark.failed() => (
+                    y + 2,
+                    height.saturating_sub(4).max(2),
+                    theme.attention_error,
+                ),
+                PromptKind::Prompt => (y, height.max(1), theme.success),
+                PromptKind::CommandStart => {
+                    let top = y + height / 3;
+                    (top, (height / 3).max(2), theme.text_tertiary)
+                }
+            };
+            self.fill(Rect::new(pane.gutter.x + 2, top, width, tick_height), color);
+        }
+    }
 }
 
 pub struct PanelStyle<'a> {
@@ -1333,8 +1386,10 @@ pub struct ScreenOptions<'a> {
     pub cursor_visible: bool,
     pub selection: Option<&'a Selection>,
     pub exited: bool,
-    /// Absolute line, column and length of a search match to highlight.
-    pub search: Option<(usize, usize, usize)>,
+    /// Every search hit on this pane, as absolute line, column and length.
+    pub search: &'a [Span],
+    /// The hit the panel is on, tinted stronger than the rest.
+    pub search_current: Option<Span>,
     /// The URL under the pointer, so every cell of it underlines on hover.
     pub hover_link: Option<&'a str>,
     /// The text blink phase: false hides blinking cells for this frame.
@@ -1593,6 +1648,7 @@ fn is_rtl_char(ch: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use berth_headless::prompt::PromptMark;
 
     fn painter<'a>(buffer: &'a mut [u32]) -> Painter<'a> {
         Painter::new(buffer, 10, 10)
@@ -1672,6 +1728,61 @@ mod tests {
         );
     }
 
+    /// Paint one row of plain cells with the given search spans, returning the
+    /// pixel buffer.
+    fn paint_search_row(spans: &[Span], current: Option<Span>) -> Vec<u32> {
+        let mut font = FontRenderer::new(16.0, &[], crate::font::Options::default());
+        let cell = font.cell();
+        let cells = row(&["a", "b", "c", "d"]);
+        let cols = cells.len();
+        let mut buffer = vec![0u32; cell.width * cols * cell.height];
+        let view = ScreenView {
+            cols: u16::try_from(cols).expect("a short row"),
+            rows: 1,
+            cursor_hidden: true,
+            cells,
+            ..ScreenView::default()
+        };
+        let theme = Theme::default();
+        let options = ScreenOptions {
+            theme: &theme,
+            focused: true,
+            cursor_visible: false,
+            selection: None,
+            exited: false,
+            search: spans,
+            search_current: current,
+            hover_link: None,
+            blink_on: true,
+        };
+        let mut painter = Painter::new(&mut buffer, cell.width * cols, cell.height);
+        painter.screen(
+            &mut font,
+            &view,
+            Rect::new(0, 0, cell.width * cols, cell.height),
+            &options,
+        );
+        buffer
+    }
+
+    #[test]
+    fn given_two_hits_then_both_tint_and_the_current_one_differs() {
+        let font = FontRenderer::new(16.0, &[], crate::font::Options::default());
+        let width = font.cell().width;
+        let plain = paint_search_row(&[], None);
+        let hits = paint_search_row(&[(0, 0, 1), (0, 2, 1)], Some((0, 2, 1)));
+        let tinted = |col: usize| hits[col * width];
+        let untinted = |col: usize| plain[col * width];
+        assert_ne!(tinted(0), untinted(0), "the first hit did not tint");
+        assert_ne!(tinted(2), untinted(2), "the current hit did not tint");
+        assert_ne!(tinted(0), tinted(2), "both hits painted the same colour");
+    }
+
+    #[test]
+    fn given_no_hits_then_the_row_matches_a_plain_paint() {
+        assert_eq!(paint_search_row(&[], None), paint_search_row(&[], None));
+    }
+
     /// Paint one row at the blink-off phase, returning the pixel buffer.
     fn paint_blink_row(cells: Vec<CellView>) -> Vec<u32> {
         let mut font = FontRenderer::new(16.0, &[], crate::font::Options::default());
@@ -1692,7 +1803,8 @@ mod tests {
             cursor_visible: false,
             selection: None,
             exited: false,
-            search: None,
+            search: &[],
+            search_current: None,
             hover_link: None,
             blink_on: false,
         };
@@ -1704,6 +1816,69 @@ mod tests {
             &options,
         );
         buffer
+    }
+
+    /// A pane whose gutter is four pixels wide and two rows tall, painted from
+    /// whatever marks the view carries.
+    fn paint_gutter(marks: Vec<PromptMark>) -> Vec<u32> {
+        let height = 10;
+        let width = 4;
+        let mut buffer = vec![0u32; width * height * 2];
+        let pane = PaneView {
+            pane_id: "pne".into(),
+            surface: Some("srf".into()),
+            rect: Rect::new(0, 0, width, height * 2),
+            content: Rect::new(width, 0, 0, height * 2),
+            gutter: Rect::new(0, 0, width, height * 2),
+            focused: true,
+            tabs: Vec::new(),
+            tab_bar: Rect::new(0, 0, 0, 0),
+            attention_flash: false,
+            overflow: None,
+        };
+        let view = ScreenView {
+            cols: 0,
+            rows: 2,
+            prompt_marks: marks,
+            ..ScreenView::default()
+        };
+        let mut painter = Painter::new(&mut buffer, width, height * 2);
+        painter.prompt_gutter(&pane, &view, Theme::default(), height);
+        buffer
+    }
+
+    #[test]
+    fn given_a_failed_prompt_then_the_gutter_paints_it_in_the_error_colour() {
+        let theme = Theme::default();
+        let buffer = paint_gutter(vec![PromptMark {
+            line: 0,
+            kind: PromptKind::Prompt,
+            status: Some(1),
+        }]);
+        // The tick starts two pixels down, so the row's first line is clear.
+        assert!(buffer[..4].iter().all(|pixel| *pixel == 0));
+        assert!(
+            buffer[20..40].contains(&theme.attention_error),
+            "the failed prompt was not painted red"
+        );
+    }
+
+    #[test]
+    fn given_a_successful_prompt_then_the_gutter_paints_it_in_the_success_colour() {
+        let theme = Theme::default();
+        let buffer = paint_gutter(vec![PromptMark {
+            line: 0,
+            kind: PromptKind::Prompt,
+            status: Some(0),
+        }]);
+        assert!(buffer[..4].contains(&theme.success));
+        assert!(!buffer.contains(&theme.attention_error));
+    }
+
+    #[test]
+    fn given_no_marks_then_the_gutter_stays_empty() {
+        let buffer = paint_gutter(Vec::new());
+        assert!(buffer.iter().all(|pixel| *pixel == 0));
     }
 
     #[test]

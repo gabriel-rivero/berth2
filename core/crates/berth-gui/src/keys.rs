@@ -40,6 +40,8 @@ pub enum Command {
     ToggleSidebar,
     Settings,
     Search,
+    JumpPrompt(i32),
+    CopyMode,
     /// Select the nth workspace, one-based.
     Workspace(usize),
     /// One point larger, one point smaller, or back to the config default.
@@ -83,6 +85,9 @@ impl Command {
             Action::ToggleSidebar => Command::ToggleSidebar,
             Action::Settings => Command::Settings,
             Action::Search => Command::Search,
+            Action::PreviousPrompt => Command::JumpPrompt(-1),
+            Action::NextPrompt => Command::JumpPrompt(1),
+            Action::CopyMode => Command::CopyMode,
             Action::ZoomIn => Command::ZoomIn,
             Action::ZoomOut => Command::ZoomOut,
             Action::ZoomReset => Command::ZoomReset,

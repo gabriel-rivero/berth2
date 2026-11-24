@@ -5,7 +5,7 @@
 //! ordering rules (pinned, then attention, then core order) mirror the macOS
 //! sidebar; the pane rectangles come from [`crate::layout`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use berth_core::model::AgentSurface;
 use berth_core::{AppState, Attention, Surface};
@@ -88,13 +88,12 @@ impl Selection {
                 dragging: false,
             };
         }
-        let is_word = |c: char| c.is_alphanumeric() || c == '_' || c == '-' || c == '.';
         let mut start = col;
-        while start > 0 && is_word(chars[start - 1]) {
+        while start > 0 && is_word_char(chars[start - 1]) {
             start -= 1;
         }
         let mut end = col;
-        while end + 1 < chars.len() && is_word(chars[end + 1]) {
+        while end + 1 < chars.len() && is_word_char(chars[end + 1]) {
             end += 1;
         }
         Self {
@@ -109,6 +108,12 @@ impl Selection {
             dragging: false,
         }
     }
+}
+
+/// The characters a double-click selects as one word. Whole-word search uses
+/// the same class, so `value` is one word while `value.` is a word and a dot.
+pub fn is_word_char(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_' || ch == '-' || ch == '.'
 }
 
 fn shift_row(row: u16, delta: i32, max_row: u16) -> u16 {
@@ -129,6 +134,8 @@ pub struct PaneView {
     pub surface: Option<String>,
     pub rect: Rect,
     pub content: Rect,
+    /// The prompt gutter left of `content`, where OSC 133 marks are drawn.
+    pub gutter: Rect,
     pub focused: bool,
     pub tabs: Vec<TabView>,
     pub tab_bar: Rect,
@@ -138,6 +145,14 @@ pub struct PaneView {
     pub overflow: Option<Rect>,
 }
 
+/// The width of the prompt gutter, or zero when the pane is too narrow to
+/// spend it. It is part of the layout rather than an overlay, so the grid, the
+/// pointer mapping and inline images all agree on where the text starts.
+fn gutter_width(cell_height: usize, content_width: usize) -> usize {
+    let width = (cell_height / 2).max(4);
+    if content_width > width + 8 { width } else { 0 }
+}
+
 /// Per-frame inputs that come from the shell rather than the core.
 #[derive(Default, Clone, Copy)]
 pub struct PaneOptions<'a> {
@@ -145,6 +160,10 @@ pub struct PaneOptions<'a> {
     pub zoom: Option<&'a str>,
     /// First visible tab per pane while its strip is scrolled.
     pub tab_scroll: Option<&'a HashMap<String, usize>>,
+    /// Surfaces whose program emits OSC 133 marks. Only those panes spend
+    /// columns on the prompt gutter, so a shell without integration keeps the
+    /// full grid.
+    pub prompt_marks: Option<&'a HashSet<String>>,
 }
 
 pub struct AgentView {
@@ -640,8 +659,12 @@ pub fn build_panes(
             let mut tabs = Vec::new();
             let mut surface = None;
             let mut overflow = None;
+            let mut marks = false;
             if let Some(pane) = state.panes.get(&pane_id) {
                 surface = pane.active_surface().map(str::to_owned);
+                marks = surface
+                    .as_deref()
+                    .is_some_and(|id| options.prompt_marks.is_some_and(|set| set.contains(id)));
                 let count = pane.surfaces.len().max(1);
                 let needs_overflow = count * MIN_TAB_WIDTH + OVERFLOW_WIDTH > bar.w;
                 let strip_width = if needs_overflow {
@@ -698,11 +721,20 @@ pub fn build_panes(
             }
             let focused = surface.is_some() && surface.as_deref() == active.as_deref();
             let attention_flash = surface.as_deref() == flash;
+            let gutter_width = if marks {
+                gutter_width(cell_height, content.w)
+            } else {
+                0
+            };
+            let gutter = Rect::new(content.x, content.y, gutter_width, content.h);
+            content.x = content.x.saturating_add(gutter_width);
+            content.w = content.w.saturating_sub(gutter_width);
             PaneView {
                 pane_id,
                 surface,
                 rect: leaf.rect,
                 content,
+                gutter,
                 focused,
                 tabs,
                 tab_bar: bar,

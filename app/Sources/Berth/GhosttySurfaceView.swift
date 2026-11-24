@@ -668,6 +668,18 @@ final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClient {
         return ran
     }
 
+    /// The find bar drives the terminal through the same binding actions the
+    /// keybindings use. A failed action here is ordinary (a `navigate_search`
+    /// with no results), so it is not logged as an error.
+    @discardableResult
+    func bindingAction(_ name: String) -> Bool {
+        guard let surface else { return false }
+        return name.withCString { pointer in
+            ghostty_surface_binding_action(
+                surface, pointer, UInt(name.lengthOfBytes(using: .utf8)))
+        }
+    }
+
     @objc private func copySelection(_ sender: Any?) {
         _ = runAction("copy_to_clipboard")
     }

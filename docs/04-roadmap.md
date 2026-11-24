@@ -144,10 +144,28 @@ Goal: the prompt becomes a place in the buffer, not a string in a stream.
 
 - **OSC 133/633 prompt marks** in the portable parser: prompt start, command start, exit
   status and duration; a gutter mark per command and click-to-jump between prompts.
-  Without command blocks; that is a renderer change and stays out.
+  Without command blocks; that is a renderer change and stays out. **Landed in 0.17.0**
+  as prompt start, command start and exit status: the reader records each mark against
+  its absolute grid line, `screen_view` carries the visible ones, the portable window
+  draws a green or red tick per prompt plus a dim mark where output began, a gutter
+  click brings that command to the top of the pane, and `previousPrompt`/`nextPrompt`
+  walk them (`Cmd+Shift+Up`/`Down`, `Ctrl+Shift+Up`/`Down`). Duration is not parsed, the
+  gutter costs columns only in a pane whose shell emits marks, and the AppKit shell
+  inherits Ghostty's own shell integration rather than this gutter.
 - **Search parity**: search in the AppKit shell; regex and whole-word toggles; search
-  across the panes of a workspace, not just the focused scrollback.
+  across the panes of a workspace, not just the focused scrollback. **Landed in 0.17.0**:
+  the portable panel compiles a literal or regex query once per keystroke, applies a
+  whole-word test on the same character class a double-click uses, runs over every pane
+  in the visible workspace, tints all hits with the selected one in the accent, and
+  focuses the owning pane before jumping. The AppKit shell gained a find bar over
+  Ghostty's own search (`Cmd+F`), with next/previous and a match count.
 - **Copy mode**: vi-style keyboard selection, motions, yank in the portable window.
+  **Landed in 0.17.0**: a modal key capture in front of the chord table, with
+  `h`/`j`/`k`/`l`, word and line motions, counts, `g`/`G`, paging, a visual selection and
+  a yank from a buffer captured on entry, so a selection can span more than one screen.
+  The cursor is an absolute line, so it survives scrolling; a click moves it, and the
+  wheel keeps the painted tint on the right rows. The AppKit shell uses Ghostty's own
+  copy-mode bindings and needs nothing here.
 - **Paste history**: the last N clipboards with a picker, never persisted to disk.
 - **Quick terminal**: a global-hotkey dropdown window per display, both shells.
 - **Commands and profiles**: user-defined commands from `config.json`, recent-choice
@@ -328,4 +346,17 @@ stand.
 | The portable right-click panel is one flat list: Copy cannot be greyed out when the pane has no selection, and there are no separators between groups | 0.16.x follow-up |
 | Windows executables carry no icon; only the macOS bundles and the Linux packages do | 1.0 |
 
+## Known gaps after 0.17.0
 
+The 0.17 items that shipped partially, recorded so they are decisions and not oversights.
+
+| Gap | Where it goes |
+| --- | --- |
+| OSC 133 `D` may carry a command duration; it is not parsed, so there is no per-command timing | 0.18 inbox |
+| The AppKit shell has no prompt gutter: it inherits Ghostty's marks and `jump_to_prompt` but draws no gutter | 1.0 AppKit parity |
+| Prompt marks are dropped on a column change rather than remapped through the reflow | 0.18 |
+| Search indexes each pane's active surface only, so a non-active tab in a pane is not searched | 0.18 palette/session search |
+| Search captures its buffers when the panel opens; output that arrives while it is open is not indexed | 0.18 session search |
+| The AppKit find bar is focused-surface only and has no regex or whole-word toggles (Ghostty owns the matching) | 1.0 AppKit parity |
+| Copy mode has no `vi` operator-pending grammar (`d`/`c`), no block selection and no in-mode `/` search | After 1.0 |
+| Copy mode captures its buffer on entry, so output that arrives mid-session is not selectable | 0.18 |

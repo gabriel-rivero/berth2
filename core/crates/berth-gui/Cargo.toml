@@ -26,6 +26,7 @@ accesskit.workspace = true
 accesskit_winit.workspace = true
 ctrlc.workspace = true
 png = "0.17"
+regex.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

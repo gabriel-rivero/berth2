@@ -14,7 +14,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -23,6 +23,7 @@ use std::time::{Duration, Instant};
 use berth_core::model::Orientation;
 use berth_core::{AppState, CoreError, ReadScope, Request, Response, SurfaceOps, paths};
 use berth_headless::keys::{KeyAction, KeyInput};
+use berth_headless::prompt;
 use berth_headless::{
     Dimension, MouseEncoding, MouseMode, PtyHost, RestorePolicy, restore_session_with, save_session,
 };
@@ -38,6 +39,7 @@ mod a11y;
 mod clipboard;
 mod config;
 mod console;
+mod copymode;
 mod desktop;
 mod font;
 mod git;
@@ -48,6 +50,7 @@ mod log;
 mod mouse;
 mod paint;
 mod panel;
+mod search;
 mod settings;
 mod shells;
 mod sync_output;
@@ -383,7 +386,7 @@ fn main() {
         drag: Drag::None,
         selection: HashMap::new(),
         last_selection: None,
-        search_highlight: None,
+        search_marks: SearchMarks::default(),
         hooks_notice: None,
         scroll: HashMap::new(),
         last_meta: HashMap::new(),
@@ -420,6 +423,8 @@ fn main() {
         sidebar_filter_active: false,
         geometry_due: None,
         branch: RefCell::new(BranchCache::default()),
+        prompt_surfaces: HashSet::new(),
+        copy_mode: None,
     };
 
     if let Err(error) = event_loop.run_app(&mut app) {
@@ -477,18 +482,20 @@ impl From<accesskit_winit::Event> for UserEvent {
 }
 
 #[derive(Clone, Debug)]
-struct SearchMatch {
-    line: usize,
-    col: usize,
-    len: usize,
-}
-
-#[derive(Clone, Debug)]
 struct SearchHighlight {
     surface_id: String,
     line: usize,
     col: usize,
     len: usize,
+}
+
+/// The results of a closed search panel, kept so the hits stay tinted after
+/// the list is dismissed. `current` is the one the panel was on.
+#[derive(Default)]
+struct SearchMarks {
+    /// Hits per surface, so each pane tints only its own rows.
+    by_surface: HashMap<String, Vec<search::Span>>,
+    current: Option<SearchHighlight>,
 }
 
 /// A modal panel over the window. Both variants are lists driven by the core.
@@ -514,12 +521,16 @@ enum Overlay {
         target: RenameTarget,
         value: String,
     },
-    /// Case-insensitive search through one pane's scrollback.
+    /// Search every pane of the workspace: literal or regex, whole-word
+    /// optional, case-insensitive.
     Search {
-        surface_id: String,
-        lines: Vec<String>,
+        /// One buffer per pane, captured when the panel opened.
+        panes: Vec<search::PaneBuffer>,
         query: String,
-        matches: Vec<SearchMatch>,
+        options: search::Options,
+        /// The compiled query, so a keystroke does not recompile per pane.
+        compiled: search::Query,
+        hits: Vec<search::Hit>,
         selected: usize,
     },
     /// A program asked to read the clipboard; allow or deny.
@@ -655,8 +666,8 @@ struct Gui {
     /// The surface that last held a selection, so copy still works when focus
     /// and the selection disagree.
     last_selection: Option<String>,
-    /// The search match to highlight in the painted pane.
-    search_highlight: Option<SearchHighlight>,
+    /// The search hits to tint, per pane, plus the one the panel was on.
+    search_marks: SearchMarks,
     /// Last result of the Settings "reinstall hooks" row.
     hooks_notice: Option<String>,
     scroll: HashMap<String, usize>,
@@ -717,6 +728,12 @@ struct Gui {
     /// The focused pane's git branch, cached so the status line does not walk
     /// the filesystem every frame.
     branch: RefCell<BranchCache>,
+    /// Surfaces whose program emits OSC 133 prompt marks. Only these panes
+    /// spend columns on the gutter.
+    prompt_surfaces: HashSet<String>,
+    /// The copy-mode session, while one is open. It captures every key before
+    /// the shell sees it.
+    copy_mode: Option<copymode::CopyMode>,
 }
 
 /// Last branch read for a cwd, with the time it was read. A cwd change or a
@@ -749,6 +766,7 @@ struct WinStash {
     tab_scroll: HashMap<String, usize>,
     sidebar_filter: String,
     sidebar_filter_active: bool,
+    copy_mode: Option<copymode::CopyMode>,
 }
 
 impl ApplicationHandler<UserEvent> for Gui {
@@ -1436,6 +1454,7 @@ impl Gui {
             tab_scroll: std::mem::take(&mut self.tab_scroll),
             sidebar_filter: std::mem::take(&mut self.sidebar_filter),
             sidebar_filter_active: self.sidebar_filter_active,
+            copy_mode: self.copy_mode.take(),
         };
         self.stash.insert(id, stash);
     }
@@ -1463,6 +1482,7 @@ impl Gui {
         self.tab_scroll = stash.tab_scroll;
         self.sidebar_filter = stash.sidebar_filter;
         self.sidebar_filter_active = stash.sidebar_filter_active;
+        self.copy_mode = stash.copy_mode;
         // Transient input state must not follow the pointer between windows.
         self.preedit = None;
         self.mouse_down = None;
@@ -1654,6 +1674,14 @@ impl Gui {
         if broadcast {
             parts.push("BROADCAST".to_string());
         }
+        if let Some(mode) = self.copy_mode.as_ref() {
+            // The chip tells the user the shell is not receiving their keys.
+            parts.push(if mode.is_visual() {
+                "COPY-V".to_string()
+            } else {
+                "COPY".to_string()
+            });
+        }
         if let Some((name, cwd, zoomed)) = workspace {
             if zoomed {
                 parts.push("ZOOM".to_string());
@@ -1682,6 +1710,7 @@ impl Gui {
         ui::PaneOptions {
             zoom: None,
             tab_scroll: Some(&self.tab_scroll),
+            prompt_marks: Some(&self.prompt_surfaces),
         }
     }
 
@@ -1726,7 +1755,16 @@ impl Gui {
     /// requests from every surface. Only changes reach the core.
     fn poll_meta(&mut self) {
         let surfaces: Vec<String> = lock(&self.state).surfaces.keys().cloned().collect();
+        self.prompt_surfaces.retain(|id| surfaces.contains(id));
         for surface_id in surfaces {
+            // Whether the program emits prompt marks decides the layout, so it
+            // is checked here rather than every frame of the paint loop. The
+            // answer is latched: showing the gutter narrows the grid, and a
+            // grid change re-wraps the history and drops the marks, so deriving
+            // the gutter from the current marks would make it blink on and off.
+            if self.host.has_prompt_marks(&surface_id).unwrap_or(false) {
+                self.prompt_surfaces.insert(surface_id.clone());
+            }
             let Ok(meta) = self.host.take_screen_meta_requests(&surface_id) else {
                 continue;
             };
@@ -2106,11 +2144,9 @@ impl Gui {
                 );
                 let selection = self.selection.get(surface_id).copied();
                 let exited = !self.host.is_alive(surface_id);
-                let search = self
-                    .search_highlight
-                    .as_ref()
-                    .filter(|hit| &hit.surface_id == surface_id)
-                    .map(|hit| (hit.line, hit.col, hit.len));
+                // Every hit in this pane tints; the one the panel is on tints
+                // in the accent so it reads as the current result.
+                let (search_hits, search_current) = self.search_marks_for(surface_id);
                 let pointer = (
                     self.pointer.0.max(0.0) as usize,
                     self.pointer.1.max(0.0) as usize,
@@ -2133,7 +2169,8 @@ impl Gui {
                         && (!screen.cursor_style.blinks || blink_on),
                     selection: selection.as_ref(),
                     exited,
-                    search,
+                    search: &search_hits,
+                    search_current,
                     hover_link,
                     // Blinking text stays solid while the window is unfocused,
                     // since no timer runs to flip the phase.
@@ -2142,6 +2179,7 @@ impl Gui {
                 let font = self.font();
                 painter.screen(font, &screen, pane.content, &options);
                 let cell = font.cell();
+                painter.prompt_gutter(pane, &screen, theme, cell.height);
                 let first_line = screen.scrollback_len.saturating_sub(screen.scrollback);
                 for image in &screen.images {
                     let row = image.anchor_line as isize - first_line as isize;
@@ -2640,6 +2678,9 @@ impl Gui {
         if pane.tab_bar.contains(point.0, point.1) {
             return CursorIcon::Pointer;
         }
+        if pane.gutter.w > 0 && pane.gutter.contains(point.0, point.1) {
+            return CursorIcon::Pointer;
+        }
         if pane.content.contains(point.0, point.1) {
             if self.reporting_to_pty(point) {
                 return CursorIcon::Default;
@@ -2860,12 +2901,22 @@ impl Gui {
         let Some(surface_id) = &pane.surface else {
             return;
         };
+        if pane.gutter.w > 0 && pane.gutter.contains(point.0, point.1) {
+            self.gutter_pressed(surface_id, pane, point, cell);
+            return;
+        }
         let column = (point.0.saturating_sub(pane.content.x)) / cell.width.max(1);
         let row = (point.1.saturating_sub(pane.content.y)) / cell.height.max(1);
         let target = Cell {
             row: row.min(u16::MAX as usize) as u16,
             col: column.min(u16::MAX as usize) as u16,
         };
+        // A click in copy mode moves its cursor and extends a visual selection.
+        // Starting a mouse selection instead would abandon the mode's cursor.
+        if self.copy_mode.is_some() {
+            self.copy_mode_click(surface_id, target);
+            return;
+        }
         let shift = self.modifiers.shift_key();
         let already_focused = pane.focused;
         if !already_focused {
@@ -2893,6 +2944,40 @@ impl Gui {
         self.selection
             .insert(surface_id.clone(), Selection::new(target));
         self.last_selection = Some(surface_id.clone());
+    }
+
+    /// Click in the gutter: scroll that prompt to the top of the pane, so the
+    /// command and its output read from the start. A click on a row with no
+    /// prompt mark does nothing.
+    fn gutter_pressed(
+        &mut self,
+        surface_id: &str,
+        pane: &PaneView,
+        point: (usize, usize),
+        cell: CellSize,
+    ) {
+        if cell.height == 0 {
+            return;
+        }
+        let Ok(view) = self.host.screen_view(surface_id) else {
+            return;
+        };
+        let row = point.1.saturating_sub(pane.gutter.y) / cell.height;
+        let first_line = view.scrollback_len.saturating_sub(view.scrollback);
+        let line = first_line.saturating_add(row);
+        let Some(mark) = view
+            .prompt_marks
+            .iter()
+            .find(|mark| mark.line == line && mark.kind == prompt::PromptKind::Prompt)
+        else {
+            return;
+        };
+        let target = mark.line;
+        let offset = view.scrollback_len.saturating_sub(target);
+        if let Ok(applied) = self.host.set_scrollback(surface_id, offset) {
+            self.scroll.insert(surface_id.to_string(), applied);
+            self.request_redraw();
+        }
     }
 
     fn sidebar_pressed(&mut self, point: (usize, usize), nav: Nav) {
@@ -3278,6 +3363,16 @@ impl Gui {
                 if let Some(selection) = self.selection.get_mut(&surface_id) {
                     selection.shift(shift, cell.height as u16);
                 }
+                // Copy mode's cursor is an absolute line, so a wheel scroll
+                // moves the view under it; the painted rows have to be
+                // recomputed or the tint stays on the old text.
+                if self
+                    .copy_mode
+                    .as_ref()
+                    .is_some_and(|mode| mode.surface_id == surface_id)
+                {
+                    self.copy_mode_paint_selection(&surface_id);
+                }
             }
             Err(error) => eprintln!("berth-gui: scroll {surface_id}: {error}"),
         }
@@ -3307,6 +3402,16 @@ impl Gui {
                 self.flashes.remove(surface_id);
                 self.exit_announced.remove(surface_id);
                 self.frames.remove(surface_id);
+                self.prompt_surfaces.remove(surface_id);
+                // A copy-mode session on this surface would otherwise keep
+                // capturing keys for a pane that no longer exists.
+                if self
+                    .copy_mode
+                    .as_ref()
+                    .is_some_and(|mode| mode.surface_id == surface_id)
+                {
+                    self.copy_mode = None;
+                }
             }
             Err(error) => eprintln!("berth-gui: close {surface_id}: {error}"),
         }
@@ -3720,6 +3825,8 @@ impl Gui {
                 });
             }
             Command::Search => self.open_search(),
+            Command::JumpPrompt(direction) => self.jump_prompt(direction),
+            Command::CopyMode => self.toggle_copy_mode(),
             Command::ZoomIn => self.zoom_font(1.0),
             Command::ZoomOut => self.zoom_font(-1.0),
             Command::ZoomReset => self.reset_zoom(),
@@ -4088,7 +4195,7 @@ impl Gui {
             }
             Overlay::Confirm { text } => confirm_lines(text).len(),
             Overlay::Rename { .. } => 0,
-            Overlay::Search { matches, .. } => matches.len(),
+            Overlay::Search { hits, .. } => hits.len(),
             Overlay::ClipboardRead { .. } => 2,
             Overlay::TabMenu { pane_id, .. } => lock(&self.state)
                 .panes
@@ -4125,6 +4232,8 @@ impl Gui {
         let mut activate = false;
         let mut rename_commit: Option<(RenameTarget, String)> = None;
         let mut clipboard_deny: Option<(String, String)> = None;
+        let mut jump_to: Option<search::Hit> = None;
+        let mut marks: Option<HashMap<String, Vec<search::Span>>> = None;
         match &mut overlay {
             Overlay::Palette { query, .. } => match &event.logical_key {
                 Key::Named(NamedKey::Escape) => close = true,
@@ -4215,43 +4324,62 @@ impl Gui {
                 }
             }
             Overlay::Search {
-                surface_id,
-                lines,
+                panes,
                 query,
-                matches,
+                options,
+                compiled,
+                hits,
                 selected,
             } => {
                 let mut changed = false;
                 let mut jump = false;
                 match &event.logical_key {
                     Key::Named(NamedKey::Escape) => {
-                        self.search_highlight = None;
+                        self.search_marks = SearchMarks::default();
                         close = true;
                     }
                     Key::Named(NamedKey::Enter) => {
-                        if !matches.is_empty() {
+                        if !hits.is_empty() {
                             let delta = if self.modifiers.shift_key() { -1 } else { 1 };
-                            let next = (*selected as i32 + delta).rem_euclid(matches.len() as i32)
-                                as usize;
+                            let next =
+                                (*selected as i32 + delta).rem_euclid(hits.len() as i32) as usize;
                             *selected = next;
                             jump = true;
                         }
                     }
                     Key::Named(NamedKey::ArrowDown) => {
-                        if !matches.is_empty() {
-                            *selected = (*selected + 1) % matches.len();
+                        if !hits.is_empty() {
+                            *selected = (*selected + 1) % hits.len();
                             jump = true;
                         }
                     }
                     Key::Named(NamedKey::ArrowUp) => {
-                        if !matches.is_empty() {
-                            *selected = (*selected + matches.len() - 1) % matches.len();
+                        if !hits.is_empty() {
+                            *selected = (*selected + hits.len() - 1) % hits.len();
                             jump = true;
                         }
                     }
                     Key::Named(NamedKey::Backspace) => {
                         query.pop();
                         changed = true;
+                    }
+                    // Cmd/Ctrl+R and Cmd/Ctrl+W toggle the two modes, so the
+                    // panel needs no second row of controls.
+                    Key::Character(text)
+                        if (self.modifiers.super_key() || self.modifiers.control_key())
+                            && !self.modifiers.shift_key() =>
+                    {
+                        match text.to_lowercase().as_str() {
+                            "r" => {
+                                options.regex = !options.regex;
+                                changed = true;
+                            }
+                            "w" => {
+                                options.whole_word = !options.whole_word;
+                                changed = true;
+                            }
+                            _ => {}
+                        }
                     }
                     Key::Character(text)
                         if !self.modifiers.control_key()
@@ -4264,12 +4392,18 @@ impl Gui {
                     _ => {}
                 }
                 if changed {
-                    *matches = Self::search_matches(lines, query);
+                    let (fresh, fresh_hits) = Self::search_run(panes, query, *options);
+                    *compiled = fresh;
+                    *hits = fresh_hits;
                     *selected = 0;
                     jump = true;
                 }
-                if jump && let Some(hit) = matches.get(*selected) {
-                    self.jump_to_match(surface_id, hit);
+                if jump && let Some(hit) = hits.get(*selected) {
+                    let hit = hit.clone();
+                    // Group the hits per pane now, so dismissing the panel
+                    // leaves them tinted without a second pass over the buffers.
+                    marks = Some(Self::marks_from(hits));
+                    jump_to = Some(hit);
                 }
             }
             Overlay::Rename { target, value } => match &event.logical_key {
@@ -4315,6 +4449,12 @@ impl Gui {
         }
         if let Some((surface_id, selection)) = clipboard_deny {
             self.send_clipboard_response(&surface_id, &selection, None);
+        }
+        if let Some(hit) = jump_to {
+            self.jump_to_match(&hit);
+        }
+        if let Some(by_surface) = marks {
+            self.search_marks.by_surface = by_surface;
         }
         if let Some(index) = next_selected {
             overlay.select(index);
@@ -4498,62 +4638,405 @@ impl Gui {
         self.request_redraw();
     }
 
+    /// Open the search panel over every pane of the visible workspace, so a
+    /// hit in a neighbouring pane is one list entry away. The buffers are
+    /// captured once; output that arrives while the panel is open is not
+    /// indexed, because a list that shifts under the selection is worse than
+    /// one that lags.
     fn open_search(&mut self) {
-        let Some(surface_id) = self.active_surface() else {
+        let panes = self.search_buffers();
+        if panes.is_empty() {
             return;
-        };
-        let lines = match self.host.scrollback_lines(&surface_id) {
-            Ok(lines) => lines,
-            Err(error) => {
-                eprintln!("berth-gui: scrollback: {error}");
-                return;
-            }
-        };
+        }
+        self.search_marks = SearchMarks::default();
         self.overlay = Some(Overlay::Search {
-            surface_id,
-            lines,
+            panes,
             query: String::new(),
-            matches: Vec::new(),
+            options: search::Options::default(),
+            compiled: search::Query::new("", search::Options::default()),
+            hits: Vec::new(),
             selected: 0,
         });
         self.request_redraw();
     }
 
-    fn search_matches(lines: &[String], query: &str) -> Vec<SearchMatch> {
-        if query.is_empty() {
-            return Vec::new();
-        }
-        let needle = query.to_lowercase();
-        let mut matches = Vec::new();
-        for (line, text) in lines.iter().enumerate() {
-            let haystack = text.to_lowercase();
-            let mut from = 0;
-            while let Some(found) = haystack[from..].find(&needle) {
-                let col = from + found;
-                matches.push(SearchMatch {
-                    line,
-                    col: haystack[..col].chars().count(),
-                    len: needle.chars().count(),
-                });
-                from = col + needle.len().max(1);
-                if matches.len() >= 500 {
-                    return matches;
-                }
-            }
-        }
-        matches
+    /// One buffer per pane in the visible workspace, in pane order, each with
+    /// the title shown beside its hits.
+    fn search_buffers(&self) -> Vec<search::PaneBuffer> {
+        let surfaces = {
+            let state = lock(&self.state);
+            let Some(workspace_id) = ui::active_workspace(&state) else {
+                return Vec::new();
+            };
+            let Some(workspace) = state.workspace(&workspace_id) else {
+                return Vec::new();
+            };
+            workspace
+                .root
+                .leaves()
+                .iter()
+                .filter_map(|pane_id| {
+                    let pane = state.panes.get(*pane_id)?;
+                    let surface_id = pane.active_surface()?.to_string();
+                    let surface = state.surface(&surface_id)?;
+                    Some((surface_id, ui::tab_title(surface, pane.active)))
+                })
+                .collect::<Vec<_>>()
+        };
+        surfaces
+            .into_iter()
+            .filter_map(|(surface_id, title)| {
+                let lines = self.host.scrollback_lines(&surface_id).ok()?;
+                Some(search::PaneBuffer {
+                    surface_id,
+                    title,
+                    lines,
+                })
+            })
+            .collect()
     }
 
-    fn jump_to_match(&mut self, surface_id: &str, hit: &SearchMatch) {
+    /// Group hits by surface so the painter can ask for one pane's rows.
+    fn marks_from(hits: &[search::Hit]) -> HashMap<String, Vec<search::Span>> {
+        let mut by_surface: HashMap<String, Vec<search::Span>> = HashMap::new();
+        for hit in hits {
+            by_surface
+                .entry(hit.surface_id.clone())
+                .or_default()
+                .push(hit.span());
+        }
+        by_surface
+    }
+
+    /// Compile `text` and re-run the search over every buffer.
+    fn search_run(
+        panes: &[search::PaneBuffer],
+        query: &str,
+        options: search::Options,
+    ) -> (search::Query, Vec<search::Hit>) {
+        let compiled = search::Query::new(query, options);
+        let hits = search::search(panes, &compiled);
+        (compiled, hits)
+    }
+
+    /// Walk to the previous (`-1`) or next (`1`) prompt the shell marked. The
+    /// current view's top line names the position, so the first press moves
+    /// relative to what is on screen rather than to the newest prompt.
+    fn jump_prompt(&mut self, direction: i32) {
+        let Some(surface_id) = self.active_surface() else {
+            return;
+        };
+        let Ok(view) = self.host.screen_view(&surface_id) else {
+            return;
+        };
+        let Ok(lines) = self.host.prompt_lines(&surface_id) else {
+            return;
+        };
+        if lines.is_empty() {
+            return;
+        }
+        let top = view.scrollback_len.saturating_sub(view.scrollback);
+        let target = if direction < 0 {
+            lines
+                .iter()
+                .rev()
+                .find(|line| **line < top)
+                .or_else(|| lines.first())
+                .copied()
+        } else {
+            // The last prompt at or below the top, then the one after it. At
+            // the live screen the newest prompt is the target.
+            lines
+                .iter()
+                .find(|line| **line > top)
+                .or_else(|| lines.last())
+                .copied()
+        };
+        let Some(target) = target else {
+            return;
+        };
+        let offset = view.scrollback_len.saturating_sub(target);
+        if let Ok(applied) = self.host.set_scrollback(&surface_id, offset) {
+            self.scroll.insert(surface_id, applied);
+        }
+        self.request_redraw();
+    }
+
+    /// The hits to paint in one pane, and the one the panel was on if it was
+    /// this pane. The slice is copied because the painter holds it while the
+    /// window is mutably borrowed.
+    fn search_marks_for(&self, surface_id: &str) -> (Vec<search::Span>, Option<search::Span>) {
+        let hits = self
+            .search_marks
+            .by_surface
+            .get(surface_id)
+            .cloned()
+            .unwrap_or_default();
+        let current = self
+            .search_marks
+            .current
+            .as_ref()
+            .filter(|hit| hit.surface_id == surface_id)
+            .map(|hit| (hit.line, hit.col, hit.len));
+        (hits, current)
+    }
+
+    /// Open copy mode on the focused pane, or close it if it is already open.
+    /// The cursor starts on the newest line, which is where the shell left it,
+    /// and the buffer is captured so a yank can span more than one screen.
+    fn toggle_copy_mode(&mut self) {
+        if let Some(mode) = self.copy_mode.take() {
+            self.selection.remove(&mode.surface_id);
+            self.last_selection = None;
+            self.request_redraw();
+            return;
+        }
+        let Some(surface_id) = self.active_surface() else {
+            return;
+        };
+        let lines = match self.host.scrollback_lines(&surface_id) {
+            Ok(lines) if !lines.is_empty() => lines,
+            _ => return,
+        };
+        let mut session = copymode::CopyMode::new(surface_id, lines);
+        session.cursor = (session.last_line(), 0);
+        self.copy_mode = Some(session);
+        self.request_redraw();
+    }
+
+    /// A click in copy mode: put the cursor on the clicked cell, and extend a
+    /// visual selection when one is open.
+    fn copy_mode_click(&mut self, surface_id: &str, target: Cell) {
+        let Ok(view) = self.host.screen_view(surface_id) else {
+            return;
+        };
+        let top = view.scrollback_len.saturating_sub(view.scrollback);
+        let line = top.saturating_add(usize::from(target.row));
+        let Some(mode) = self.copy_mode.as_mut() else {
+            return;
+        };
+        mode.cursor = (line, target.col);
+        mode.clamp_column();
+        self.copy_mode_paint_selection(surface_id);
+        self.request_redraw();
+    }
+
+    /// One key inside copy mode. Every key is consumed: a character the mode
+    /// does not use is swallowed rather than typed into the shell.
+    fn copy_mode_key(&mut self, event: &KeyEvent) {
+        let Some(mode) = self.copy_mode.as_ref() else {
+            return;
+        };
+        let surface_id = mode.surface_id.clone();
+        let key = match &event.logical_key {
+            Key::Character(text) => text.to_string(),
+            Key::Named(name) => match name {
+                NamedKey::Escape => "escape",
+                NamedKey::Enter => "enter",
+                NamedKey::ArrowLeft => "left",
+                NamedKey::ArrowRight => "right",
+                NamedKey::ArrowUp => "up",
+                NamedKey::ArrowDown => "down",
+                NamedKey::Home => "home",
+                NamedKey::End => "end",
+                NamedKey::PageUp => "pageup",
+                NamedKey::PageDown => "pagedown",
+                NamedKey::Space => "space",
+                _ => "ignore",
+            }
+            .to_string(),
+            _ => "ignore".to_string(),
+        };
+        // Space exits, so the mode can be left without a mouse; so does the
+        // chord that opened it, which arrives here as `Ctrl+Shift+Space`.
+        if key == "space" {
+            self.copy_mode_leave(&surface_id);
+            return;
+        }
+        let action = copymode::action_for(
+            &key,
+            self.modifiers.shift_key(),
+            self.modifiers.control_key(),
+        );
+        self.copy_mode_apply(action, &surface_id);
+    }
+
+    /// Close copy mode, dropping the selection it painted.
+    fn copy_mode_leave(&mut self, surface_id: &str) {
+        self.copy_mode = None;
+        self.selection.remove(surface_id);
+        self.last_selection = None;
+        self.request_redraw();
+    }
+
+    fn copy_mode_apply(&mut self, action: copymode::CopyAction, surface_id: &str) {
+        use copymode::CopyAction;
+        let Some(mode) = self.copy_mode.as_mut() else {
+            return;
+        };
+        match action {
+            CopyAction::Digit(digit) => {
+                mode.push_digit(digit);
+                self.request_redraw();
+                return;
+            }
+            CopyAction::Exit => {
+                self.copy_mode_leave(surface_id);
+                return;
+            }
+            CopyAction::Visual => mode.toggle_visual(),
+            CopyAction::Yank => {
+                if mode.is_visual() {
+                    self.copy_mode_yank(surface_id);
+                } else {
+                    self.copy_mode_leave(surface_id);
+                }
+                return;
+            }
+            _ => {}
+        }
+        let count = mode.take_count();
+        mode.count = None;
+        let rows = {
+            let Ok(view) = self.host.screen_view(surface_id) else {
+                return;
+            };
+            usize::from(view.rows)
+        };
+        let Some(mode) = self.copy_mode.as_mut() else {
+            return;
+        };
+        let last = mode.last_line();
+        match action {
+            CopyAction::MoveLeft => {
+                mode.cursor.1 = mode.cursor.1.saturating_sub(count as u16);
+            }
+            CopyAction::MoveRight => {
+                let end = mode.cursor_line_end();
+                // A repetition may run into the next line, as vim's `l` does
+                // across a line end when the caller asked for a count.
+                let mut target = usize::from(mode.cursor.1).saturating_add(count);
+                let mut line = mode.cursor.0;
+                while target > usize::from(end) && line < last {
+                    target = target.saturating_sub(usize::from(end) + 1);
+                    line += 1;
+                }
+                mode.cursor = (line, target.min(usize::from(end)) as u16);
+            }
+            CopyAction::MoveUp => mode.move_lines(-(count as i64), last),
+            CopyAction::MoveDown => mode.move_lines(count as i64, last),
+            CopyAction::LineStart => mode.cursor.1 = 0,
+            CopyAction::LineEnd => mode.cursor.1 = mode.cursor_line_end(),
+            CopyAction::WordForward | CopyAction::WordBack | CopyAction::WordEnd => {
+                mode.move_word(action, count)
+            }
+            CopyAction::Top => {
+                mode.cursor = (0, 0);
+            }
+            CopyAction::Bottom => {
+                mode.cursor = (last, 0);
+            }
+            CopyAction::PageUp(half) | CopyAction::PageDown(half) => {
+                let step = if half { (rows / 2).max(1) } else { rows.max(1) };
+                let delta = step.saturating_mul(count) as i64;
+                let delta = if matches!(action, CopyAction::PageUp(_)) {
+                    -delta
+                } else {
+                    delta
+                };
+                mode.move_lines(delta, last);
+            }
+            _ => {}
+        }
+        self.copy_mode_follow(surface_id);
+        self.copy_mode_paint_selection(surface_id);
+        self.request_redraw();
+    }
+
+    /// Scroll the view so the copy-mode cursor is on screen.
+    fn copy_mode_follow(&mut self, surface_id: &str) {
+        let Some(mode) = self.copy_mode.as_ref() else {
+            return;
+        };
+        let line = mode.cursor.0;
+        let Ok(view) = self.host.screen_view(surface_id) else {
+            return;
+        };
+        let top = view.scrollback_len.saturating_sub(view.scrollback);
+        let rows = usize::from(view.rows);
+        if let Some(top) = copymode::scroll_to_show(line, top, rows, view.scrollback_len) {
+            let offset = view.scrollback_len.saturating_sub(top);
+            if let Ok(applied) = self.host.set_scrollback(surface_id, offset) {
+                self.scroll.insert(surface_id.to_string(), applied);
+            }
+        }
+    }
+
+    /// Publish the visual selection to the painter. Copy mode owns the
+    /// selection while it is open, so the mouse path cannot fight it.
+    fn copy_mode_paint_selection(&mut self, surface_id: &str) {
+        let Some(mode) = self.copy_mode.as_ref() else {
+            return;
+        };
+        let Some((start, end)) = mode.selection() else {
+            self.selection.remove(surface_id);
+            return;
+        };
+        let Ok(view) = self.host.screen_view(surface_id) else {
+            return;
+        };
+        let top = view.scrollback_len.saturating_sub(view.scrollback);
+        // Both ends are absolute lines; the painter wants visible rows.
+        let row = |line: usize| line.saturating_sub(top).min(usize::from(u16::MAX)) as u16;
+        let selection = Selection {
+            anchor: Cell {
+                row: row(start.0),
+                col: start.1,
+            },
+            head: Cell {
+                row: row(end.0),
+                col: end.1,
+            },
+            dragging: false,
+        };
+        self.selection.insert(surface_id.to_string(), selection);
+        self.last_selection = Some(surface_id.to_string());
+    }
+
+    /// Copy a visual selection from the captured buffer, which spans more than
+    /// one screen. The text is trimmed the way the mouse copy trims it.
+    fn copy_mode_yank(&mut self, surface_id: &str) {
+        let Some(mode) = self.copy_mode.as_ref() else {
+            return;
+        };
+        let Some((start, end)) = mode.selection() else {
+            self.copy_mode_leave(surface_id);
+            return;
+        };
+        let text = copymode::yank_text(&mode.lines, start, end);
+        if !text.is_empty()
+            && let Some(clipboard) = self.clipboard.as_mut()
+        {
+            let _ = clipboard.set_text(text);
+        }
+        self.copy_mode_leave(surface_id);
+    }
+
+    fn jump_to_match(&mut self, hit: &search::Hit) {
+        let focused = self.active_surface();
+        if focused.as_deref() != Some(hit.surface_id.as_str()) {
+            self.activate(&hit.surface_id);
+        }
+        let surface_id = hit.surface_id.as_str();
         let Ok(view) = self.host.screen_view(surface_id) else {
             return;
         };
         let target = view.scrollback_len.saturating_sub(hit.line);
         if let Ok(applied) = self.host.set_scrollback(surface_id, target) {
-            self.scroll.insert(surface_id.to_string(), applied);
+            self.scroll.insert(hit.surface_id.clone(), applied);
         }
-        self.search_highlight = Some(SearchHighlight {
-            surface_id: surface_id.to_string(),
+        self.search_marks.current = Some(SearchHighlight {
+            surface_id: hit.surface_id.clone(),
             line: hit.line,
             col: hit.col,
             len: hit.len,
@@ -4721,32 +5204,67 @@ impl Gui {
                 hint: "↑↓ move · enter jump and acknowledge · esc close".to_string(),
             }),
             Overlay::Search {
-                lines,
+                panes,
                 query,
-                matches,
+                options,
+                compiled,
+                hits,
                 selected,
-                ..
-            } => Some(PanelContent {
-                title: if matches.is_empty() {
+            } => {
+                // The title carries the count and the mode chips, so the panel
+                // says what it is matching without a second row of controls.
+                let mut title = if hits.is_empty() {
                     "Search".to_string()
                 } else {
-                    format!("Search {}/{}", selected + 1, matches.len())
-                },
-                query: Some(query.clone()),
-                rows: matches
-                    .iter()
-                    .map(|hit| panel::PanelRow {
-                        label: lines
-                            .get(hit.line)
-                            .map(|line| line.trim().to_string())
-                            .unwrap_or_default(),
-                        detail: format!("line {}", hit.line + 1),
-                        color: None,
-                    })
-                    .collect(),
-                selected: *selected,
-                hint: "enter next · shift+enter prev · esc close".to_string(),
-            }),
+                    format!("Search {}/{}", selected + 1, hits.len())
+                };
+                let mut chips = Vec::new();
+                if options.regex {
+                    chips.push("regex");
+                }
+                if options.whole_word {
+                    chips.push("whole word");
+                }
+                // A query that compiled but found nothing reads differently
+                // from one that could not compile at all.
+                if let Some(error) = &compiled.error {
+                    chips.push(error.as_str());
+                } else if !compiled.is_active() && !query.is_empty() {
+                    chips.push("empty pattern");
+                }
+                if !chips.is_empty() {
+                    title.push_str("  ·  ");
+                    title.push_str(&chips.join(" · "));
+                }
+                Some(PanelContent {
+                    title,
+                    query: Some(query.clone()),
+                    rows: hits
+                        .iter()
+                        .map(|hit| {
+                            let label = panes
+                                .iter()
+                                .find(|pane| pane.surface_id == hit.surface_id)
+                                .and_then(|pane| pane.lines.get(hit.line))
+                                .map(|line| line.trim().to_string())
+                                .unwrap_or_default();
+                            let title = panes
+                                .iter()
+                                .find(|pane| pane.surface_id == hit.surface_id)
+                                .map(|pane| pane.title.as_str())
+                                .unwrap_or_default();
+                            panel::PanelRow {
+                                label,
+                                detail: format!("{title} · line {}", hit.line + 1),
+                                color: None,
+                            }
+                        })
+                        .collect(),
+                    selected: *selected,
+                    hint: "enter next · shift+enter prev · ^r regex · ^w word · esc close"
+                        .to_string(),
+                })
+            }
             Overlay::Rename { value, .. } => Some(PanelContent {
                 title: "Rename".to_string(),
                 query: Some(value.clone()),
@@ -5174,6 +5692,14 @@ impl Gui {
             self.overlay_key(&event);
             return;
         }
+        // Copy mode is a modal capture in front of the chord table: its keys are
+        // vi characters that resolve to no command, so they must be taken here
+        // or they would reach the shell. The chord that opens it still closes
+        // it, and Escape closes it from inside.
+        if self.copy_mode.is_some() {
+            self.copy_mode_key(&event);
+            return;
+        }
         if let Some(command) = keys::resolve(
             &event.logical_key,
             self.modifiers,
@@ -5536,24 +6062,65 @@ mod cycle_tests {
 
 #[cfg(test)]
 mod search_tests {
-    use super::Gui;
+    use super::*;
 
-    #[test]
-    fn given_a_query_then_matches_are_case_insensitive_and_keep_order() {
-        let lines = vec![
-            "alpha beta".to_string(),
-            "BETA gamma".to_string(),
-            "nothing".to_string(),
-        ];
-        let hits = Gui::search_matches(&lines, "beta");
-        assert_eq!(hits.len(), 2);
-        assert_eq!((hits[0].line, hits[0].col, hits[0].len), (0, 6, 4));
-        assert_eq!((hits[1].line, hits[1].col), (1, 0));
+    fn buffer(surface_id: &str, title: &str, lines: &[&str]) -> search::PaneBuffer {
+        search::PaneBuffer {
+            surface_id: surface_id.to_string(),
+            title: title.to_string(),
+            lines: lines.iter().map(|line| line.to_string()).collect(),
+        }
     }
 
     #[test]
-    fn given_an_empty_query_then_there_are_no_matches() {
-        assert!(Gui::search_matches(&["alpha".to_string()], "").is_empty());
+    fn given_hits_in_two_panes_then_the_marks_are_grouped_by_surface() {
+        let hits = vec![
+            search::Hit {
+                surface_id: "srf_a".into(),
+                line: 2,
+                col: 0,
+                len: 3,
+            },
+            search::Hit {
+                surface_id: "srf_b".into(),
+                line: 7,
+                col: 4,
+                len: 3,
+            },
+            search::Hit {
+                surface_id: "srf_a".into(),
+                line: 9,
+                col: 1,
+                len: 3,
+            },
+        ];
+        let marks = Gui::marks_from(&hits);
+        assert_eq!(marks["srf_a"], vec![(2, 0, 3), (9, 1, 3)]);
+        assert_eq!(marks["srf_b"], vec![(7, 4, 3)]);
+    }
+
+    #[test]
+    fn given_a_query_over_two_panes_then_each_pane_buffer_is_searched() {
+        let panes = vec![
+            buffer("srf_a", "build", &["ok", "error"]),
+            buffer("srf_b", "tests", &["error here", "fine"]),
+        ];
+        let (compiled, hits) = Gui::search_run(&panes, "error", search::Options::default());
+        assert!(compiled.is_active());
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].surface_id, "srf_a");
+        assert_eq!(hits[1].surface_id, "srf_b");
+    }
+
+    #[test]
+    fn given_the_regex_toggle_then_the_query_is_read_as_a_pattern() {
+        let panes = vec![buffer("srf_a", "build", &["err1 err22"])];
+        let options = search::Options {
+            regex: true,
+            whole_word: false,
+        };
+        let (_, hits) = Gui::search_run(&panes, r"err\d+", options);
+        assert_eq!(hits.len(), 2);
     }
 }
 

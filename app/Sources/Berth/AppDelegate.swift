@@ -176,6 +176,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         send("surface.duplicate", ["surface_id": id])
     }
 
+    @objc func showSearch(_ sender: Any?) {
+        guard let view = BerthCoreHost.shared.focusedSurfaceView else { return }
+        SearchBar.present(for: view)
+    }
+
+    /// Ghostty owns OSC 133 prompt marks and the scroll math that walks them,
+    /// so the menu drives its own binding rather than re-deriving the jump.
+    @objc func previousPrompt(_ sender: Any?) { jumpToPrompt(-1) }
+    @objc func nextPrompt(_ sender: Any?) { jumpToPrompt(1) }
+
+    private func jumpToPrompt(_ delta: Int) {
+        BerthCoreHost.shared.focusedSurfaceView?.bindingAction("jump_to_prompt:\(delta)")
+    }
+
     @objc func restartTab(_ sender: Any?) {
         guard let id = BerthCoreHost.shared.focusedSurfaceID else { return }
         send("surface.restart", ["surface_id": id])

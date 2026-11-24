@@ -466,6 +466,61 @@ fn given_styled_text_and_a_hyperlink_then_the_screen_view_carries_them() {
     }
 }
 
+/// OSC 133 prompt marks must survive the PTY reader and reach the view the
+/// window draws the gutter from.
+#[cfg(unix)]
+#[test]
+fn given_osc_133_prompt_marks_then_the_screen_view_reports_them() {
+    use berth_core::SpawnRequest;
+    use berth_headless::prompt::PromptKind;
+
+    let host = PtyHost::new();
+    let surface_id = format!("surf-prompt-marks-{}", std::process::id());
+    host.spawn(SpawnRequest {
+        cwd: None,
+        argv: vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            "printf '\\033]133;A\\007$ false\\r\\n'; \
+             printf '\\033]133;C\\007boom\\r\\n'; \
+             printf '\\033]133;D;1\\007'; \
+             printf '\\033]133;A\\007$ '; sleep 1"
+                .into(),
+        ],
+        env: vec![("BERTH_SURFACE_ID".into(), surface_id.clone())],
+        cols: 80,
+        rows: 24,
+    })
+    .expect("spawn a program that marks its prompt");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let view = host.screen_view(&surface_id).expect("screen view");
+        if view.prompt_marks.len() >= 2 {
+            assert_eq!(view.prompt_marks[0].kind, PromptKind::Prompt);
+            assert_eq!(view.prompt_marks[0].status, None);
+            let last = view.prompt_marks.last().expect("the second prompt");
+            assert_eq!(last.kind, PromptKind::Prompt);
+            assert_eq!(last.status, Some(1));
+            assert!(last.failed());
+            let lines = host.prompt_lines(&surface_id).expect("prompt lines");
+            assert_eq!(lines.len(), 2);
+            // Scrolling the view must not prune the marks: they are bounded by
+            // the scrollback capacity, not by the current offset.
+            host.set_scrollback(&surface_id, 1)
+                .expect("scroll back one");
+            let scrolled = host.prompt_lines(&surface_id).expect("prompt lines");
+            assert_eq!(scrolled.len(), 2, "scrolling dropped a prompt mark");
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the prompt marks never reached the screen view"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 /// DECSCUSR, CSI ?1004 and OSC 52 read requests must survive the PTY reader.
 #[cfg(unix)]
 #[test]

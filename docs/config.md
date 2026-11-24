@@ -137,6 +137,24 @@ capture, so the window ships a Ctrl-based default table instead:
 | `toggleSidebar` | `cmd+opt+s` | `ctrl+alt+s` |
 | `settings` | `cmd+,` | `ctrl+,` |
 | `search` | `cmd+f` | `ctrl+shift+f` |
+| `previousPrompt` | `cmd+shift+up` | `ctrl+shift+up` |
+| `nextPrompt` | `cmd+shift+down` | `ctrl+shift+down` |
+| `copyMode` | `cmd+shift+c` | `ctrl+shift+space` |
+
+Copy mode is vi-style keyboard selection over the pane's scrollback. The chord opens
+it on the focused pane with the cursor on the newest line; press it again (or `q`,
+`Esc`, or `Space`) to leave. Motions are `h`/`j`/`k`/`l` and the arrow keys, `w`/`b`/`e`
+for words, `0`/`$`/`Home`/`End` for the line, `g`/`G` for the oldest and newest line,
+and `Ctrl+D`/`Ctrl+U` (or `PageDown`/`PageUp`) for pages; a count prefixes any of them,
+as in `5j`. `v` starts a visual selection, `y` or `Enter` copies it, and a click moves
+the cursor. Because the buffer is captured when the mode opens, a yank can span more
+than one screen, which a mouse selection cannot.
+
+Search also takes two toggles while the panel is open: `Cmd/Ctrl+R` switches to a
+regular expression, and `Cmd/Ctrl+W` restricts the match to whole words. A query
+is literal unless the regex toggle is on, so a search for `a[` finds those two
+characters rather than failing to compile. Search covers every pane of the
+visible workspace, and the detail column names the pane each hit came from.
 
 A value overrides the default for that action; an empty string unbinds it. The
 settings panel (`⌘,` / `Ctrl+,`) edits this table, the font size, the display

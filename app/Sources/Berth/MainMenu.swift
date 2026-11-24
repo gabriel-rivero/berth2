@@ -88,10 +88,15 @@ enum MainMenu {
         add(terminalMenu, "Duplicate Tab", #selector(AppDelegate.duplicateTab(_:)), .duplicateTab)
         add(terminalMenu, "Restart Tab", #selector(AppDelegate.restartTab(_:)), .restartTab)
         terminalMenu.addItem(.separator())
+        add(terminalMenu, "Find…", #selector(AppDelegate.showSearch(_:)), .search)
+        terminalMenu.addItem(.separator())
         add(terminalMenu, "Zoom Pane", #selector(AppDelegate.zoomPane(_:)), .zoomPane)
         add(
             terminalMenu, "Broadcast Input",
             #selector(AppDelegate.toggleBroadcast(_:)), .toggleBroadcast)
+        terminalMenu.addItem(.separator())
+        add(terminalMenu, "Previous Prompt", #selector(AppDelegate.previousPrompt(_:)), .previousPrompt)
+        add(terminalMenu, "Next Prompt", #selector(AppDelegate.nextPrompt(_:)), .nextPrompt)
 
         // Workspace menu: creation plus 1..9 jump targets.
         let workspaceItem = NSMenuItem()

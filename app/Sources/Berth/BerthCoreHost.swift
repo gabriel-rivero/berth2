@@ -708,6 +708,16 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
         return lastActiveSurface
     }
 
+    /// The focused surface's view, for callers that must act on the terminal
+    /// itself rather than through the core.
+    @MainActor
+    var focusedSurfaceView: GhosttySurfaceView? {
+        if let view = window?.firstResponder as? GhosttySurfaceView {
+            return view
+        }
+        return lastActiveSurface.flatMap { surfaces[$0] }
+    }
+
     /// The user focused a surface by clicking it. The core must know, or the
     /// next reconcile pass corrects focus back to its stale active surface.
     @MainActor
@@ -870,6 +880,11 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
         else { return false }
         let view = Unmanaged<GhosttySurfaceView>.fromOpaque(userdata).takeUnretainedValue()
         guard let id = view.berthSurfaceID else { return false }
+
+        // Ghostty owns the search thread; the find bar is its front end.
+        if SearchBar.handle(surfaceID: id, action: action) {
+            return true
+        }
 
         switch action.tag {
         case GHOSTTY_ACTION_SET_TITLE:

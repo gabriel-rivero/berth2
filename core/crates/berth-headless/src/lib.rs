@@ -11,6 +11,7 @@
 pub mod cursor;
 pub mod keys;
 pub mod kitty;
+pub mod prompt;
 pub mod style;
 
 use std::collections::HashMap;
@@ -130,6 +131,8 @@ pub struct ScreenView {
     pub cursor_style: CursorStyle,
     /// CSI ?1004: send focus in/out events.
     pub is_focus_reporting_enabled: bool,
+    /// OSC 133/633 prompt marks in the visible window, oldest line first.
+    pub prompt_marks: Vec<prompt::PromptMark>,
 }
 
 /// How much pointer traffic the program wants. Mirrors `vt100`.
@@ -547,6 +550,7 @@ struct Surface {
     images: Arc<Mutex<Vec<ImageView>>>,
     kitty: Arc<Mutex<HashMap<u32, KittyImage>>>,
     style: Arc<Mutex<StyleState>>,
+    prompts: Arc<Mutex<prompt::PromptMarks>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     pid: u32,
     tty: String,
@@ -738,6 +742,13 @@ impl PtyHost {
             kitty_keyboard_flags,
             cursor_style,
             is_focus_reporting_enabled: focus,
+            prompt_marks: {
+                let marks = lock(&surface.prompts);
+                marks.visible(
+                    engine.scrollback_len().saturating_sub(engine.scrollback()),
+                    rows,
+                )
+            },
         })
     }
 
@@ -860,6 +871,20 @@ impl PtyHost {
         let engine = lock(&surface.screen);
         Ok(engine.line_text(row))
     }
+
+    /// Absolute lines a program marked as a prompt start, oldest first, so a
+    /// window can walk them with a chord.
+    pub fn prompt_lines(&self, surface_id: &str) -> Result<Vec<usize>, CoreError> {
+        let surface = self.surface(surface_id)?;
+        Ok(lock(&surface.prompts).prompt_lines())
+    }
+
+    /// Whether this surface has any prompt mark at all. Cheap enough for a
+    /// window to poll every tick to decide whether to show the gutter.
+    pub fn has_prompt_marks(&self, surface_id: &str) -> Result<bool, CoreError> {
+        let surface = self.surface(surface_id)?;
+        Ok(!lock(&surface.prompts).is_empty())
+    }
 }
 
 impl SurfaceOps for PtyHost {
@@ -956,6 +981,7 @@ impl SurfaceOps for PtyHost {
         let images = Arc::new(Mutex::new(Vec::new()));
         let kitty = Arc::new(Mutex::new(HashMap::new()));
         let style = Arc::new(Mutex::new(StyleState::default()));
+        let prompts = Arc::new(Mutex::new(prompt::PromptMarks::default()));
         let screen = Arc::new(Mutex::new(engine::create(
             self.backend,
             rows,
@@ -977,6 +1003,7 @@ impl SurfaceOps for PtyHost {
                 images: Arc::clone(&images),
                 kitty: Arc::clone(&kitty),
                 style: Arc::clone(&style),
+                prompts: Arc::clone(&prompts),
                 graphics: self.graphics,
                 scrollback: self.scrollback,
                 backend: self.backend,
@@ -993,6 +1020,7 @@ impl SurfaceOps for PtyHost {
             images,
             kitty,
             style,
+            prompts,
             killer: Mutex::new(killer),
             pid,
             tty: tty.clone(),
@@ -1083,9 +1111,15 @@ impl SurfaceOps for PtyHost {
             .map_err(|error| CoreError::internal(format!("resize: {error}")))?;
         let images_clear = lock(&surface.images).is_empty();
         let mut engine = lock(&surface.screen);
+        let (_, old_cols) = engine.size();
         engine.resize(rows, cols, images_clear);
         drop(engine);
         lock(&surface.style).clear();
+        // A column change re-wraps the history, so an absolute line recorded
+        // before it no longer names the same row. A row-only change keeps them.
+        if old_cols != cols {
+            lock(&surface.prompts).clear();
+        }
         if let Some((pixel_width, pixel_height)) = pixels {
             let width = (pixel_width / u32::from(cols)).min(u32::from(u16::MAX)) as u16;
             let height = (pixel_height / u32::from(rows)).min(u32::from(u16::MAX)) as u16;
@@ -1191,6 +1225,7 @@ struct ReaderShare {
     images: Arc<Mutex<Vec<ImageView>>>,
     kitty: Arc<Mutex<HashMap<u32, KittyImage>>>,
     style: Arc<Mutex<StyleState>>,
+    prompts: Arc<Mutex<prompt::PromptMarks>>,
     graphics: bool,
     scrollback: usize,
     backend: Backend,
@@ -1659,6 +1694,7 @@ mod meta_tests {
         screen: Arc<Mutex<Box<dyn TerminalEngine>>>,
         kitty: Arc<Mutex<HashMap<u32, KittyImage>>>,
         style: Arc<Mutex<StyleState>>,
+        prompts: Arc<Mutex<prompt::PromptMarks>>,
     }
 
     impl ScannerFixture {
@@ -1680,6 +1716,7 @@ mod meta_tests {
                 screen,
                 kitty: Arc::new(Mutex::new(HashMap::new())),
                 style: Arc::new(Mutex::new(StyleState::default())),
+                prompts: Arc::new(Mutex::new(prompt::PromptMarks::default())),
             }
         }
 
@@ -1707,6 +1744,14 @@ mod meta_tests {
             lock(&self.meta).clipboard_read.clone()
         }
 
+        /// The prompt marks recorded so far, as `(line, kind, status)`.
+        fn prompt_marks(&self) -> Vec<(usize, prompt::PromptKind, Option<i32>)> {
+            lock(&self.prompts)
+                .all()
+                .map(|mark| (mark.line, mark.kind, mark.status))
+                .collect()
+        }
+
         fn share(&self) -> ReaderShare {
             ReaderShare {
                 screen: Arc::clone(&self.screen),
@@ -1716,6 +1761,7 @@ mod meta_tests {
                 images: Arc::clone(&self.images),
                 kitty: Arc::clone(&self.kitty),
                 style: Arc::clone(&self.style),
+                prompts: Arc::clone(&self.prompts),
                 graphics: true,
                 scrollback: DEFAULT_SCROLLBACK,
                 backend: Backend::Builtin,
@@ -1932,6 +1978,101 @@ mod meta_tests {
         let mut scanner = SideChannelScanner::default();
         fixture.feed(&mut scanner, b"\x1b]52;c;?\x07");
         assert_eq!(fixture.clipboard_read().as_deref(), Some("c"));
+    }
+
+    #[test]
+    fn given_a_prompt_and_a_command_then_each_mark_lands_on_its_own_line() {
+        let fixture = ScannerFixture::new();
+        let mut scanner = SideChannelScanner::default();
+        fixture.feed(&mut scanner, b"\x1b]133;A\x07$ ");
+        fixture.feed(&mut scanner, b"\x1b]133;B\x07");
+        fixture.feed(&mut scanner, b"\r\ntrue");
+        fixture.feed(&mut scanner, b"\x1b]133;C\x07");
+        fixture.feed(&mut scanner, b"\x1b]133;D;0\x07");
+        assert_eq!(
+            fixture.prompt_marks(),
+            vec![
+                (0, prompt::PromptKind::Prompt, None),
+                (1, prompt::PromptKind::CommandStart, None),
+            ]
+        );
+    }
+
+    #[test]
+    fn given_a_terminated_command_and_a_new_prompt_then_the_prompt_carries_the_status() {
+        let fixture = ScannerFixture::new();
+        let mut scanner = SideChannelScanner::default();
+        fixture.feed(&mut scanner, b"\x1b]133;A\x07$ false\r\n");
+        fixture.feed(&mut scanner, b"\x1b]133;C\x07error\r\n");
+        fixture.feed(&mut scanner, b"\x1b]133;D;1\x07");
+        fixture.feed(&mut scanner, b"\x1b]133;A\x07$ ");
+        assert_eq!(
+            fixture.prompt_marks(),
+            vec![
+                (0, prompt::PromptKind::Prompt, None),
+                (1, prompt::PromptKind::CommandStart, None),
+                (2, prompt::PromptKind::Prompt, Some(1)),
+            ]
+        );
+    }
+
+    #[test]
+    fn given_a_prompt_emitted_on_the_command_output_line_then_the_row_is_a_prompt() {
+        let fixture = ScannerFixture::new();
+        let mut scanner = SideChannelScanner::default();
+        fixture.feed(&mut scanner, b"\x1b]133;A\x07$ true\r\ndone");
+        fixture.feed(&mut scanner, b"\x1b]133;D;0\x07");
+        fixture.feed(&mut scanner, b"\x1b]133;A\x07$ ");
+        let marks = fixture.prompt_marks();
+        assert_eq!(marks[1], (1, prompt::PromptKind::Prompt, Some(0)));
+    }
+
+    #[test]
+    fn given_an_osc_633_mark_split_across_reads_then_it_still_records() {
+        let fixture = ScannerFixture::new();
+        let mut scanner = SideChannelScanner::default();
+        fixture.feed(&mut scanner, b"\x1b]633;D;12");
+        fixture.feed(&mut scanner, b"\x07\x1b]633;A\x07");
+        assert_eq!(
+            fixture.prompt_marks(),
+            vec![(0, prompt::PromptKind::Prompt, Some(12))]
+        );
+    }
+
+    #[test]
+    fn given_a_mark_while_scrolled_back_then_older_marks_are_not_pruned() {
+        let fixture = ScannerFixture::new();
+        let mut scanner = SideChannelScanner::default();
+        fixture.feed(&mut scanner, b"\x1b]133;A\x07$ one\r\n");
+        // Fill the 24-row screen so the earliest prompt is real history.
+        for _ in 0..30 {
+            fixture.feed(&mut scanner, b"output\r\n");
+        }
+        fixture.feed(&mut scanner, b"\x1b]133;D;0\x07\x1b]133;A\x07$ two");
+        assert!(
+            lock(&fixture.screen).scrollback_len() > 0,
+            "no history built"
+        );
+        // The user scrolls back while a command runs, then it finishes and the
+        // shell paints a new prompt. Pruning is bounded by the scrollback
+        // capacity, not by the view offset, or the older mark would vanish.
+        lock(&fixture.screen).set_scrollback(5);
+        fixture.feed(&mut scanner, b"\r\n\x1b]133;D;0\x07\x1b]133;A\x07$ three");
+        let marks = fixture.prompt_marks();
+        assert!(
+            marks
+                .iter()
+                .any(|(line, kind, _)| *line == 0 && *kind == prompt::PromptKind::Prompt),
+            "a mark while scrolled back pruned the earliest prompt: {marks:?}"
+        );
+    }
+
+    #[test]
+    fn given_an_alternate_screen_program_then_prompt_marks_are_not_recorded() {
+        let fixture = ScannerFixture::new();
+        let mut scanner = SideChannelScanner::default();
+        fixture.feed(&mut scanner, b"\x1b[?1049h\x1b]133;A\x07$ ");
+        assert!(fixture.prompt_marks().is_empty());
     }
 
     #[test]
@@ -2494,6 +2635,7 @@ fn handle_osc(payload: &[u8], share: &ReaderShare) {
     flush_normal(share, &mut sequence, false, false);
     lock(&share.style).apply_osc(payload);
     observe_osc(payload, &share.meta);
+    record_prompt_mark(payload, share);
     // The builtin engine stores OSC 1337 in its own callback. Other engines
     // ignore it, so the side channel does the work for them.
     if share.backend != Backend::Builtin
@@ -2514,6 +2656,31 @@ fn handle_osc(payload: &[u8], share: &ReaderShare) {
             share.scrollback,
         );
     }
+}
+
+/// Record an OSC 133/633 prompt mark against the line the cursor is on. The
+/// grid is already up to date: `handle_osc` flushed the text before it.
+fn record_prompt_mark(payload: &[u8], share: &ReaderShare) {
+    let Some(event) = prompt::parse(payload) else {
+        return;
+    };
+    let (line, scrollback_len, alternate) = {
+        let engine = lock(&share.screen);
+        let (row, _) = engine.cursor();
+        (
+            engine.scrollback_len() + usize::from(row),
+            engine.scrollback_len(),
+            engine.alternate_screen(),
+        )
+    };
+    if alternate {
+        return;
+    }
+    let mut marks = lock(&share.prompts);
+    marks.record(line, event);
+    // Pruning keeps `capacity` lines of history behind the live screen, so a
+    // mark survives scrolling; the view offset is not the bound.
+    marks.prune(scrollback_len, share.scrollback);
 }
 
 /// Side-channel OSC parsing shared by every engine: cwd, progress,

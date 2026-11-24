@@ -21,9 +21,10 @@ app itself has the gaps listed in
 ### Terminal rendering
 
 - **The protocol floor is nearly complete.** Synchronized output (DECSET 2026), the Kitty
-  keyboard protocol, styled text, OSC 8 hyperlinks, cursor shapes, focus in/out and OSC 52
-  read are in. The remaining gap is OSC 133 shell integration. The AppKit shell inherits
-  it all from Ghostty.
+  keyboard protocol, styled text, OSC 8 hyperlinks, cursor shapes, focus in/out, OSC 52
+  read and OSC 133/633 prompt marks are in. The AppKit shell inherits the floor from
+  Ghostty. Prompt marks are a gutter and jump-to-prompt only: there are no collapsible
+  command blocks, and a pane spends gutter columns only once its shell emits a mark.
 - **Font options, ligatures and zoom.** `fontFamily` picks the face at `fontSize` ×
   `fontScale`; `fontWeight`, `lineHeight`, `fontFeatures` and per-face `fontMetrics`
   tune it. Adjacent cells with the same style are shaped as one run, so ligatures
@@ -101,8 +102,11 @@ app itself has the gaps listed in
   over dividers; the AppKit split views keep the arrow.
 - **Window geometry is persisted** in `Window.bounds`; a second launch hands off to the
   running instance and raises a window.
-- **No copy mode or paste history.** Selection is mouse-only and the clipboard
-  keeps one entry.
+- **Copy mode is vi-only and has no paste history.** `copyMode` opens a modal selection
+  with `h`/`j`/`k`/`l`, words, counts, `g`/`G`, paging, visual selection and `y`; there
+  is no `/` search, no block selection and no `vi` operator-pending grammar (`d`/`c`).
+  The buffer is captured when the mode opens, so output that arrives mid-session is not
+  selectable. The clipboard still keeps one entry.
 
 ### Agents, attention and notifications
 
@@ -206,8 +210,10 @@ UniFFI. Known gaps already tracked in the macOS docs:
 
 - Group management UI (create/rename/color) is absent even though
   `group.create/update/delete` exist.
-- No in-terminal search: `search` is not in its `ShortcutAction` enum, so the
-  binding is ignored.
+- In-terminal search is a find bar over Ghostty's own incremental search (`Cmd+F`),
+  with next/previous and a match count; it has no regex or whole-word toggles, and it
+  covers the focused surface only, not the other panes of the workspace. Prompt
+  navigation (`Cmd+Shift+Up/Down`) is Ghostty's `jump_to_prompt`, so it has no gutter.
 - No tab rename UI, tab drag-reorder, or tab overflow handling.
 - Geometric focus: `⌘]`/`⌘[` walk tree order; arrow-key spatial navigation is
   missing.

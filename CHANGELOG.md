@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.17.0 — unreleased
+
+### Features
+
+- **OSC 133/633 prompt marks.** A shell that emits shell integration now gets a gutter
+  beside the grid. `A` and `B` mark a prompt, `C` the row a command's output started on,
+  and `D` reports the exit status that colours the prompt above: green when the command
+  succeeded, red when it failed. `633` (VS Code's dialect) is read the same way. The
+  marks are keyed by absolute grid line, so they follow their text through scrollback,
+  and a column change drops them rather than pointing at the wrong rows.
+- **Jump to prompt.** `previousPrompt` and `nextPrompt` (`Cmd+Shift+Up`/`Down` on macOS,
+  `Ctrl+Shift+Up`/`Down` elsewhere) walk the marked prompts, and clicking a gutter tick
+  brings that command's output to the top of the pane. Both are in the palette and the
+  settings shortcut table.
+- **The gutter costs nothing when unused.** A pane spends columns on the gutter only
+  after its shell emits a mark, so a shell without integration keeps the full grid.
+- **Search parity.** Search now takes a regex toggle (`Cmd/Ctrl+R`) and a whole-word
+  toggle (`Cmd/Ctrl+W`) while the panel is open, and it covers every pane of the
+  visible workspace rather than only the focused scrollback. A query is literal unless
+  regex is on, so `a[` finds those characters instead of failing to compile; an invalid
+  pattern reports its error in the title and matches nothing. Every hit in a pane is
+  tinted, the one the panel is on is tinted in the accent, and the tint survives closing
+  the panel. The detail column names the pane a hit came from and jumping to a hit in
+  another pane focuses that pane first.
+- **Copy mode.** `Cmd+Shift+C` (`Ctrl+Shift+Space` elsewhere) opens a vi-style modal
+  selection over the pane's scrollback: `h`/`j`/`k`/`l`, `w`/`b`/`e`, `0`/`$`, `g`/`G`,
+  `Ctrl+D`/`Ctrl+U` pages, a count prefixes any motion, `v` starts a visual selection and
+  `y` copies it. Every key is captured while the mode is open, so a mistyped motion
+  cannot reach the shell, and the status line shows a `COPY`/`COPY-V` chip. The cursor
+  is an absolute line rather than a visible row, so it keeps its text as the view
+  scrolls, and the buffer is captured on entry so a yank can span more than one screen —
+  which the mouse selection cannot. A click moves the cursor instead of starting a mouse
+  selection, and the wheel re-paints the selection as the view moves under it.
+- **Find in the AppKit shell.** `Cmd+F` opens a find bar over the focused terminal,
+  backed by Ghostty's own incremental search: it shows the current and total match,
+  `Enter` steps forward, `Shift+Enter` back, and `Esc` closes it and returns focus to
+  the shell. `Cmd+Shift+Up/Down` jump between OSC 133 prompt marks through Ghostty's
+  `jump_to_prompt` binding, so the AppKit shell gets prompt navigation without the
+  portable window's gutter.
+
 ## 0.16.3 — 2026-11-24
 
 ### Features

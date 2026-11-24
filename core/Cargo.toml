@@ -11,7 +11,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.16.3"
+version = "0.17.0"
 edition = "2024"
 rust-version = "1.89"
 license = "MIT"
@@ -45,6 +45,8 @@ accesskit = "0.17"
 accesskit_winit = "0.23"
 # Ctrl+C and SIGTERM save the session before the window exits.
 ctrlc = { version = "3", features = ["termination"] }
+# Search: literal or regular expressions with whole-word matching.
+regex = "1"
 
 [profile.release]
 opt-level = 3

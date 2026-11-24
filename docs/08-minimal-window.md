@@ -146,10 +146,14 @@ the macOS window's 12pt labels.
 - The session autosaves 500 ms after the last core event, including changes made
   by the CLI or hooks through the socket, so a crash loses at most one
   interaction.
-- `Super+F`/`Ctrl+Shift+F` searches the focused pane's configured scrollback
-  case-insensitively. The panel shows the match count; Enter and Shift+Enter
-  walk the matches, scrolling each into view and highlighting it, and Escape
-  closes and clears the highlight.
+- `Super+F`/`Ctrl+Shift+F` searches every pane of the visible workspace, not just
+  the focused one. The query is literal and case-insensitive unless the regex toggle
+  (`Cmd/Ctrl+R`) is on; `Cmd/Ctrl+W` restricts it to whole words on the same character
+  class a double-click selects. The panel shows the match count and the pane each hit
+  came from; Enter and Shift+Enter walk the matches, scrolling each into view, focusing
+  its pane and highlighting it in the accent while every other hit stays tinted.
+  Escape closes the panel and clears the tints; the mode chips and a bad pattern's error
+  are in the title.
 - Keys go through the headless encoder: printable text, Ctrl/Alt/Shift
   combinations, Enter, Tab, Esc, Backspace, Delete, Insert, arrows, Home/End,
   Page keys and F1–F12. `Shift+Enter` sends `ESC CR`, the sequence Claude Code
@@ -232,12 +236,17 @@ full audited inventory.
   per-window sidebar selection, persisted geometry and a maximised pane all come from the
   core, so both shells share them. Tab tear-off and broadcast input land on the same model.
 - **The protocol floor is otherwise complete.** Synchronized output (DECSET 2026), the
-  Kitty keyboard protocol, styled text, OSC 8 hyperlinks, cursor shapes, focus reporting
-  and OSC 52 read are supported; OSC 133 shell integration is not. The design is in
-  [docs/11-competitive-gaps.md](11-competitive-gaps.md); it is 0.15 work.
+  Kitty keyboard protocol, styled text, OSC 8 hyperlinks, cursor shapes, focus reporting,
+  OSC 52 read and OSC 133/633 prompt marks are supported. A shell that emits prompt marks
+  gets a gutter beside the grid: a green tick per prompt, red when the command above it
+  failed, and a dim mark where output started. Click a tick to bring that command to the
+  top of the pane, or walk them with the `previousPrompt`/`nextPrompt` chords.
 - **Two palettes.** `theme` picks `berth-dark` or `berth-light`, `opacity` fades the
   window, and the zoom chords resize the font; ligatures render through shaping runs.
-- **No copy mode, paste history or command blocks.** Selection is mouse-only.
+- **Copy mode is in; paste history and command blocks are not.** `Cmd+Shift+C` opens a
+  vi-style modal selection (`h`/`j`/`k`/`l`, `w`/`b`/`e`, `0`/`$`, `g`/`G`, `Ctrl+D`/`U`,
+  counts, `v`, `y`); the mouse still selects and copies, but the clipboard keeps one
+  entry and there are no command blocks.
 - **No installers on macOS or Windows.** Linux has a `.deb` and a `PKGBUILD`; there is no
   AppImage, Flatpak, Windows installer or auto-update.
 - **Detection is process-name only**, and a Windows notification is not raised.
