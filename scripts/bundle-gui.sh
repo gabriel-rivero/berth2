@@ -23,6 +23,7 @@ echo "==> assembling $APP ($VERSION build $BUILD)"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/berth-gui"
+cp packaging/Berth.icns "$APP/Contents/Resources/Berth.icns"
 # The hook and wrapper commands need the CLI beside the window. Build it with
 # `make cli` (or `make gui-app`); a bare window build simply omits it.
 CLI="core/target/$CONFIG/berth"
@@ -54,6 +55,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleName</key><string>Berth Portable</string>
   <key>CFBundleDisplayName</key><string>Berth Portable</string>
   <key>CFBundleIdentifier</key><string>dev.berth.gui</string>
+  <key>CFBundleIconFile</key><string>Berth.icns</string>
   <key>CFBundleExecutable</key><string>BerthGui</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>

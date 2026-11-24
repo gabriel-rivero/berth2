@@ -24,6 +24,7 @@ echo "==> assembling $APP ($VERSION build $BUILD)"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Berth"
+cp packaging/Berth.icns "$APP/Contents/Resources/Berth.icns"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -33,6 +34,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleName</key><string>Berth</string>
   <key>CFBundleDisplayName</key><string>Berth</string>
   <key>CFBundleIdentifier</key><string>dev.berth.app</string>
+  <key>CFBundleIconFile</key><string>Berth.icns</string>
   <key>CFBundleExecutable</key><string>Berth</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>

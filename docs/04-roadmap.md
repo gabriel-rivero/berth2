@@ -307,7 +307,7 @@ oversights. They are picked up by the milestones named beside them.
 | Gap | Where it goes |
 | --- | --- |
 | AppKit broadcast sets the flag but typed input still goes only to the focused surface | 0.16.x follow-up |
-| AppKit has no tab tear-off, tab overflow, status bar or right-click tab/pane menus | 0.16.x follow-up |
+| AppKit has no tab tear-off, tab overflow, status bar or right-click tab/pane actions (right-click gives Copy/Paste/Select All) | 0.16.x follow-up |
 | AppKit sidebar has no filter, one-row-per-agent or colour/icon pickers | 0.16.x follow-up |
 | RTL shaping for sidebar rows, tab labels and panel text in either shell | 0.16.x follow-up |
 | Pane swap/move are protocol and CLI only; no palette or menu entry | 0.16.x follow-up |
@@ -315,4 +315,17 @@ oversights. They are picked up by the milestones named beside them.
 | The portable shell still exits on a busy socket instead of raising the running window | 0.16.x follow-up |
 | Harness plugins are lifecycle hooks only; they install no skills or instructions | 0.18 |
 | AppKit parity list (search, rename/reorder, groups, a11y, socket, config keys) | 1.0 |
+
+## Known gaps after 0.16.2
+
+The right-click menus and the app icon closed two of the 0.16.x follow-ups. What they
+left open is recorded here; the rows of the 0.16.1 table that are not repeated still
+stand.
+
+| Gap | Where it goes |
+| --- | --- |
+| The AppKit right-click menu is terminal-only: no tab/pane actions, no separators, no search or paste-as-plain-text | 0.16.x follow-up |
+| The portable right-click panel is one flat list: Copy cannot be greyed out when the pane has no selection, and there are no separators between groups | 0.16.x follow-up |
+| Windows executables carry no icon; only the macOS bundles and the Linux packages do | 1.0 |
+
 

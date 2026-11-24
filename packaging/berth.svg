@@ -1,6 +1,47 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
-  <rect x="8" y="16" width="112" height="96" rx="14" fill="#1c1c24"/>
-  <rect x="8" y="16" width="112" height="96" rx="14" fill="none" stroke="#e8b06a" stroke-width="5"/>
-  <path d="M30 50 L48 64 L30 78" fill="none" stroke="#e8b06a" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M58 80 H92" fill="none" stroke="#8bd5a6" stroke-width="7" stroke-linecap="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="Berth">
+  <title>Berth</title>
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2d3848"/>
+      <stop offset="0.55" stop-color="#161c26"/>
+      <stop offset="1" stop-color="#0a0e14"/>
+    </linearGradient>
+    <linearGradient id="bar" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.07"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.55" r="0.52">
+      <stop offset="0" stop-color="#e8b06a" stop-opacity="0.24"/>
+      <stop offset="0.65" stop-color="#e8b06a" stop-opacity="0.05"/>
+      <stop offset="1" stop-color="#e8b06a" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="prompt" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffdca6"/>
+      <stop offset="1" stop-color="#df9440"/>
+    </linearGradient>
+    <linearGradient id="cursor" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#9df2cd"/>
+      <stop offset="1" stop-color="#3cbd85"/>
+    </linearGradient>
+    <clipPath id="bodyClip">
+      <rect x="100" y="100" width="824" height="824" rx="186"/>
+    </clipPath>
+  </defs>
+
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#body)"/>
+  <g clip-path="url(#bodyClip)">
+    <rect x="100" y="100" width="824" height="824" fill="url(#glow)"/>
+    <rect x="100" y="100" width="824" height="190" fill="url(#bar)"/>
+  </g>
+  <rect x="106" y="106" width="812" height="812" rx="180" fill="none" stroke="#ffffff" stroke-opacity="0.12" stroke-width="5"/>
+
+  <g fill="#ffffff">
+    <circle cx="300" cy="248" r="17" opacity="0.20"/>
+    <circle cx="364" cy="248" r="17" opacity="0.13"/>
+    <circle cx="428" cy="248" r="17" opacity="0.08"/>
+  </g>
+
+  <path d="M 323 370 L 467 498 L 323 626" fill="none" stroke="url(#prompt)" stroke-width="74"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="541" y="552" width="196" height="74" rx="37" fill="url(#cursor)"/>
 </svg>

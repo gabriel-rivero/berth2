@@ -3479,13 +3479,19 @@ impl Gui {
         let Some(surface_id) = self.selection_surface() else {
             return;
         };
-        let Some(selection) = self.selection.get(&surface_id).copied() else {
+        self.copy_surface_selection(&surface_id);
+    }
+
+    /// Copy `surface_id`'s selection. The context menu copies the pane it was
+    /// opened on, which is not necessarily the focused one.
+    fn copy_surface_selection(&mut self, surface_id: &str) {
+        let Some(selection) = self.selection.get(surface_id).copied() else {
             return;
         };
         let (start, end) = selection.span();
-        let Ok(text) =
-            self.host
-                .contents_between(&surface_id, start.row, start.col, end.row, end.col)
+        let Ok(text) = self
+            .host
+            .contents_between(surface_id, start.row, start.col, end.row, end.col)
         else {
             return;
         };
@@ -3756,35 +3762,50 @@ impl Gui {
     fn context_action(&mut self, index: usize, surface_id: Option<&str>, pane_id: Option<&str>) {
         match index {
             0 => {
+                let Some(surface_id) = surface_id else {
+                    return;
+                };
+                self.copy_surface_selection(surface_id);
+            }
+            1 => {
+                // Paste belongs to the pane the menu was opened on, so focus
+                // moves there first rather than to whichever pane was active.
+                let Some(surface_id) = surface_id else {
+                    return;
+                };
+                self.activate(surface_id);
+                self.paste();
+            }
+            2 => {
                 let params = pane_id
                     .map(|pane_id| serde_json::json!({"pane_id": pane_id}))
                     .unwrap_or_else(|| serde_json::json!({}));
                 let _ = self.dispatch("surface.create", params);
             }
-            1..=3 => {
+            3..=5 => {
                 let Some(surface_id) = surface_id else {
                     return;
                 };
                 let method = match index {
-                    1 => "surface.duplicate",
-                    2 => "surface.restart",
+                    3 => "surface.duplicate",
+                    4 => "surface.restart",
                     _ => "surface.close",
                 };
                 let _ = self.dispatch(method, serde_json::json!({"surface_id": surface_id}));
             }
-            4 | 5 => {
+            6 | 7 => {
                 let Some(surface_id) = surface_id else {
                     return;
                 };
-                let direction = if index == 4 { "right" } else { "down" };
+                let direction = if index == 6 { "right" } else { "down" };
                 let _ = self.dispatch(
                     "surface.split",
                     serde_json::json!({"surface_id": surface_id, "direction": direction}),
                 );
             }
-            6 => self.toggle_pane_zoom(),
-            7 => self.toggle_broadcast(),
-            8 => {
+            8 => self.toggle_pane_zoom(),
+            9 => self.toggle_broadcast(),
+            10 => {
                 let Some(surface_id) = surface_id else {
                     return;
                 };
@@ -4042,8 +4063,10 @@ impl Gui {
         }
     }
 
-    fn context_labels() -> [&'static str; 9] {
+    fn context_labels() -> [&'static str; 11] {
         [
+            "Copy",
+            "Paste",
             "New Tab",
             "Duplicate Tab",
             "Restart Tab",

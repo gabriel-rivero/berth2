@@ -92,7 +92,11 @@ app itself has the gaps listed in
 - **Tab overflow lands as a scrollable strip.** The strip scrolls with the wheel and a
   `»` button opens the hidden tabs. Rename and drag-reorder are in.
 - **Menus live in the window.** The portable shell draws an in-window menu strip and a
-  right-click action menu; the AppKit shell uses the native menu bar.
+  right-click action menu; the AppKit shell uses the native menu bar, and its
+  right-click menu offers only Copy, Paste and Select All (no tab/pane actions).
+- **One icon, two formats.** `packaging/berth.svg` is the master (used by the Linux
+  packages) and `packaging/Berth.icns` is generated from it for the macOS bundles.
+  Windows executables still carry no icon.
 - **No divider cursor change in AppKit.** The portable window switches to a resize cursor
   over dividers; the AppKit split views keep the arrow.
 - **Window geometry is persisted** in `Window.bounds`; a second launch hands off to the

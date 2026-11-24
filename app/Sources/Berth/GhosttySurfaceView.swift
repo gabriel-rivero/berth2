@@ -597,22 +597,87 @@ final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClient {
         _ = ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_LEFT, mods)
     }
 
+    /// True when the last right press went to the terminal, so its release
+    /// belongs to it too and no menu opened.
+    private var rightPressForwarded = false
+
     override func rightMouseDown(with event: NSEvent) {
         guard let surface else { return super.rightMouseDown(with: event) }
         let (x, y, mods) = mousePosition(event)
         ghostty_surface_mouse_pos(surface, x, y, mods)
-        if !ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_RIGHT, mods) {
-            super.rightMouseDown(with: event)
-        }
+        rightPressForwarded = ghostty_surface_mouse_button(
+            surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_RIGHT, mods)
+        // A program that tracks the mouse owns the right button (context menus
+        // inside Claude Code, vim, …); everyone else gets Berth's menu.
+        if rightPressForwarded { return }
+        NSMenu.popUpContextMenu(contextMenu(), with: event, for: self)
     }
 
     override func rightMouseUp(with event: NSEvent) {
-        guard let surface else { return super.rightMouseUp(with: event) }
+        guard let surface, rightPressForwarded else {
+            return super.rightMouseUp(with: event)
+        }
+        rightPressForwarded = false
         let (x, y, mods) = mousePosition(event)
         ghostty_surface_mouse_pos(surface, x, y, mods)
         if !ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_RIGHT, mods) {
             super.rightMouseUp(with: event)
         }
+    }
+
+    // MARK: - Context menu
+
+    /// Copy/paste for the terminal. Rebuilt per press so Copy reflects the
+    /// selection at that moment.
+    private func contextMenu() -> NSMenu {
+        let menu = NSMenu()
+        // The target answers every action, so AppKit's automatic validation
+        // would enable Copy even without a selection.
+        menu.autoenablesItems = false
+
+        let copy = menu.addItem(
+            withTitle: "Copy", action: #selector(copySelection(_:)), keyEquivalent: "")
+        copy.target = self
+        copy.isEnabled = surface.map { ghostty_surface_has_selection($0) } ?? false
+
+        let paste = menu.addItem(
+            withTitle: "Paste", action: #selector(pasteFromClipboard(_:)), keyEquivalent: "")
+        paste.target = self
+
+        menu.addItem(.separator())
+
+        let selectAll = menu.addItem(
+            withTitle: "Select All", action: #selector(selectAllText(_:)), keyEquivalent: "")
+        selectAll.target = self
+
+        return menu
+    }
+
+    /// Run a Ghostty binding action by name. Selection and editing belong to
+    /// the terminal, so the menu goes through the same actions as its chords.
+    @discardableResult
+    private func runAction(_ name: String) -> Bool {
+        guard let surface else { return false }
+        let ran = name.withCString { pointer in
+            ghostty_surface_binding_action(
+                surface, pointer, UInt(name.lengthOfBytes(using: .utf8)))
+        }
+        if !ran {
+            BerthLog.ui.error("ghostty action failed: \(name, privacy: .public)")
+        }
+        return ran
+    }
+
+    @objc private func copySelection(_ sender: Any?) {
+        _ = runAction("copy_to_clipboard")
+    }
+
+    @objc private func pasteFromClipboard(_ sender: Any?) {
+        _ = runAction("paste_from_clipboard")
+    }
+
+    @objc private func selectAllText(_ sender: Any?) {
+        _ = runAction("select_all")
     }
 
     override func otherMouseDown(with event: NSEvent) {

@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- **Copy and paste from the right-click menu.** The portable window's action menu gains
+  Copy and Paste above the tab/pane commands. Copy takes the selection of the pane the
+  menu was opened on, and Paste focuses that pane first. The AppKit shell had no context
+  menu at all: right-click now opens Copy, Paste and Select All, and a terminal that
+  tracks the mouse still receives the click.
+- **App icon.** `packaging/berth.svg` is redrawn as a 1024 px master — a gold prompt
+  chevron and a mint cursor on a dark rounded tile — and `packaging/Berth.icns` is
+  generated from it for the macOS bundles (`make icon` regenerates it).
+
 ## 0.16.1 — 2026-11-24
 
 ### Features
