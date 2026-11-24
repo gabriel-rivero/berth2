@@ -140,6 +140,7 @@ capture, so the window ships a Ctrl-based default table instead:
 | `previousPrompt` | `cmd+shift+up` | `ctrl+shift+up` |
 | `nextPrompt` | `cmd+shift+down` | `ctrl+shift+down` |
 | `copyMode` | `cmd+shift+c` | `ctrl+shift+space` |
+| `pasteHistory` | `cmd+shift+v` | `ctrl+alt+v` |
 
 Copy mode is vi-style keyboard selection over the pane's scrollback. The chord opens
 it on the focused pane with the cursor on the newest line; press it again (or `q`,
@@ -149,6 +150,13 @@ and `Ctrl+D`/`Ctrl+U` (or `PageDown`/`PageUp`) for pages; a count prefixes any o
 as in `5j`. `v` starts a visual selection, `y` or `Enter` copies it, and a click moves
 the cursor. Because the buffer is captured when the mode opens, a yank can span more
 than one screen, which a mouse selection cannot.
+
+`pasteHistory` opens a picker over the last twelve copies and pastes, newest first.
+The history lives in memory for the session only and is never written to disk, and it
+records the user's own copies and pastes rather than OSC 52 writes from a program. On
+macOS the chord sits on the fixed paste binding, so with an empty history it falls back
+to an ordinary paste instead of doing nothing; a multi-line entry still asks for the
+paste confirmation.
 
 Search also takes two toggles while the panel is open: `Cmd/Ctrl+R` switches to a
 regular expression, and `Cmd/Ctrl+W` restricts the match to whole words. A query

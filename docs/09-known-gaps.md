@@ -102,11 +102,16 @@ app itself has the gaps listed in
   over dividers; the AppKit split views keep the arrow.
 - **Window geometry is persisted** in `Window.bounds`; a second launch hands off to the
   running instance and raises a window.
-- **Copy mode is vi-only and has no paste history.** `copyMode` opens a modal selection
+- **Copy mode is vi-only.** `copyMode` opens a modal selection
   with `h`/`j`/`k`/`l`, words, counts, `g`/`G`, paging, visual selection and `y`; there
   is no `/` search, no block selection and no `vi` operator-pending grammar (`d`/`c`).
   The buffer is captured when the mode opens, so output that arrives mid-session is not
-  selectable. The clipboard still keeps one entry.
+  selectable.
+- **Paste history is portable-only and session-only.** `pasteHistory` keeps twelve
+  entries in memory, never on disk, and records the user's own copies and pastes but not
+  OSC 52 writes from a program. The AppKit shell has no such action, so the shared
+  `pasteHistory` key in `config.json` is ignored there and `Cmd+Shift+V` pastes through
+  Ghostty instead.
 
 ### Agents, attention and notifications
 

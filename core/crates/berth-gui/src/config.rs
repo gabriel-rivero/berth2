@@ -49,13 +49,14 @@ pub enum Action {
     PreviousPrompt,
     NextPrompt,
     CopyMode,
+    PasteHistory,
     ZoomIn,
     ZoomOut,
     ZoomReset,
 }
 
 impl Action {
-    pub const ALL: [Action; 32] = [
+    pub const ALL: [Action; 33] = [
         Action::SplitRight,
         Action::SplitDown,
         Action::NewTab,
@@ -85,6 +86,7 @@ impl Action {
         Action::PreviousPrompt,
         Action::NextPrompt,
         Action::CopyMode,
+        Action::PasteHistory,
         Action::ZoomIn,
         Action::ZoomOut,
         Action::ZoomReset,
@@ -122,6 +124,7 @@ impl Action {
             Action::PreviousPrompt => "Previous Prompt",
             Action::NextPrompt => "Next Prompt",
             Action::CopyMode => "Copy Mode",
+            Action::PasteHistory => "Paste History",
             Action::ZoomIn => "Zoom In",
             Action::ZoomOut => "Zoom Out",
             Action::ZoomReset => "Actual Size",
@@ -160,6 +163,7 @@ impl Action {
             Action::PreviousPrompt => "previousPrompt",
             Action::NextPrompt => "nextPrompt",
             Action::CopyMode => "copyMode",
+            Action::PasteHistory => "pasteHistory",
             Action::ZoomIn => "zoomIn",
             Action::ZoomOut => "zoomOut",
             Action::ZoomReset => "zoomReset",
@@ -198,6 +202,7 @@ impl Action {
             Action::PreviousPrompt => "cmd+shift+up",
             Action::NextPrompt => "cmd+shift+down",
             Action::CopyMode => "cmd+shift+c",
+            Action::PasteHistory => "cmd+shift+v",
             Action::ZoomIn => "cmd+=",
             Action::ZoomOut => "cmd+-",
             Action::ZoomReset => "cmd+0",
@@ -238,6 +243,7 @@ impl Action {
             Action::PreviousPrompt => "ctrl+shift+up",
             Action::NextPrompt => "ctrl+shift+down",
             Action::CopyMode => "ctrl+shift+space",
+            Action::PasteHistory => "ctrl+alt+v",
             Action::ZoomIn => "ctrl+=",
             Action::ZoomOut => "ctrl+-",
             Action::ZoomReset => "ctrl+0",

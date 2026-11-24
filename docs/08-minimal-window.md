@@ -243,10 +243,10 @@ full audited inventory.
   top of the pane, or walk them with the `previousPrompt`/`nextPrompt` chords.
 - **Two palettes.** `theme` picks `berth-dark` or `berth-light`, `opacity` fades the
   window, and the zoom chords resize the font; ligatures render through shaping runs.
-- **Copy mode is in; paste history and command blocks are not.** `Cmd+Shift+C` opens a
+- **Copy mode and paste history are in; command blocks are not.** `Cmd+Shift+C` opens a
   vi-style modal selection (`h`/`j`/`k`/`l`, `w`/`b`/`e`, `0`/`$`, `g`/`G`, `Ctrl+D`/`U`,
-  counts, `v`, `y`); the mouse still selects and copies, but the clipboard keeps one
-  entry and there are no command blocks.
+  counts, `v`, `y`), and `Cmd+Shift+V` picks from the last twelve copies, held in memory
+  for the session only. There are no command blocks.
 - **No installers on macOS or Windows.** Linux has a `.deb` and a `PKGBUILD`; there is no
   AppImage, Flatpak, Windows installer or auto-update.
 - **Detection is process-name only**, and a Windows notification is not raised.

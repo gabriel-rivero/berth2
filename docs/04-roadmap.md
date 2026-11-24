@@ -167,6 +167,10 @@ Goal: the prompt becomes a place in the buffer, not a string in a stream.
   wheel keeps the painted tint on the right rows. The AppKit shell uses Ghostty's own
   copy-mode bindings and needs nothing here.
 - **Paste history**: the last N clipboards with a picker, never persisted to disk.
+  **Landed in 0.17.0**: `pasteHistory` keeps twelve entries in memory, newest first, with
+  move-to-front dedupe, a byte cap and a label clipped at record time. It records the
+  user's copies and pastes, not OSC 52 writes or copy-on-select. On macOS the chord
+  overlaps the fixed paste binding, so an empty history falls back to a plain paste.
 - **Quick terminal**: a global-hotkey dropdown window per display, both shells.
 - **Commands and profiles**: user-defined commands from `config.json`, recent-choice
   ranking, named launch presets that replace the single `shell` key (argv, env, cwd,
@@ -353,6 +357,9 @@ The 0.17 items that shipped partially, recorded so they are decisions and not ov
 | Gap | Where it goes |
 | --- | --- |
 | OSC 133 `D` may carry a command duration; it is not parsed, so there is no per-command timing | 0.18 inbox |
+| Paste history is portable-only; the AppKit shell ignores the key and `Cmd+Shift+V` pastes through Ghostty | 1.0 AppKit parity |
+| Paste history is one ring shared by every native window, not per window | 0.18 |
+| Picking a single-line history entry does not move it to the front, while a confirmed multi-line one does | 0.18 |
 | The AppKit shell has no prompt gutter: it inherits Ghostty's marks and `jump_to_prompt` but draws no gutter | 1.0 AppKit parity |
 | Prompt marks are dropped on a column change rather than remapped through the reflow | 0.18 |
 | Search indexes each pane's active surface only, so a non-active tab in a pane is not searched | 0.18 palette/session search |

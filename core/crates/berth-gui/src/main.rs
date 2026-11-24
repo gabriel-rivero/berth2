@@ -50,6 +50,7 @@ mod log;
 mod mouse;
 mod paint;
 mod panel;
+mod paste_history;
 mod search;
 mod settings;
 mod shells;
@@ -425,6 +426,7 @@ fn main() {
         branch: RefCell::new(BranchCache::default()),
         prompt_surfaces: HashSet::new(),
         copy_mode: None,
+        paste_history: paste_history::PasteHistory::new(),
     };
 
     if let Err(error) = event_loop.run_app(&mut app) {
@@ -539,6 +541,10 @@ enum Overlay {
         selection: String,
         selected: usize,
     },
+    /// The last few clipboard entries, newest first, to paste one of them.
+    PasteHistory {
+        selected: usize,
+    },
     /// The tabs a pane's strip cannot show.
     TabMenu {
         pane_id: String,
@@ -565,7 +571,9 @@ impl Overlay {
             Overlay::Palette { selected, .. }
             | Overlay::Attention { selected }
             | Overlay::Settings { selected, .. } => *selected,
-            Overlay::ClipboardRead { selected, .. } => *selected,
+            Overlay::ClipboardRead { selected, .. } | Overlay::PasteHistory { selected } => {
+                *selected
+            }
             Overlay::TabMenu { selected, .. } | Overlay::Context { selected, .. } => *selected,
             Overlay::Rename { .. } | Overlay::Confirm { .. } => 0,
             Overlay::Search { selected, .. } => *selected,
@@ -579,6 +587,7 @@ impl Overlay {
             | Overlay::Settings { selected, .. }
             | Overlay::Search { selected, .. }
             | Overlay::ClipboardRead { selected, .. }
+            | Overlay::PasteHistory { selected }
             | Overlay::TabMenu { selected, .. }
             | Overlay::Context { selected, .. } => *selected = index,
             Overlay::Rename { .. } | Overlay::Confirm { .. } => {}
@@ -734,6 +743,8 @@ struct Gui {
     /// The copy-mode session, while one is open. It captures every key before
     /// the shell sees it.
     copy_mode: Option<copymode::CopyMode>,
+    /// The last few clipboards, in memory only.
+    paste_history: paste_history::PasteHistory,
 }
 
 /// Last branch read for a cwd, with the time it was read. A cwd change or a
@@ -3623,32 +3634,58 @@ impl Gui {
         self.copy_surface_selection(&surface_id);
     }
 
-    /// Copy `surface_id`'s selection. The context menu copies the pane it was
-    /// opened on, which is not necessarily the focused one.
+    /// Copy `surface_id`'s selection and remember it. The context menu copies
+    /// the pane it was opened on, which is not necessarily the focused one.
     fn copy_surface_selection(&mut self, surface_id: &str) {
-        let Some(selection) = self.selection.get(surface_id).copied() else {
+        // Read the selection once: two reads could straddle output arriving on
+        // the PTY thread and record different text from what was copied.
+        let Some(text) = self.selection_text(surface_id) else {
             return;
         };
+        if self.copy_text(&text) {
+            self.paste_history.record(&text);
+        }
+    }
+
+    /// Copy without recording. Copy-on-select runs on every drag, so letting it
+    /// fill the history would push the user's real copies out of the ring.
+    fn copy_surface_selection_quiet(&mut self, surface_id: &str) {
+        let Some(text) = self.selection_text(surface_id) else {
+            return;
+        };
+        self.copy_text(&text);
+    }
+
+    /// Put `text` on the clipboard. Returns whether it landed, so only a copy
+    /// that actually happened is remembered.
+    fn copy_text(&mut self, text: &str) -> bool {
+        match self.clipboard.as_mut() {
+            Some(clipboard) => match clipboard.set_text(text) {
+                Ok(()) => true,
+                Err(error) => {
+                    eprintln!("berth-gui: clipboard: {error}");
+                    false
+                }
+            },
+            None => false,
+        }
+    }
+
+    /// The selected text of `surface_id`, trimmed, or `None` when there is no
+    /// selection or it is only whitespace.
+    fn selection_text(&self, surface_id: &str) -> Option<String> {
+        let selection = self.selection.get(surface_id).copied()?;
         let (start, end) = selection.span();
-        let Ok(text) = self
+        let text = self
             .host
             .contents_between(surface_id, start.row, start.col, end.row, end.col)
-        else {
-            return;
-        };
+            .ok()?;
         let text = text
             .lines()
             .map(str::trim_end)
             .collect::<Vec<_>>()
             .join("\n");
-        if text.is_empty() {
-            return;
-        }
-        if let Some(clipboard) = self.clipboard.as_mut()
-            && let Err(error) = clipboard.set_text(text)
-        {
-            eprintln!("berth-gui: clipboard: {error}");
-        }
+        (!text.is_empty()).then_some(text)
     }
 
     /// Copy the finished selection without a chord, like a terminal with
@@ -3668,7 +3705,7 @@ impl Gui {
         if start == end {
             return;
         }
-        self.copy_selection();
+        self.copy_surface_selection_quiet(&surface_id);
     }
 
     fn paste(&mut self) {
@@ -3693,6 +3730,7 @@ impl Gui {
             self.overlay = Some(Overlay::Confirm { text });
             return;
         }
+        self.paste_history.record(&text);
         self.send_paste(&text);
     }
 
@@ -3827,6 +3865,7 @@ impl Gui {
             Command::Search => self.open_search(),
             Command::JumpPrompt(direction) => self.jump_prompt(direction),
             Command::CopyMode => self.toggle_copy_mode(),
+            Command::PasteHistory => self.open_paste_history(),
             Command::ZoomIn => self.zoom_font(1.0),
             Command::ZoomOut => self.zoom_font(-1.0),
             Command::ZoomReset => self.reset_zoom(),
@@ -4197,6 +4236,7 @@ impl Gui {
             Overlay::Rename { .. } => 0,
             Overlay::Search { hits, .. } => hits.len(),
             Overlay::ClipboardRead { .. } => 2,
+            Overlay::PasteHistory { .. } => self.paste_history.len(),
             Overlay::TabMenu { pane_id, .. } => lock(&self.state)
                 .panes
                 .get(pane_id)
@@ -4443,6 +4483,20 @@ impl Gui {
                 Key::Named(NamedKey::ArrowDown) => next_selected = Some(1),
                 _ => {}
             },
+            Overlay::PasteHistory { .. } => {
+                let len = self.paste_history.len();
+                match &event.logical_key {
+                    Key::Named(NamedKey::Escape) => close = true,
+                    Key::Named(NamedKey::Enter) => activate = true,
+                    Key::Named(NamedKey::ArrowDown) => {
+                        next_selected = Some(panel::move_selection(current, 1, len));
+                    }
+                    Key::Named(NamedKey::ArrowUp) => {
+                        next_selected = Some(panel::move_selection(current, -1, len));
+                    }
+                    _ => {}
+                }
+            }
         }
         if let Some((target, value)) = rename_commit {
             self.commit_rename(&target, &value);
@@ -4781,6 +4835,39 @@ impl Gui {
         (hits, current)
     }
 
+    /// Open the paste-history picker, newest entry first. The clipboard itself
+    /// is not recorded: the history is what the user copied or pasted in this
+    /// session, and seeding it with whatever an external app copied would make
+    /// the top row untrustworthy.
+    fn open_paste_history(&mut self) {
+        if self.active_surface().is_none() {
+            return;
+        }
+        // The chord overlaps the fixed paste binding on macOS, so an empty
+        // history must still paste rather than swallow the key.
+        if self.paste_history.is_empty() {
+            self.paste();
+            return;
+        }
+        self.overlay = Some(Overlay::PasteHistory { selected: 0 });
+        self.request_redraw();
+    }
+
+    /// Paste one history entry. A multi-line entry still asks for the paste
+    /// confirmation a multi-line clipboard paste asks for, through the same path.
+    fn paste_history_entry(&mut self, selected: usize) {
+        let Some(entry) = self.paste_history.get(selected) else {
+            return;
+        };
+        let text = entry.text.clone();
+        if text.lines().count() > 1 {
+            self.overlay = Some(Overlay::Confirm { text });
+            self.request_redraw();
+            return;
+        }
+        self.send_paste(&text);
+    }
+
     /// Open copy mode on the focused pane, or close it if it is already open.
     /// The cursor starts on the newest line, which is where the shell left it,
     /// and the buffer is captured so a yank can span more than one screen.
@@ -5014,10 +5101,8 @@ impl Gui {
             return;
         };
         let text = copymode::yank_text(&mode.lines, start, end);
-        if !text.is_empty()
-            && let Some(clipboard) = self.clipboard.as_mut()
-        {
-            let _ = clipboard.set_text(text);
+        if !text.is_empty() && self.copy_text(&text) {
+            self.paste_history.record(&text);
         }
         self.copy_mode_leave(surface_id);
     }
@@ -5265,6 +5350,29 @@ impl Gui {
                         .to_string(),
                 })
             }
+            Overlay::PasteHistory { selected } => Some(PanelContent {
+                title: format!(
+                    "Paste History {}/{}",
+                    selected + 1,
+                    self.paste_history.len()
+                ),
+                query: None,
+                rows: self
+                    .paste_history
+                    .entries()
+                    .iter()
+                    .map(|entry| panel::PanelRow {
+                        label: entry.preview().to_string(),
+                        detail: match entry.line_count() {
+                            1 => "1 line".to_string(),
+                            lines => format!("{lines} lines"),
+                        },
+                        color: None,
+                    })
+                    .collect(),
+                selected: *selected,
+                hint: "↑↓ move · enter paste · esc close".to_string(),
+            }),
             Overlay::Rename { value, .. } => Some(PanelContent {
                 title: "Rename".to_string(),
                 query: Some(value.clone()),
@@ -5452,8 +5560,10 @@ impl Gui {
                     }
                 }
             }
+            Some(Overlay::PasteHistory { selected }) => self.paste_history_entry(selected),
             Some(Overlay::Rename { .. }) | Some(Overlay::Search { .. }) => {}
             Some(Overlay::Confirm { text }) => {
+                self.paste_history.record(&text);
                 self.send_paste(&text);
             }
             Some(Overlay::ClipboardRead {

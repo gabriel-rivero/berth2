@@ -33,6 +33,14 @@
   scrolls, and the buffer is captured on entry so a yank can span more than one screen —
   which the mouse selection cannot. A click moves the cursor instead of starting a mouse
   selection, and the wheel re-paints the selection as the view moves under it.
+- **Paste history.** `Cmd+Shift+V` (`Ctrl+Alt+V` elsewhere) picks from the last twelve
+  copies and pastes one. The ring lives in memory for the session and is never written to
+  disk; it records the user's own copies and pastes, not OSC 52 writes from a program,
+  and copy-on-select does not feed it. A repeated copy moves to the front instead of
+  appearing twice, a blank or oversized entry is skipped, and an entry's picker label is
+  clipped when it is recorded rather than every frame. On macOS the chord sits on the
+  fixed paste binding, so an empty history falls back to a plain paste; a multi-line
+  entry still asks for the paste confirmation, and is only recorded once it is confirmed.
 - **Find in the AppKit shell.** `Cmd+F` opens a find bar over the focused terminal,
   backed by Ghostty's own incremental search: it shows the current and total match,
   `Enter` steps forward, `Shift+Enter` back, and `Esc` closes it and returns focus to
