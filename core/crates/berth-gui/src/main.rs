@@ -13,6 +13,7 @@
 // reconnects to a terminal when the binary is started from one.
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -39,6 +40,7 @@ mod config;
 mod console;
 mod desktop;
 mod font;
+mod git;
 mod keys;
 mod layout;
 mod links;
@@ -417,6 +419,7 @@ fn main() {
         sidebar_filter: String::new(),
         sidebar_filter_active: false,
         geometry_due: None,
+        branch: RefCell::new(BranchCache::default()),
     };
 
     if let Err(error) = event_loop.run_app(&mut app) {
@@ -711,6 +714,18 @@ struct Gui {
     sidebar_filter_active: bool,
     /// Debounced geometry write after a move or resize.
     geometry_due: Option<Instant>,
+    /// The focused pane's git branch, cached so the status line does not walk
+    /// the filesystem every frame.
+    branch: RefCell<BranchCache>,
+}
+
+/// Last branch read for a cwd, with the time it was read. A cwd change or a
+/// stale entry triggers a fresh read.
+#[derive(Default)]
+struct BranchCache {
+    cwd: String,
+    branch: Option<String>,
+    at: Option<Instant>,
 }
 
 /// Per-window presentation state stored while another window is active.
@@ -1573,6 +1588,24 @@ impl Gui {
         (22.0 * self.scale) as usize
     }
 
+    /// The branch checked out at `cwd`, re-read when the pane moves or the
+    /// cached answer is more than a couple of seconds old.
+    fn branch_text(&self, cwd: &str) -> Option<String> {
+        let mut cache = self.branch.borrow_mut();
+        let now = Instant::now();
+        let stale = cache.cwd != cwd
+            || cache
+                .at
+                .is_none_or(|at| now.duration_since(at) >= Duration::from_secs(2));
+        if stale {
+            cache.cwd.clear();
+            cache.cwd.push_str(cwd);
+            cache.branch = git::branch(cwd);
+            cache.at = Some(now);
+        }
+        cache.branch.clone()
+    }
+
     /// One line for the status bar: mode chips, the workspace and the window.
     fn status_text(&self) -> String {
         let (broadcast, window_index, workspace) = {
@@ -1630,6 +1663,9 @@ impl Gui {
                 && !base.is_empty()
             {
                 parts.push(base.to_string());
+            }
+            if let Some(branch) = self.branch_text(&cwd) {
+                parts.push(format!("⑂ {branch}"));
             }
         }
         if window_index.1 > 0 {

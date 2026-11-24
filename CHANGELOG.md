@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- **Branch in the portable status line.** The status line now shows the focused pane's
+  git branch beside its cwd. The branch is read from `.git/HEAD` (following a worktree or
+  submodule `gitdir:` pointer) rather than by spawning `git`, and cached per directory,
+  so a frame never forks a process. A detached HEAD shows no branch.
+
 ## 0.16.2 — 2026-11-24
 
 ### Features
