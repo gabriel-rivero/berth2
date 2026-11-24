@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- **Selectable terminal engine.** `terminalBackend` in `config.json` picks the
+  parser/grid behind `berth-gui`: `builtin` (the existing `vt100` engine, the
+  default) or `alacritty` (`alacritty_terminal`, with native reflow, scrollback
+  and selection). The reader's side channel (synchronized output, the kitty
+  keyboard protocol, DECSCUSR, kitty graphics, sixel, OSC 8) is shared, so both
+  engines report the same modes and styles. `wezterm` and `ghostty` are accepted
+  by the config but fall back to `builtin` until those backends land; the
+  settings panel gains a **VT engine (relaunch)** row. A parity test feeds both
+  engines the same bytes and compares cells.
+- **Command Code (`cmd`) is an agent provider.** A `cmd` (Unix), `cmdc`
+  (Windows) or `command-code` process is detected like the other CLIs and
+  resumes with `command-code --resume <ref>`. `berth hooks install cmd` writes
+  `SessionStart`, `PreToolUse`, `PostToolUse` and `Stop` hooks into
+  `~/.commandcode/settings.json`, so tool detail and the session id reach the
+  agent layer; the sidebar uses the `⌘` glyph. The short `cmd` alias never
+  matches the Windows `cmd.exe` shell.
+
 ## 0.15.9 — 2026-11-23
 
 ### Features

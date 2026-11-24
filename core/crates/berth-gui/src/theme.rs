@@ -127,6 +127,7 @@ impl Theme {
             "claude-code" => "✦",
             "codex" => "⌬",
             "opencode" => "◇",
+            "command-code" => "⌘",
             _ => "•",
         }
     }
@@ -166,6 +167,7 @@ mod tests {
         assert_eq!(Theme::provider_glyph("claude-code"), "✦");
         assert_eq!(Theme::provider_glyph("codex"), "⌬");
         assert_eq!(Theme::provider_glyph("opencode"), "◇");
+        assert_eq!(Theme::provider_glyph("command-code"), "⌘");
         assert_eq!(Theme::provider_glyph("other"), "•");
     }
 

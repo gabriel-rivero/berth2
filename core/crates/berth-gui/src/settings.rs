@@ -5,6 +5,7 @@
 
 use crate::config::{Action, BellMode, Config, MAX_FONT_SIZE, MIN_FONT_SIZE, MIN_OPACITY};
 use crate::theme::THEMES;
+use berth_headless::engine::Backend;
 
 /// Values the display-scale row cycles through. `0` means automatic.
 const SCALES: [f32; 9] = [0.0, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0];
@@ -20,6 +21,7 @@ pub enum Field {
     Opacity,
     Bell,
     Shell,
+    TerminalBackend,
     CompactSidebar,
     CloseExitedPanes,
     RestoreLaunchFlags,
@@ -99,6 +101,11 @@ pub fn rows(config: &Config, recording: Option<Action>, notice: Option<&str>) ->
             field: Field::Shell,
             label: "Shell".into(),
             value: crate::shells::label_for(&config.shell),
+        },
+        Row {
+            field: Field::TerminalBackend,
+            label: "VT engine (relaunch)".into(),
+            value: config.terminal_backend.name().to_string(),
         },
         Row {
             field: Field::CompactSidebar,
@@ -319,6 +326,16 @@ pub fn adjust(config: &mut Config, field: Field, delta: i32) -> Change {
             config.shell = choices[next].argv.clone();
             Change::Shell
         }
+        Field::TerminalBackend => {
+            let backends = Backend::ALL;
+            let index = backends
+                .iter()
+                .position(|backend| *backend == config.terminal_backend)
+                .unwrap_or(0) as i32;
+            let next = (index + delta).rem_euclid(backends.len() as i32) as usize;
+            config.terminal_backend = backends[next];
+            Change::View
+        }
         Field::CompactSidebar
         | Field::CloseExitedPanes
         | Field::RestoreLaunchFlags
@@ -377,7 +394,7 @@ mod tests {
     fn given_the_settings_rows_when_built_then_every_action_has_a_row() {
         let config = Config::default();
         let rows = rows(&config, None, None);
-        assert_eq!(rows.len(), 14 + Action::ALL.len());
+        assert_eq!(rows.len(), 15 + Action::ALL.len());
         assert_eq!(rows[0].label, "Font");
         assert_eq!(rows[1].label, "Font size");
     }
@@ -503,6 +520,18 @@ mod tests {
         assert_eq!(config.socket.as_deref(), Some("off"));
         adjust(&mut config, Field::SocketMode, 1);
         assert_eq!(config.socket.as_deref(), Some("local"));
+    }
+
+    #[test]
+    fn given_the_terminal_backend_when_adjusted_then_it_cycles_and_wraps() {
+        let mut config = Config::default();
+        assert_eq!(config.terminal_backend, Backend::Builtin);
+        assert_eq!(adjust(&mut config, Field::TerminalBackend, 1), Change::View);
+        assert_eq!(config.terminal_backend, Backend::Alacritty);
+        for _ in 0..Backend::ALL.len() - 1 {
+            adjust(&mut config, Field::TerminalBackend, 1);
+        }
+        assert_eq!(config.terminal_backend, Backend::Builtin);
     }
 
     #[test]

@@ -238,10 +238,20 @@ fn main() {
         log::line(message);
         eprintln!("berth-gui: {message}");
     }
-    let host = Arc::new(PtyHost::with_options(
+    let host = Arc::new(PtyHost::with_engine(
+        config.terminal_backend,
         config.scrollback_lines,
         config.graphics,
     ));
+    if host.backend() != config.terminal_backend {
+        let message = format!(
+            "terminalBackend {} is not in this build; using {}",
+            config.terminal_backend.name(),
+            host.backend().name()
+        );
+        log::line(&message);
+        eprintln!("berth-gui: {message}");
+    }
     host.set_transport(token.clone(), Some(paths::display(&socket)));
     host.set_default_shell(config.shell.clone());
 

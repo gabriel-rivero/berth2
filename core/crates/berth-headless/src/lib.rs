@@ -92,11 +92,13 @@ pub struct KittyImage {
 }
 
 mod csi;
+pub mod engine;
 mod reflow;
 mod sixel;
 
 use csi::{Csi, CsiScanner};
 use cursor::CursorStyle;
+use engine::{Backend, TerminalEngine};
 use kitty::KittyKeyboard;
 use style::{GridSnapshot, StyleState};
 
@@ -308,7 +310,15 @@ impl vt100::Callbacks for ScreenEvents {
                 }
                 payload.extend_from_slice(part);
             }
-            store_iterm_image(screen, &payload, &self.images, self.scrollback);
+            let (row, col) = screen.cursor_position();
+            store_iterm_image(
+                row,
+                col,
+                screen.scrollback_len(),
+                &payload,
+                &self.images,
+                self.scrollback,
+            );
             return;
         }
         let text = |bytes: &[u8]| String::from_utf8_lossy(bytes).into_owned();
@@ -337,7 +347,9 @@ const MAX_IMAGE_BYTES: usize = 32 * 1024 * 1024;
 
 /// OSC 1337 File=... : iTerm2's inline image. The data is base64 PNG.
 fn store_iterm_image(
-    screen: &vt100::Screen,
+    row: u16,
+    col: u16,
+    scrollback_len: usize,
     payload: &[u8],
     images: &Arc<Mutex<Vec<ImageView>>>,
     scrollback: usize,
@@ -370,11 +382,10 @@ fn store_iterm_image(
     let Some((width, height, pixels)) = decode_png(&bytes) else {
         return;
     };
-    let (row, col) = screen.cursor_position();
     push_image(
         images,
         scrollback,
-        screen.scrollback_len() + usize::from(row),
+        scrollback_len + usize::from(row),
         usize::from(col),
         width,
         height,
@@ -524,7 +535,7 @@ fn decode_base64_bytes(data: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
-type Parser = vt100::Parser<ScreenEvents>;
+type Parser = Box<dyn TerminalEngine>;
 
 /// A live PTY-backed terminal and its parsed screen.
 struct Surface {
@@ -555,6 +566,8 @@ pub struct PtyHost {
     transport: Mutex<Transport>,
     scrollback: usize,
     graphics: bool,
+    /// The parser/grid every new surface uses.
+    backend: Backend,
     /// Program for a plain terminal surface (a spawn with no argv). Empty
     /// means the platform default. A GUI sets this from `config.json` so the
     /// user can run bash, zsh or WSL instead of PowerShell or `/bin/sh`.
@@ -585,14 +598,31 @@ impl PtyHost {
     }
 
     pub fn with_options(scrollback: usize, graphics: bool) -> Self {
+        Self::with_engine(Backend::Builtin, scrollback, graphics)
+    }
+
+    /// Choose the terminal engine. An unavailable backend falls back to the
+    /// builtin engine; the caller is expected to log that.
+    pub fn with_engine(backend: Backend, scrollback: usize, graphics: bool) -> Self {
+        let backend = if backend.implemented() {
+            backend
+        } else {
+            Backend::Builtin
+        };
         Self {
             surfaces: Mutex::new(HashMap::new()),
             transport: Mutex::new(Transport::default()),
             scrollback,
             graphics,
+            backend,
             default_shell: Mutex::new(Vec::new()),
             waker: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// The engine this host actually uses.
+    pub fn backend(&self) -> Backend {
+        self.backend
     }
 
     /// Choose the program a new terminal runs. An empty list keeps the
@@ -634,41 +664,38 @@ impl PtyHost {
     /// needs text, but a GUI wants per-cell colors and the cursor.
     pub fn screen_view(&self, surface_id: &str) -> Result<ScreenView, CoreError> {
         let surface = self.surface(surface_id)?;
-        let parser = lock(&surface.screen);
-        let screen = parser.screen();
-        let (rows, cols) = screen.size();
-        let rows = rows.get();
-        let cols = cols.get();
-        let cursor = screen.cursor_position();
-        let first_line = screen.scrollback_len().saturating_sub(screen.scrollback());
+        let engine = lock(&surface.screen);
+        let (rows, cols) = engine.size();
+        let cursor = engine.cursor();
+        let first_line = engine.scrollback_len().saturating_sub(engine.scrollback());
         let styles = lock(&surface.style);
         let mut cells = Vec::with_capacity(usize::from(rows) * usize::from(cols));
         for row in 0..rows {
             for col in 0..cols {
-                let cell = screen.cell(row, col);
+                let cell = engine.cell(row, col);
                 cells.push(match cell {
                     Some(cell) => {
                         let extended = styles.get(first_line + usize::from(row), col);
                         let underline_style = extended
                             .map(|style| style.underline)
                             .filter(|style| *style != style::UnderlineStyle::None)
-                            .unwrap_or(if cell.underline() {
+                            .unwrap_or(if cell.underline {
                                 style::UnderlineStyle::Single
                             } else {
                                 style::UnderlineStyle::None
                             });
                         CellView {
-                            contents: cell.contents().to_string(),
-                            fg: ansi_rgb(cell.fgcolor()),
-                            bg: ansi_rgb(cell.bgcolor()),
-                            bold: cell.bold(),
-                            dim: cell.dim(),
-                            italic: cell.italic(),
-                            underline: cell.underline()
+                            contents: cell.contents,
+                            fg: cell.fg,
+                            bg: cell.bg,
+                            bold: cell.bold,
+                            dim: cell.dim,
+                            italic: cell.italic,
+                            underline: cell.underline
                                 || underline_style != style::UnderlineStyle::None,
-                            inverse: cell.inverse(),
-                            wide: cell.is_wide(),
-                            wide_continuation: cell.is_wide_continuation(),
+                            inverse: cell.inverse,
+                            wide: cell.wide,
+                            wide_continuation: cell.wide_continuation,
                             strikethrough: extended.is_some_and(|style| style.strikethrough),
                             underline_style,
                             underline_color: extended.and_then(|style| style.underline_color),
@@ -698,22 +725,12 @@ impl PtyHost {
             cols,
             rows,
             cursor,
-            cursor_hidden: screen.hide_cursor(),
-            scrollback_len: screen.scrollback_len(),
-            scrollback: screen.scrollback(),
-            bracketed_paste: screen.bracketed_paste(),
-            mouse_mode: match screen.mouse_protocol_mode() {
-                vt100::MouseProtocolMode::None => MouseMode::Off,
-                vt100::MouseProtocolMode::Press => MouseMode::Click,
-                vt100::MouseProtocolMode::PressRelease => MouseMode::PressRelease,
-                vt100::MouseProtocolMode::ButtonMotion => MouseMode::Drag,
-                vt100::MouseProtocolMode::AnyMotion => MouseMode::Motion,
-            },
-            mouse_encoding: match screen.mouse_protocol_encoding() {
-                vt100::MouseProtocolEncoding::Default => MouseEncoding::X10,
-                vt100::MouseProtocolEncoding::Utf8 => MouseEncoding::Utf8,
-                vt100::MouseProtocolEncoding::Sgr => MouseEncoding::Sgr,
-            },
+            cursor_hidden: engine.cursor_hidden(),
+            scrollback_len: engine.scrollback_len(),
+            scrollback: engine.scrollback(),
+            bracketed_paste: engine.bracketed_paste(),
+            mouse_mode: engine.mouse_mode(),
+            mouse_encoding: engine.mouse_encoding(),
             cells,
             images,
             placeholders,
@@ -759,15 +776,15 @@ impl PtyHost {
     /// applied, which the caller can clamp and mirror.
     pub fn set_scrollback(&self, surface_id: &str, rows: usize) -> Result<usize, CoreError> {
         let surface = self.surface(surface_id)?;
-        let mut parser = lock(&surface.screen);
-        parser.screen_mut().set_scrollback(rows);
-        Ok(parser.screen().scrollback())
+        let mut engine = lock(&surface.screen);
+        engine.set_scrollback(rows);
+        Ok(engine.scrollback())
     }
 
     /// Scroll back to the live screen.
     pub fn reset_scrollback(&self, surface_id: &str) -> Result<(), CoreError> {
         let surface = self.surface(surface_id)?;
-        lock(&surface.screen).screen_mut().set_scrollback(0);
+        lock(&surface.screen).set_scrollback(0);
         Ok(())
     }
 
@@ -801,26 +818,24 @@ impl PtyHost {
         end_col: u16,
     ) -> Result<String, CoreError> {
         let surface = self.surface(surface_id)?;
-        let parser = lock(&surface.screen);
-        Ok(parser
-            .screen()
-            .contents_between(start_row, start_col, end_row, end_col))
+        let engine = lock(&surface.screen);
+        Ok(engine.contents_between(start_row, start_col, end_row, end_col))
     }
 
     /// The whole scrollback plus the live screen, oldest line first. Reading
     /// it walks the view once per screenful and restores the caller's offset.
     pub fn scrollback_lines(&self, surface_id: &str) -> Result<Vec<String>, CoreError> {
         let surface = self.surface(surface_id)?;
-        let mut parser = lock(&surface.screen);
-        let (rows, _) = parser.screen().size();
-        let rows = rows.get() as usize;
-        let len = parser.screen().scrollback_len();
-        let offset = parser.screen().scrollback();
+        let mut engine = lock(&surface.screen);
+        let (rows, _) = engine.size();
+        let rows = rows as usize;
+        let len = engine.scrollback_len();
+        let offset = engine.scrollback();
         let mut lines = vec![String::new(); len + rows];
         let mut at = 0;
         loop {
-            parser.screen_mut().set_scrollback(at);
-            let text = parser.screen().contents();
+            engine.set_scrollback(at);
+            let text = engine.screen_text();
             let start = len - at.min(len);
             for (index, line) in text.lines().enumerate().take(rows) {
                 if start + index < lines.len() {
@@ -832,7 +847,7 @@ impl PtyHost {
             }
             at = (at + rows).min(len);
         }
-        parser.screen_mut().set_scrollback(offset);
+        engine.set_scrollback(offset);
         while lines.last().is_some_and(|line| line.is_empty()) {
             lines.pop();
         }
@@ -842,13 +857,8 @@ impl PtyHost {
     /// One visible row as text, for word selection.
     pub fn line_text(&self, surface_id: &str, row: u16) -> Result<String, CoreError> {
         let surface = self.surface(surface_id)?;
-        let parser = lock(&surface.screen);
-        let (_, cols) = parser.screen().size();
-        Ok(parser
-            .screen()
-            .contents_between(row, 0, row, cols.get())
-            .trim_end()
-            .to_string())
+        let engine = lock(&surface.screen);
+        Ok(engine.line_text(row))
     }
 }
 
@@ -946,17 +956,14 @@ impl SurfaceOps for PtyHost {
         let images = Arc::new(Mutex::new(Vec::new()));
         let kitty = Arc::new(Mutex::new(HashMap::new()));
         let style = Arc::new(Mutex::new(StyleState::default()));
-        let events = ScreenEvents::new(
+        let screen = Arc::new(Mutex::new(engine::create(
+            self.backend,
+            rows,
+            cols,
+            self.scrollback,
+            self.graphics,
             Arc::clone(&meta),
             Arc::clone(&images),
-            self.graphics,
-            self.scrollback,
-        );
-        let screen = Arc::new(Mutex::new(Parser::new_with_callbacks(
-            std::num::NonZeroU16::new(rows).expect("rows > 0"),
-            std::num::NonZeroU16::new(cols).expect("cols > 0"),
-            self.scrollback,
-            events,
         )));
         let alive = Arc::new(AtomicBool::new(true));
 
@@ -972,6 +979,7 @@ impl SurfaceOps for PtyHost {
                 style: Arc::clone(&style),
                 graphics: self.graphics,
                 scrollback: self.scrollback,
+                backend: self.backend,
             },
             Arc::clone(&self.waker),
         );
@@ -1015,14 +1023,14 @@ impl SurfaceOps for PtyHost {
         max_bytes: usize,
     ) -> Result<Readback, CoreError> {
         let surface = self.surface(surface_id)?;
-        let mut parser = lock(&surface.screen);
+        let mut engine = lock(&surface.screen);
         let text = match scope {
-            ReadScope::Screen => parser.screen().contents(),
+            ReadScope::Screen => engine.screen_text(),
             ReadScope::Scrollback => {
-                let offset = parser.screen().scrollback();
-                parser.screen_mut().set_scrollback(usize::MAX);
-                let text = parser.screen().contents();
-                parser.screen_mut().set_scrollback(offset);
+                let offset = engine.scrollback();
+                engine.set_scrollback(usize::MAX);
+                let text = engine.screen_text();
+                engine.set_scrollback(offset);
                 text
             }
         };
@@ -1074,18 +1082,9 @@ impl SurfaceOps for PtyHost {
             })
             .map_err(|error| CoreError::internal(format!("resize: {error}")))?;
         let images_clear = lock(&surface.images).is_empty();
-        let mut parser = lock(&surface.screen);
-        let (_, old_cols) = parser.screen().size();
-        let target_rows = std::num::NonZeroU16::new(rows).expect("rows > 0");
-        let target_cols = std::num::NonZeroU16::new(cols).expect("cols > 0");
-        let reflowed = (old_cols != target_cols && images_clear)
-            .then(|| reflow::reflowed(&parser, target_rows, target_cols))
-            .flatten();
-        match reflowed {
-            Some(fresh) => *parser = fresh,
-            None => parser.set_size(target_rows, target_cols),
-        }
-        drop(parser);
+        let mut engine = lock(&surface.screen);
+        engine.resize(rows, cols, images_clear);
+        drop(engine);
         lock(&surface.style).clear();
         if let Some((pixel_width, pixel_height)) = pixels {
             let width = (pixel_width / u32::from(cols)).min(u32::from(u16::MAX)) as u16;
@@ -1194,6 +1193,7 @@ struct ReaderShare {
     style: Arc<Mutex<StyleState>>,
     graphics: bool,
     scrollback: usize,
+    backend: Backend,
 }
 
 fn spawn_reader(mut reader: Box<dyn Read + Send>, share: ReaderShare, waker: SharedWaker) {
@@ -1618,11 +1618,15 @@ fn ansi_rgb(color: vt100::Color) -> Option<[u8; 3]> {
 mod meta_tests {
     use super::*;
 
-    fn parser() -> (Arc<Mutex<ScreenMeta>>, Parser) {
+    /// The concrete builtin parser, for tests that exercise vt100 callbacks
+    /// directly rather than through the engine seam.
+    type VtParser = vt100::Parser<ScreenEvents>;
+
+    fn parser() -> (Arc<Mutex<ScreenMeta>>, VtParser) {
         let meta = Arc::new(Mutex::new(ScreenMeta::default()));
         let images = Arc::new(Mutex::new(Vec::new()));
         let events = ScreenEvents::new(Arc::clone(&meta), Arc::clone(&images), true, 10_000);
-        let parser = Parser::new_with_callbacks(
+        let parser = VtParser::new_with_callbacks(
             std::num::NonZeroU16::new(24).unwrap(),
             std::num::NonZeroU16::new(80).unwrap(),
             100,
@@ -1631,7 +1635,7 @@ mod meta_tests {
         (meta, parser)
     }
 
-    fn parser_with_images() -> (Arc<Mutex<Vec<ImageView>>>, Parser) {
+    fn parser_with_images() -> (Arc<Mutex<Vec<ImageView>>>, VtParser) {
         let meta = Arc::new(Mutex::new(ScreenMeta::default()));
         let images = Arc::new(Mutex::new(Vec::new()));
         let events = ScreenEvents::new(
@@ -1640,7 +1644,7 @@ mod meta_tests {
             true,
             DEFAULT_SCROLLBACK,
         );
-        let parser = Parser::new_with_callbacks(
+        let parser = VtParser::new_with_callbacks(
             std::num::NonZeroU16::new(24).unwrap(),
             std::num::NonZeroU16::new(80).unwrap(),
             DEFAULT_SCROLLBACK,
@@ -1652,7 +1656,7 @@ mod meta_tests {
     struct ScannerFixture {
         meta: Arc<Mutex<ScreenMeta>>,
         images: Arc<Mutex<Vec<ImageView>>>,
-        screen: Arc<Mutex<Parser>>,
+        screen: Arc<Mutex<Box<dyn TerminalEngine>>>,
         kitty: Arc<Mutex<HashMap<u32, KittyImage>>>,
         style: Arc<Mutex<StyleState>>,
     }
@@ -1661,17 +1665,14 @@ mod meta_tests {
         fn new() -> Self {
             let meta = Arc::new(Mutex::new(ScreenMeta::default()));
             let images = Arc::new(Mutex::new(Vec::new()));
-            let events = ScreenEvents::new(
+            let screen = Arc::new(Mutex::new(engine::create(
+                Backend::Builtin,
+                24,
+                80,
+                DEFAULT_SCROLLBACK,
+                true,
                 Arc::clone(&meta),
                 Arc::clone(&images),
-                true,
-                DEFAULT_SCROLLBACK,
-            );
-            let screen = Arc::new(Mutex::new(Parser::new_with_callbacks(
-                std::num::NonZeroU16::new(24).unwrap(),
-                std::num::NonZeroU16::new(80).unwrap(),
-                DEFAULT_SCROLLBACK,
-                events,
             )));
             Self {
                 meta,
@@ -1717,6 +1718,7 @@ mod meta_tests {
                 style: Arc::clone(&self.style),
                 graphics: true,
                 scrollback: DEFAULT_SCROLLBACK,
+                backend: Backend::Builtin,
             }
         }
     }
@@ -1739,10 +1741,10 @@ mod meta_tests {
         let fixture = ScannerFixture::new();
         let mut scanner = SideChannelScanner::default();
         fixture.feed(&mut scanner, b"before\x1b");
-        let text = lock(&fixture.screen).screen().contents();
+        let text = lock(&fixture.screen).screen_text();
         assert!(text.starts_with("before"), "held back: {text}");
         fixture.feed(&mut scanner, b"[31mafter");
-        let text = lock(&fixture.screen).screen().contents();
+        let text = lock(&fixture.screen).screen_text();
         assert!(text.starts_with("beforeafter"), "{text}");
     }
 
@@ -1814,7 +1816,7 @@ mod meta_tests {
         fixture.feed(&mut scanner, b"before\x1b[?2026hafter");
         assert!(fixture.is_synchronized_output_enabled());
         // The sequence still reaches vt100, so the text around it renders.
-        let text = lock(&fixture.screen).screen().contents();
+        let text = lock(&fixture.screen).screen_text();
         assert!(text.starts_with("beforeafter"), "{text}");
     }
 
@@ -2077,7 +2079,7 @@ mod meta_tests {
         let meta = Arc::new(Mutex::new(ScreenMeta::default()));
         let images = Arc::new(Mutex::new(Vec::new()));
         let events = ScreenEvents::new(Arc::clone(&meta), images, true, DEFAULT_SCROLLBACK);
-        let mut parser = Parser::new_with_callbacks(
+        let mut parser = VtParser::new_with_callbacks(
             std::num::NonZeroU16::new(24).unwrap(),
             std::num::NonZeroU16::new(80).unwrap(),
             DEFAULT_SCROLLBACK,
@@ -2444,22 +2446,21 @@ fn flush_normal(share: &ReaderShare, normal: &mut Vec<u8>, record_styles: bool, 
         !style.current().is_default() || !style.is_empty()
     };
     let before = needs_record.then(|| {
-        let parser = lock(&share.screen);
-        let screen = parser.screen();
-        let (rows, cols) = screen.size();
+        let engine = lock(&share.screen);
+        let (rows, cols) = engine.size();
         let text_start = TextStart {
-            cursor: screen.cursor_position(),
-            rows: rows.get(),
-            cols: cols.get(),
-            scrollback: screen.scrollback_len(),
+            cursor: engine.cursor(),
+            rows,
+            cols,
+            scrollback: engine.scrollback_len(),
         };
-        (GridSnapshot::take(screen), text_start)
+        (GridSnapshot::from_engine(engine.as_ref()), text_start)
     });
     lock(&share.screen).process(normal);
     if let Some((before, text_start)) = before {
         let after = {
-            let parser = lock(&share.screen);
-            GridSnapshot::take(parser.screen())
+            let engine = lock(&share.screen);
+            GridSnapshot::from_engine(engine.as_ref())
         };
         let mut style = lock(&share.style);
         style.record(&before, &after, share.scrollback);
@@ -2492,6 +2493,71 @@ fn handle_osc(payload: &[u8], share: &ReaderShare) {
     sequence.push(0x07);
     flush_normal(share, &mut sequence, false, false);
     lock(&share.style).apply_osc(payload);
+    observe_osc(payload, &share.meta);
+    // The builtin engine stores OSC 1337 in its own callback. Other engines
+    // ignore it, so the side channel does the work for them.
+    if share.backend != Backend::Builtin
+        && share.graphics
+        && let Some(body) = payload.strip_prefix(b"1337;")
+    {
+        let (row, col, scrollback_len) = {
+            let engine = lock(&share.screen);
+            let (row, col) = engine.cursor();
+            (row, col, engine.scrollback_len())
+        };
+        store_iterm_image(
+            row,
+            col,
+            scrollback_len,
+            body,
+            &share.images,
+            share.scrollback,
+        );
+    }
+}
+
+/// Side-channel OSC parsing shared by every engine: cwd, progress,
+/// notifications and OSC 52. The builtin parser also sees these, but setting
+/// the same value twice is harmless and keeps the Alacritty backend at parity.
+fn observe_osc(payload: &[u8], meta: &Arc<Mutex<ScreenMeta>>) {
+    let params: Vec<&[u8]> = payload.split(|byte| *byte == b';').collect();
+    let text = |bytes: &[u8]| String::from_utf8_lossy(bytes).into_owned();
+    let first = params.first().copied().unwrap_or_default();
+    let mut meta = lock(meta);
+    if first == b"7".as_slice() {
+        if let Some(url) = params.get(1) {
+            meta.cwd = parse_file_url(&text(url));
+        }
+    } else if first == b"9".as_slice() {
+        if params.get(1).is_some_and(|param| *param == b"4".as_slice()) {
+            if params.get(2).is_some_and(|param| *param == b"0".as_slice()) {
+                meta.progress = Some(None);
+            } else if params.get(2).is_some() {
+                let value = params
+                    .get(3)
+                    .map(|param| text(param))
+                    .unwrap_or_default()
+                    .parse::<f32>()
+                    .ok();
+                meta.progress = Some(value.map(|value| (value / 100.0).clamp(0.0, 1.0)));
+            }
+        } else if let Some(body) = params.get(1) {
+            meta.notification = Some(text(body));
+        }
+    } else if first == b"777".as_slice() {
+        if let Some(body) = params.get(2) {
+            meta.notification = Some(text(body));
+        }
+    } else if first == b"52".as_slice()
+        && let Some(data) = params.get(2)
+    {
+        if data == &b"?".as_slice() {
+            let selection = params.get(1).map(|param| text(param)).unwrap_or_default();
+            meta.clipboard_read = Some(selection);
+        } else if let Some(bytes) = decode_base64_bytes(data) {
+            meta.clipboard = Some(String::from_utf8_lossy(&bytes).into_owned());
+        }
+    }
 }
 
 /// DECSET 2026 and the kitty keyboard protocol are both carried in CSI
@@ -2603,10 +2669,9 @@ fn handle_dcs(
         return;
     };
     let (row, col, scrollback_len) = {
-        let parser = lock(screen);
-        let screen = parser.screen();
-        let (row, col) = screen.cursor_position();
-        (row, col, screen.scrollback_len())
+        let engine = lock(screen);
+        let (row, col) = engine.cursor();
+        (row, col, engine.scrollback_len())
     };
     push_image(
         images,

@@ -388,6 +388,58 @@ impl GridSnapshot {
             cells,
         }
     }
+
+    /// The same fingerprint over any engine, so the extended-style overlay
+    /// works whichever parser the surface selected.
+    pub fn from_engine(engine: &dyn crate::engine::TerminalEngine) -> Self {
+        let (rows, cols) = engine.size();
+        let mut cells = Vec::with_capacity(usize::from(rows) * usize::from(cols));
+        for row in 0..rows {
+            for column in 0..cols {
+                cells.push(
+                    engine
+                        .cell(row, column)
+                        .map(|cell| fingerprint_view(&cell))
+                        .unwrap_or(0),
+                );
+            }
+        }
+        Self {
+            cols,
+            rows,
+            scrollback_len: engine.scrollback_len(),
+            cells,
+        }
+    }
+}
+
+fn fingerprint_view(cell: &crate::engine::EngineCell) -> u64 {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut hash = OFFSET;
+    for byte in cell.contents.as_bytes() {
+        mix(&mut hash, u64::from(*byte));
+    }
+    let mut flags = 0u64;
+    flags |= u64::from(cell.bold);
+    flags |= u64::from(cell.dim) << 1;
+    flags |= u64::from(cell.italic) << 2;
+    flags |= u64::from(cell.underline) << 3;
+    flags |= u64::from(cell.inverse) << 4;
+    flags |= u64::from(cell.wide) << 5;
+    flags |= u64::from(cell.wide_continuation) << 6;
+    mix(&mut hash, flags);
+    mix(&mut hash, rgb_code(cell.fg));
+    mix(&mut hash, rgb_code(cell.bg));
+    hash
+}
+
+fn rgb_code(color: Option<[u8; 3]>) -> u64 {
+    match color {
+        None => 0,
+        Some([red, green, blue]) => {
+            2 | (u64::from(red) << 8) | (u64::from(green) << 16) | (u64::from(blue) << 24)
+        }
+    }
 }
 
 fn fingerprint(cell: Option<&vt100::Cell>) -> u64 {

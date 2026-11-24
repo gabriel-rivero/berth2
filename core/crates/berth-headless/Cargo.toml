@@ -12,9 +12,19 @@ berth-server = { path = "../berth-server" }
 serde_json = { workspace = true }
 portable-pty = { workspace = true }
 vt100 = { workspace = true }
+alacritty_terminal = { workspace = true, optional = true }
 unicode-width.workspace = true
 libc = { workspace = true }
 png = "0.17"
+
+[features]
+default = ["alacritty-backend"]
+# The config-selectable engines. Builtin is always compiled; the others are
+# opt-in so a build can drop the dependency. WezTerm and Ghostty are accepted
+# by config but not implemented yet.
+alacritty-backend = ["dep:alacritty_terminal"]
+wezterm-backend = []
+ghostty-backend = []
 
 [dev-dependencies]
 berth-transport = { path = "../berth-transport" }

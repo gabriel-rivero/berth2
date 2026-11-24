@@ -184,6 +184,27 @@ the launch or resume command. A change applies to panes created afterwards,
 including restored workspaces whose shell was not recorded; panes already
 running keep their program. The macOS app does not read this key yet.
 
+## Terminal engine
+
+`terminalBackend` picks the parser/grid a new surface uses. It is read at
+launch; a change applies to surfaces created afterwards.
+
+```json
+{ "terminalBackend": "alacritty" }
+```
+
+| value | status |
+| --- | --- |
+| `builtin` (default) | the `vt100` grid, with Berth's capture-and-replay reflow |
+| `alacritty` | `alacritty_terminal`'s grid with native reflow, scrollback and selection |
+| `wezterm` | accepted, not built in yet — falls back to `builtin` |
+| `ghostty` | accepted, not built in yet — needs a `libghostty-vt` build |
+
+An unknown value, or a backend this build does not include, falls back to
+`builtin`; the window logs the substitution to `berth.log`. The reader's side
+channel (synchronized output, the kitty keyboard protocol, DECSCUSR, kitty
+graphics, sixel and OSC 8) is shared by every engine and behaves the same. The
+settings row is labelled **VT engine (relaunch)**.
 
 ## Sidebar
 
@@ -281,10 +302,15 @@ Environment overrides for clients and children:
 
 ## Agent hooks
 
-`berth hooks install` writes Claude Code hooks into `~/.claude/settings.json`
-and an opencode plugin into `~/.config/opencode/plugins/berth.ts`. Both are
-idempotent and preserve unrelated hooks. `berth hooks print` shows the recipes
-without writing. See `docs/05-build.md` for the acceptance checkpoints.
+`berth hooks install` writes Claude Code hooks into `~/.claude/settings.json`,
+an opencode plugin into `~/.config/opencode/plugins/berth.ts`, Copilot hooks into
+`~/.copilot/hooks/berth.json` and Command Code hooks into
+`~/.commandcode/settings.json`. All are idempotent and preserve unrelated hooks.
+`berth hooks print` shows the recipes without writing. See `docs/05-build.md` for
+the acceptance checkpoints.
+
+Command Code's CLI is `cmd` on Unix, `cmdc` on Windows and `command-code`
+everywhere; the short `cmd` alias never matches the Windows `cmd.exe` shell.
 
 ## Logs
 

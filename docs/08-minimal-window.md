@@ -26,6 +26,11 @@ berth-server  ── the same socket/named pipe the CLI and hooks use
   cell and tinted at paint time; the cache turns a screen of repeated cells into
   a few hundred rasterised bitmaps.
 - **arboard 3** for the system clipboard.
+- **A selectable terminal engine.** `terminalBackend` chooses `builtin`
+  (`vt100`, the default) or `alacritty` (`alacritty_terminal`, with native
+  reflow). The GUI only reads `ScreenView`, so the engine is a `berth-headless`
+  concern; `wezterm` and `ghostty` are accepted by config but not built yet. See
+  [docs/config.md](config.md#terminal-engine).
 
 Chrome (sidebar, tab labels) uses the same renderer at a smaller size, matching
 the macOS window's 12pt labels.
@@ -129,7 +134,7 @@ the macOS window's 12pt labels.
 - Passive agent detection runs once a second over surfaces without an agent,
   using the foreground process group (`tcgetpgrp` plus `/proc` on Linux and `ps`
   on macOS), then sweeps stale agents every 30 seconds. A `claude`, `codex`,
-  `opencode` or `copilot` started inside a pane becomes a sidebar agent row.
+  `opencode`, `copilot` or `cmd` started inside a pane becomes a sidebar agent row.
   Agent rows show token counts and cost when a client reports them, and
   `muteProviders` silences desktop notifications for chosen providers while
   keeping the row, ring and attention list. A

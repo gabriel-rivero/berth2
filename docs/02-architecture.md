@@ -66,7 +66,7 @@ Pure logic, no I/O, no threads, no AppKit. Compiled as a staticlib and wrapped w
 - **Protocol codec**: request/response/event structs, validation, error codes, JSON Schema generation.
 - **Router**: `handle(request, &mut State, &dyn SurfaceOps) -> Response` — a pure function with one injected capability trait.
 - **Persistence**: session snapshot schema, schema version + migration, journal replay for crash recovery.
-- **Provider adapters**: a small data table (process names, argv shapes, resume templates, hook names) for claude-code, codex, opencode, custom. Not code per provider.
+- **Provider adapters**: a small data table (process names, argv shapes, resume templates, hook names) for claude-code, codex, opencode, copilot, command-code, custom. Not code per provider.
 
 `SurfaceOps` (UniFFI callback interface, implemented by Swift) is the only way core touches the outside world:
 
@@ -153,7 +153,7 @@ sweeps, and notification dedupe. The Swift shell contributes four things:
   `/bin/ps` cannot stall the render path. A child-exit action immediately marks
   the bound live agent `errored` (`reason: process_exit`) instead of waiting for
   the 180 s staleness sweep.
-  A recognized `claude`/`codex`/`opencode` process creates an `unknown` agent,
+  A recognized `claude`/`codex`/`opencode`/`copilot`/`cmd` process creates an `unknown` agent,
   which is enough for a badge and a restore target.
 - **Rendering**: the sidebar picks one primary agent per workspace (highest
   attention, then newest), draws its provider glyph, state, detail and progress,

@@ -15,7 +15,7 @@ is [docs/11-competitive-gaps.md](11-competitive-gaps.md).
 | **M1 Workspace shell** | before 0.9 | Split tree with weights, per-pane tabs, sidebar metadata, session restore incl. cwd and weights, palette, editable shortcuts. |
 | **M2 Core + protocol** | before 0.9 | `berth-core` model/router/events, UniFFI bridge, authenticated NDJSON transport, replay ring, subscriptions, backpressure, CLI, generated schema; `scripts/m2-acceptance.sh` drives the real app. |
 | **M3 Agent layer** | 0.8.x | Typed `AgentSurface` state machine, attention ladder, one-second passive detection, `berth run`, resume payloads, agent-aware restore. |
-| **M4 Daily driver** | 0.9–0.14 | Perf budgets met (cold start 135–143 ms, idle ~0 % CPU, 161 MB at 8 panes), crash hardening, hooks for four providers, notarization script ready. |
+| **M4 Daily driver** | 0.9–0.14 | Perf budgets met (cold start 135–143 ms, idle ~0 % CPU, 161 MB at 8 panes), crash hardening, hooks for five providers, notarization script ready. |
 
 The three defects that daily use found (split-resize feedback crash, detection deadlock,
 half-size rendering on 1× displays) are fixed and recorded in `CHANGELOG.md`. The

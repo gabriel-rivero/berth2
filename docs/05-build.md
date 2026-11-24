@@ -198,13 +198,14 @@ session id has nothing to resume, and the row comes back `unknown · not resumed
 ```sh
 make cli
 ./core/target/release/berth hooks print claude    # inspect before writing
-./core/target/release/berth hooks install         # claude + opencode + copilot
+./core/target/release/berth hooks install         # claude + opencode + copilot + cmd
 ```
 
 `hooks install` embeds the absolute path of the binary you invoked, so run it
 from the build you want hooks to call. It merges into
-`~/.claude/settings.json` (other hooks are preserved) and writes
-`~/.config/opencode/plugins/berth.ts`.
+`~/.claude/settings.json` (other hooks are preserved), writes
+`~/.config/opencode/plugins/berth.ts`, `~/.copilot/hooks/berth.json` and
+`~/.commandcode/settings.json`.
 
 Check:
 

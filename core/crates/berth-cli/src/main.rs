@@ -169,12 +169,19 @@ fn provider_for(argv: &[String]) -> String {
         .first()
         .map(|a| program_basename(a).to_ascii_lowercase())
         .unwrap_or_default();
+    let program = program.strip_suffix(".exe").unwrap_or(&program);
     if program.starts_with("claude") {
         "claude-code".into()
     } else if program.starts_with("codex") {
         "codex".into()
     } else if program.starts_with("opencode") {
         "opencode".into()
+    } else if program == "cmdc"
+        || program == "command-code"
+        || program.starts_with("command-code-")
+        || (cfg!(not(windows)) && program == "cmd")
+    {
+        "command-code".into()
     } else {
         "custom".into()
     }
@@ -455,6 +462,118 @@ fn install_copilot_hooks(berth: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+fn cmd_hook_state<'a>(event: &str, detail: &'a str) -> Option<(&'static str, &'a str)> {
+    match event {
+        "SessionStart" => Some(("idle", "session started")),
+        "PreToolUse" => Some(("tool", detail)),
+        "PostToolUse" => Some(("thinking", "thinking")),
+        "Stop" => Some(("idle", "turn complete")),
+        _ => None,
+    }
+}
+
+fn run_cmd_hook(c: &mut Client, event: &str) -> Result<(), String> {
+    let mut input = String::new();
+    std::io::stdin()
+        .read_to_string(&mut input)
+        .map_err(|e| e.to_string())?;
+    let payload: Value = serde_json::from_str(&input).unwrap_or(Value::Null);
+    let event = if event.is_empty() {
+        payload["hook_event_name"].as_str().unwrap_or_default()
+    } else {
+        event
+    };
+    let detail = payload["tool_display_name"]
+        .as_str()
+        .or_else(|| payload["tool_name"].as_str())
+        .unwrap_or_default();
+    let Some((state, fallback)) = cmd_hook_state(event, detail) else {
+        return Ok(());
+    };
+    let agent_id = hook_agent(c)?;
+    let detail = if detail.is_empty() { fallback } else { detail };
+    let mut params = json!({"agent_id": agent_id.clone(), "state": state, "detail": detail});
+    if event == "SessionStart"
+        && let Some(session) = payload["session_id"].as_str()
+    {
+        ensure_resume_payload(c, &agent_id, session, payload["cwd"].as_str())?;
+        params["session_ref"] = json!(session);
+    }
+    c.call("agent.update", params)?;
+    Ok(())
+}
+
+fn cmd_hook_command(berth: &str, event: &str) -> String {
+    #[cfg(windows)]
+    {
+        format!("{} hook cmd {event} >NUL 2>&1", shell_quote(berth))
+    }
+    #[cfg(not(windows))]
+    {
+        format!(
+            "{} hook cmd {event} >/dev/null 2>&1 || true",
+            shell_quote(berth)
+        )
+    }
+}
+
+const CMD_HOOK_EVENTS: &[&str] = &["SessionStart", "PreToolUse", "PostToolUse", "Stop"];
+
+/// Command Code hooks carry no tool matcher requirement: omitting `matcher`
+/// matches every tool, and `SessionStart`/`Stop` must omit it or never fire.
+fn cmd_hook_entry(event: &str, berth: &str) -> Value {
+    json!({
+        "hooks": [
+            {"type": "command", "command": cmd_hook_command(berth, event), "timeout": 5}
+        ]
+    })
+}
+
+fn cmd_hook_settings(berth: &str) -> Value {
+    let mut hooks = serde_json::Map::new();
+    for event in CMD_HOOK_EVENTS {
+        hooks.insert((*event).to_string(), json!([cmd_hook_entry(event, berth)]));
+    }
+    json!({"hooks": hooks})
+}
+
+fn install_cmd_hooks(berth: &str) -> Result<PathBuf, String> {
+    let path = home_dir()?.join(".commandcode/settings.json");
+    let mut root: Value = if path.exists() {
+        let text =
+            std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        serde_json::from_str(&text)
+            .map_err(|e| format!("{} is not valid JSON: {e}", path.display()))?
+    } else {
+        json!({})
+    };
+    if !root.is_object() {
+        return Err(format!("{} must contain a JSON object", path.display()));
+    }
+    if !root["hooks"].is_object() {
+        root["hooks"] = json!({});
+    }
+    let hooks = root["hooks"].as_object_mut().unwrap();
+    for event in CMD_HOOK_EVENTS {
+        let groups = hooks
+            .entry((*event).to_string())
+            .or_insert_with(|| json!([]));
+        if !groups.is_array() {
+            return Err(format!("hooks.{event} must be an array"));
+        }
+        let groups = groups.as_array_mut().unwrap();
+        // Reinstall replaces our previous entry and leaves other hooks alone.
+        groups.retain(|group| !group.to_string().contains(" hook cmd "));
+        groups.push(cmd_hook_entry(event, berth));
+    }
+    let text = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?
+    );
+    write_atomic(&path, &text)?;
+    Ok(path)
+}
+
 fn home_dir() -> Result<PathBuf, String> {
     berth_core::paths::home_dir().ok_or_else(|| "no home directory is set".to_string())
 }
@@ -664,8 +783,9 @@ fn hooks_install(target: &str) -> Result<(), String> {
     let claude = target == "claude" || target == "all";
     let opencode = target == "opencode" || target == "all";
     let copilot = target == "copilot" || target == "all";
-    if !claude && !opencode && !copilot {
-        return Err("hooks install: target must be claude, opencode, copilot, or all".into());
+    let cmd = target == "cmd" || target == "all";
+    if !claude && !opencode && !copilot && !cmd {
+        return Err("hooks install: target must be claude, opencode, copilot, cmd, or all".into());
     }
     if claude {
         println!("claude: {}", install_claude_hooks(&berth)?.display());
@@ -675,6 +795,9 @@ fn hooks_install(target: &str) -> Result<(), String> {
     }
     if copilot {
         println!("copilot: {}", install_copilot_hooks(&berth)?.display());
+    }
+    if cmd {
+        println!("cmd: {}", install_cmd_hooks(&berth)?.display());
     }
     Ok(())
 }
@@ -706,6 +829,15 @@ fn hooks_print(target: &str) -> Result<(), String> {
         println!(
             "{}",
             serde_json::to_string_pretty(&copilot_hook_settings(&berth)).unwrap()
+        );
+    }
+    if target == "cmd" || target == "all" {
+        if target == "all" {
+            println!();
+        }
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&cmd_hook_settings(&berth)).unwrap()
         );
     }
     Ok(())
@@ -744,10 +876,11 @@ usage:
   berth agent-ack AGENT_ID       # clear attention + acknowledge notifications
   berth agent-usage AGENT_ID [--tokens-in N] [--tokens-out N] [--cost USD]
   berth mute [PROVIDER...]       # silence OS notifications; empty clears
-  berth hooks install [claude|opencode|copilot|all]
-  berth hooks print [claude|opencode|copilot|all]
+  berth hooks install [claude|opencode|copilot|cmd|all]
+  berth hooks print [claude|opencode|copilot|cmd|all]
   berth hook claude             read a Claude Code hook payload on stdin
   berth hook copilot <event>    read a Copilot CLI hook payload on stdin
+  berth hook cmd <event>        read a Command Code hook payload on stdin
   berth run [--name N] [--provider P] [--cwd DIR] -- <argv…>
   berth events [--types a,b] [--since SEQ]
   berth snapshot                session JSON on stdout
@@ -1128,6 +1261,10 @@ fn run() -> Result<(), String> {
                     let event = rest.get(1).map(String::as_str).unwrap_or_default();
                     run_copilot_hook(&mut c, event)?;
                 }
+                "cmd" => {
+                    let event = rest.get(1).map(String::as_str).unwrap_or_default();
+                    run_cmd_hook(&mut c, event)?;
+                }
                 other => return Err(format!("hook: unknown provider {other}")),
             }
         }
@@ -1355,6 +1492,57 @@ mod tests {
             assert!(command.contains("hook copilot"));
             assert!(command.contains(event));
         }
+    }
+
+    #[test]
+    fn cmd_hooks_map_to_agent_states() {
+        assert_eq!(
+            cmd_hook_state("SessionStart", ""),
+            Some(("idle", "session started"))
+        );
+        assert_eq!(
+            cmd_hook_state("PreToolUse", "SHELL"),
+            Some(("tool", "SHELL"))
+        );
+        assert_eq!(
+            cmd_hook_state("PostToolUse", "SHELL"),
+            Some(("thinking", "thinking"))
+        );
+        assert_eq!(cmd_hook_state("Stop", ""), Some(("idle", "turn complete")));
+        assert_eq!(cmd_hook_state("UnknownEvent", ""), None);
+    }
+
+    #[test]
+    fn cmd_hook_settings_cover_the_known_events() {
+        let settings = cmd_hook_settings("/opt/berth");
+        for event in CMD_HOOK_EVENTS {
+            let command = settings["hooks"][event][0]["hooks"][0]["command"]
+                .as_str()
+                .unwrap();
+            assert!(command.contains("hook cmd"));
+            assert!(command.contains(event));
+        }
+        // A matcher on SessionStart/Stop would stop the hook firing entirely.
+        assert!(
+            settings["hooks"]["SessionStart"][0]
+                .get("matcher")
+                .is_none()
+        );
+        assert!(settings["hooks"]["Stop"][0].get("matcher").is_none());
+    }
+
+    #[test]
+    fn provider_for_recognises_command_code() {
+        assert_eq!(provider_for(&["command-code".to_string()]), "command-code");
+        assert_eq!(provider_for(&["cmdc".to_string()]), "command-code");
+        assert_eq!(provider_for(&["cmdc.exe".to_string()]), "command-code");
+        if cfg!(not(windows)) {
+            assert_eq!(provider_for(&["cmd".to_string()]), "command-code");
+        } else {
+            assert_eq!(provider_for(&["cmd".to_string()]), "custom");
+        }
+        // A loose prefix must not swallow unrelated programs.
+        assert_eq!(provider_for(&["cmdfoo".to_string()]), "custom");
     }
 
     #[test]

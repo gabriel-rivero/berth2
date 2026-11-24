@@ -62,6 +62,18 @@ app itself has the gaps listed in
 - **The palette lists actions only.** It has no workspace or session commands
   beyond the 14 bound actions, and it does not remember recent choices.
 
+### Terminal engine
+
+- **Two engines are built; four are selectable.** `terminalBackend` accepts
+  `builtin` (`vt100`) and `alacritty` (both shipped). `wezterm` and `ghostty`
+  are accepted by the config but fall back to `builtin`: `termwiz` is a parser
+  without scrollback parity, and Ghostty needs a `libghostty-vt` build through
+  its Zig toolchain.
+- **Inline images are side-channel decoded.** Both engines share the reader's
+  OSC 1337/sixel/kitty handling, so images are not an engine feature; the
+  builtin engine anchors iTerm2 images in its parser callback and other engines
+  through the side channel.
+
 ### Output and logs
 
 - **No output rules or session log.** Nothing styles matching lines (ConEmu's Highlight,
@@ -94,6 +106,11 @@ app itself has the gaps listed in
 - **Copilot resumes from a hook.** `berth hooks install copilot` writes
   `~/.copilot/hooks/berth.json`; its known events arrive after the first turn,
   so a session quit before any turn has no id to resume.
+- **Command Code's short alias differs on Windows.** The CLI is `cmd` on
+  Unix, `cmdc` on Windows and `command-code` everywhere; `cmd` deliberately does
+  not match the Windows `cmd.exe` shell. `berth hooks install cmd` writes
+  `~/.commandcode/settings.json`, and its `SessionStart` hook carries the session
+  id immediately.
 - **Detection is process-name only.** A provider is recognised from the
   foreground process name and argv; an agent whose CLI name changed, or one
   running through a wrapper script, is not detected.

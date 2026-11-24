@@ -67,7 +67,7 @@ is portable-only, and every macOS gap is UI-only.
 | | triggers on output | ○ | ○ | ○ | iTerm2, Alacritty |
 | | file drag-and-drop | ○ | ○ | ○ | iTerm2, kitty |
 | **Agents** | typed lifecycle, attention, events | ● | ● | ◐ (free-form) | Berth only |
-| | hook install for providers | ● (4) | ● (4) | ● (13) | — |
+| | hook install for providers | ● (5) | ● (4) | ● (13) | — |
 | | resume across relaunch | ● | ● | ● | — |
 | | multi-agent rows in the sidebar | ◐ (count) | ◐ (count) | ● | — |
 | | per-agent inbox / timeline | ○ | ○ | ● | — |
@@ -108,7 +108,7 @@ is portable-only, and every macOS gap is UI-only.
    process model.
 5. **Agent depth is the differentiator that is still half-built.** The typed state machine
    and event stream exist; there is no inbox, no history beyond the live notification
-   list, no workspace-level cost meter, and four providers against cmux's thirteen.
+   list, no workspace-level cost meter, and five providers against cmux's thirteen.
 6. **Search and recall.** The portable window searches; the AppKit shell does not, and
    neither has copy mode, paste history or a search across workspaces.
 7. **Distribution.** .deb and PKGBUILD exist, the notarization script is written but

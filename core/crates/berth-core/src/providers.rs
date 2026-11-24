@@ -44,6 +44,15 @@ pub const PROVIDERS: &[Provider] = &[
         resumable: true,
     },
     Provider {
+        id: "command-code",
+        display: "Command Code",
+        // The CLI is `cmd` on Unix, `cmdc` on Windows (where `cmd` is the
+        // built-in shell), and `command-code` everywhere.
+        aliases: &["cmd", "cmdc", "command-code"],
+        resume: &["command-code", "--resume", "{ref}"],
+        resumable: true,
+    },
+    Provider {
         id: "custom",
         display: "Custom",
         aliases: &[],
@@ -80,6 +89,10 @@ pub fn detect(comm: Option<&str>, argv: &[String]) -> Option<&'static Provider> 
     for candidate in &candidates {
         for p in PROVIDERS.iter().filter(|p| !p.aliases.is_empty()) {
             for alias in p.aliases {
+                // `cmd` is the Windows command shell, not the Command Code CLI.
+                if cfg!(windows) && *alias == "cmd" {
+                    continue;
+                }
                 if candidate == alias
                     || candidate.starts_with(&format!("{alias}-"))
                     || candidate == &format!("{alias}.js")
@@ -183,6 +196,33 @@ mod tests {
     }
 
     #[test]
+    fn detects_command_code_by_every_alias() {
+        assert_eq!(detect(Some("cmdc"), &[]).unwrap().id, "command-code");
+        assert_eq!(
+            detect(Some("command-code"), &[]).unwrap().id,
+            "command-code"
+        );
+        if cfg!(not(windows)) {
+            assert_eq!(
+                detect(Some("node"), &argv(&["node", "/usr/local/bin/cmd"]))
+                    .unwrap()
+                    .id,
+                "command-code"
+            );
+        }
+    }
+
+    #[test]
+    fn the_short_cmd_alias_is_not_used_on_windows() {
+        let detected = detect(Some("cmd.exe"), &[]).map(|p| p.id);
+        if cfg!(windows) {
+            assert_eq!(detected, None, "cmd.exe must not look like an agent");
+        } else {
+            assert_eq!(detected, Some("command-code"));
+        }
+    }
+
+    #[test]
     fn does_not_match_unrelated_words() {
         assert!(detect(Some("node"), &argv(&["node", "server.js"])).is_none());
         assert!(detect(Some("claude-notes-tool"), &[]).is_some()); // known tradeoff, documented
@@ -198,6 +238,11 @@ mod tests {
         assert_eq!(
             resume_argv(c, Some("9a2b"), &[]),
             vec!["copilot", "--resume", "9a2b"]
+        );
+        let cc = by_id("command-code").unwrap();
+        assert_eq!(
+            resume_argv(cc, Some("sess-1"), &[]),
+            vec!["command-code", "--resume", "sess-1"]
         );
     }
 

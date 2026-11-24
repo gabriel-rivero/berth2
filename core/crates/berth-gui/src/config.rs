@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 
+use berth_headless::engine::Backend;
 use serde::Deserialize;
 
 pub const DEFAULT_FONT_SIZE: f32 = 14.0;
@@ -312,6 +313,9 @@ pub struct Config {
     /// Program a new terminal runs, as argv. Empty means the platform default
     /// shell (`$SHELL` on Unix, `%ComSpec%` on Windows).
     pub shell: Vec<String>,
+    /// Parser/grid for new surfaces. Read at launch; unavailable backends fall
+    /// back to the builtin engine.
+    pub terminal_backend: Backend,
     /// Extra arguments appended to a provider's resume command, by provider id.
     pub resume_args: std::collections::HashMap<String, Vec<String>>,
     /// Providers whose OS notifications are silenced; attention stays in-app.
@@ -342,6 +346,7 @@ impl Default for Config {
             scrollback_lines: 4_000,
             graphics: true,
             shell: Vec::new(),
+            terminal_backend: Backend::Builtin,
             resume_args: std::collections::HashMap::new(),
             mute_providers: Vec::new(),
             sidebar_width: 200.0,
@@ -502,6 +507,7 @@ struct FileConfig {
     scrollback_lines: Option<usize>,
     graphics: Option<bool>,
     shell: Option<ShellSpec>,
+    terminal_backend: Option<String>,
     resume_args: Option<std::collections::HashMap<String, Vec<String>>>,
     mute_providers: Option<Vec<String>>,
     sidebar_width: Option<f64>,
@@ -609,6 +615,11 @@ impl Config {
                 .min(100_000),
             graphics: file.graphics.unwrap_or(defaults.graphics),
             shell: file.shell.map(ShellSpec::into_argv).unwrap_or_default(),
+            terminal_backend: file
+                .terminal_backend
+                .as_deref()
+                .and_then(Backend::parse)
+                .unwrap_or_default(),
             resume_args: file.resume_args.unwrap_or(defaults.resume_args),
             mute_providers: file.mute_providers.unwrap_or(defaults.mute_providers),
             sidebar_width: file
@@ -752,6 +763,14 @@ impl Config {
             object.remove("shell");
         } else {
             object.insert("shell".into(), serde_json::json!(self.shell));
+        }
+        if self.terminal_backend == Backend::Builtin {
+            object.remove("terminalBackend");
+        } else {
+            object.insert(
+                "terminalBackend".into(),
+                serde_json::json!(self.terminal_backend.name()),
+            );
         }
         if !self.mute_providers.is_empty() {
             object.insert(
@@ -1068,6 +1087,41 @@ mod tests {
     fn given_a_socket_key_when_parsed_then_it_is_exposed() {
         let config = Config::parse(r#"{"socket": "off"}"#).unwrap();
         assert_eq!(config.socket_mode(), Some("off"));
+    }
+
+    #[test]
+    fn given_a_terminal_backend_when_parsed_then_it_round_trips() {
+        use berth_headless::engine::Backend;
+        assert_eq!(
+            Config::parse(r#"{"terminalBackend": "alacritty"}"#)
+                .unwrap()
+                .terminal_backend,
+            Backend::Alacritty
+        );
+        assert_eq!(
+            Config::parse(r#"{"terminalBackend": "nonsense"}"#)
+                .unwrap()
+                .terminal_backend,
+            Backend::Builtin
+        );
+        assert_eq!(Config::default().terminal_backend, Backend::Builtin);
+
+        let path = temp_path("backend");
+        let mut config = Config {
+            terminal_backend: Backend::Alacritty,
+            ..Config::default()
+        };
+        config.save_to(&path).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved["terminalBackend"], "alacritty");
+
+        config.terminal_backend = Backend::Builtin;
+        config.save_to(&path).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(saved.get("terminalBackend").is_none());
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

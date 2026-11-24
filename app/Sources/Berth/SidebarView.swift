@@ -22,6 +22,7 @@ struct SidebarAgent {
         case "claude-code": return "✦"
         case "codex": return "⌬"
         case "opencode": return "◇"
+        case "command-code": return "⌘"
         default: return "•"
         }
     }

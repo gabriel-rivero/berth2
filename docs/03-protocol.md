@@ -156,7 +156,7 @@ launch environment (notably `PATH`) because Ghostty runs commands through a
 login shell with a minimal environment; without it a resumed `claude` can miss
 its interpreter. On restore, a provider session ref uses the provider template
 (`claude --resume <ref>`, `codex resume <ref>`, `opencode --session <ref>`,
-`copilot --resume <ref>`);
+`copilot --resume <ref>`, `command-code --resume <ref>`);
 without a ref the saved argv is executed verbatim. A failed resume keeps the
 surface in the tree and marks the agent `errored` with detail `resume failed`.
 `agent.update` accepts `session_ref` to fill that ref once a hook observes the
@@ -226,7 +226,7 @@ Events are derived from Ghostty actions where possible: `SET_TITLE`, `PWD`, `PRO
   "id": "agt_44de",
   "surface_id": "srf_91c2",
   "workspace_id": "ws_7f3a",
-  "provider": "claude-code",          // claude-code | codex | opencode | copilot | custom
+  "provider": "claude-code",          // claude-code | codex | opencode | copilot | command-code | custom
   "name": "fix-auth-refresh",         // human label; defaults to provider + short id
   "state": "waiting_input",           // see lifecycle
   "detail": "permission: allow edit src/auth.ts",  // one line, ≤120 chars
@@ -287,7 +287,7 @@ Three tiers, all writing the same typed state — tier 1 needs no cooperation at
 
 1. **Passive**: shell reports foreground pid/argv (`ghostty_surface_foreground_pid`, `tty_name`) plus Ghostty actions (title, OSC 9/99/777, progress, bell) → core matches provider table → `state: unknown`, live cwd/ports from `/proc`-equivalent (`lsof`), no registration.
 2. **Wrapper**: `berth run -- claude` creates a surface with `BERTH_AGENT_ID`, registers on start, forwards exit status → `done`/`errored`. Zero per-project setup; the argv is recorded as the resume payload automatically.
-3. **Hooks**: `berth hooks install` writes Claude Code `settings.json` hooks, an opencode plugin and a Copilot CLI hooks file. Each event calls `berth hook claude`, `berth hook copilot <event>` or `berth agent-set --surface …`, updating state/detail and recording the provider session id for `--resume` on the next launch. Copilot's `agentStop`, `preCompact` and `sessionEnd` events carry the session id from the first turn end. One socket round trip, so hook latency is negligible.
+3. **Hooks**: `berth hooks install` writes Claude Code `settings.json` hooks, an opencode plugin, a Copilot CLI hooks file and Command Code hooks in `~/.commandcode/settings.json`. Each event calls `berth hook claude`, `berth hook copilot <event>`, `berth hook cmd <event>` or `berth agent-set --surface …`, updating state/detail and recording the provider session id for `--resume` on the next launch. Copilot's `agentStop`, `preCompact` and `sessionEnd` events carry the session id from the first turn end; Command Code's `SessionStart` carries it immediately. One socket round trip, so hook latency is negligible.
 
 The wrapper is the recommended default: it makes Tier 2 (and therefore correct restore) universal.
 
@@ -316,9 +316,10 @@ berth notify "text" [--level needs_input] [--body B]
 berth agent-register SURFACE_ID [--provider P] [--name N] [--id AGENT_ID]
 berth agent-set AGENT_ID [--state S] [--detail D] [--progress 0.4] [--clear-progress] [--session-ref ID]
 berth agent-set --surface SURFACE_ID [--state S] [--detail D]
-berth hooks install [claude|opencode|all]  # idempotent; embeds this binary's path
-berth hooks print [claude|opencode|all]    # recipes without writing
+berth hooks install [claude|opencode|copilot|cmd|all]  # idempotent; embeds this binary's path
+berth hooks print [claude|opencode|copilot|cmd|all]    # recipes without writing
 berth hook claude                     # stdin hook payload; used by generated config
+berth hook cmd <event>                # Command Code hook payload; prints nothing
 berth run [--name N] [--provider P] [--cwd DIR] -- <argv…>  # creates surface, registers agent, execs
 berth events [--types a,b] [--since N] # streams NDJSON
 berth snapshot                        # session.dump to stdout

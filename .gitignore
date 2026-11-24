@@ -29,3 +29,6 @@ core/target/
 
 # Agent worktrees
 .claude/worktrees/
+
+# Local agent tooling state
+.commandcode/

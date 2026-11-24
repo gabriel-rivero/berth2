@@ -7,5 +7,5 @@ Exec=berth-gui
 Icon=berth
 Terminal=false
 Categories=System;TerminalEmulator;
-Keywords=terminal;workspace;agent;claude;codex;opencode;copilot;
+Keywords=terminal;workspace;agent;claude;codex;opencode;copilot;command-code;
 StartupWMClass=berth-gui
