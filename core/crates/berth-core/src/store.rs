@@ -8,12 +8,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::ids;
-use crate::model::{AgentSurface, Group, Orientation, Pane, PaneNode, Resume, Surface, Workspace};
+use crate::model::{
+    AgentSurface, Group, Orientation, Pane, PaneNode, Resume, Surface, Window, Workspace,
+};
 use crate::state::AppState;
 use crate::time;
 use crate::{CoreError, ErrorCode, SpawnRequest, SurfaceOps};
 
-pub const SESSION_VERSION: u32 = 1;
+pub const SESSION_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspaceSnapshot {
@@ -28,6 +30,10 @@ pub struct WorkspaceSnapshot {
 pub struct Snapshot {
     pub version: u32,
     pub saved_ms: u64,
+    #[serde(default)]
+    pub windows: Vec<Window>,
+    #[serde(default)]
+    pub selected_window: Option<String>,
     #[serde(default)]
     pub selected_workspace: Option<String>,
     #[serde(default)]
@@ -85,6 +91,8 @@ impl AppState {
         Snapshot {
             version: SESSION_VERSION,
             saved_ms: time::now_ms(),
+            windows: self.windows.clone(),
+            selected_window: self.selected_window.clone(),
             selected_workspace: self.selected_workspace.clone(),
             selected_surface: self.selected_surface.clone(),
             groups: self.groups.clone(),
@@ -93,9 +101,48 @@ impl AppState {
     }
 }
 
-/// Version check before any restore work happens.
+/// Bring any accepted snapshot up to `SESSION_VERSION`. v1 had no window
+/// type, so its flat workspace list moves into one default window instead of
+/// being rejected.
+pub fn migrate(mut snapshot: Snapshot) -> Result<Snapshot, CoreError> {
+    match snapshot.version {
+        SESSION_VERSION => Ok(snapshot),
+        1 => {
+            snapshot.version = SESSION_VERSION;
+            let window = Window {
+                id: ids::mint(ids::WINDOW),
+                name: "main".to_string(),
+                created_ms: time::now_ms(),
+                bounds: None,
+                monitor: None,
+                sidebar_width: None,
+                active_workspace: snapshot
+                    .selected_workspace
+                    .clone()
+                    .or_else(|| snapshot.workspaces.first().map(|w| w.workspace.id.clone())),
+                active_surface: snapshot.selected_surface.clone(),
+                broadcast: false,
+            };
+            for wsnap in &mut snapshot.workspaces {
+                if wsnap.workspace.window_id.is_none() {
+                    wsnap.workspace.window_id = Some(window.id.clone());
+                }
+            }
+            snapshot.selected_window = Some(window.id.clone());
+            snapshot.windows.push(window);
+            Ok(snapshot)
+        }
+        other => Err(CoreError::new(
+            ErrorCode::Unsupported,
+            format!("session version {other} is not supported (expected {SESSION_VERSION})"),
+        )),
+    }
+}
+
+/// Version check before any restore work happens. v1 is accepted because
+/// [`migrate`] upgrades it.
 pub fn check_version(snapshot: &Snapshot) -> Result<(), CoreError> {
-    if snapshot.version != SESSION_VERSION {
+    if snapshot.version != SESSION_VERSION && snapshot.version != 1 {
         return Err(CoreError::new(
             ErrorCode::Unsupported,
             format!(
@@ -119,10 +166,38 @@ pub fn validate(snapshot: &Snapshot) -> Result<(), CoreError> {
     let mut surface_ids = std::collections::HashSet::new();
     let mut agent_ids = std::collections::HashSet::new();
 
+    let mut window_ids = std::collections::HashSet::new();
+    for window in &snapshot.windows {
+        if !window_ids.insert(window.id.as_str()) {
+            return Err(invalid(format!("duplicate window id {}", window.id)));
+        }
+    }
+    if let Some(id) = &snapshot.selected_window
+        && !window_ids.contains(id.as_str())
+    {
+        return Err(invalid(format!("selected window {id} does not exist")));
+    }
+
     for wsnap in &snapshot.workspaces {
         let workspace = &wsnap.workspace;
         if !workspace_ids.insert(workspace.id.as_str()) {
             return Err(invalid(format!("duplicate workspace id {}", workspace.id)));
+        }
+        if let Some(window_id) = &workspace.window_id
+            && !window_ids.contains(window_id.as_str())
+        {
+            return Err(invalid(format!(
+                "workspace {} belongs to missing window {}",
+                workspace.id, window_id
+            )));
+        }
+        if let Some(zoomed) = &workspace.zoomed_pane
+            && !workspace.root.contains(zoomed)
+        {
+            return Err(invalid(format!(
+                "workspace {} zooms missing pane {}",
+                workspace.id, zoomed
+            )));
         }
 
         let leaves = workspace.root.leaves();
@@ -245,6 +320,8 @@ impl Default for Snapshot {
         Self {
             version: SESSION_VERSION,
             saved_ms: 0,
+            windows: Vec::new(),
+            selected_window: None,
             selected_workspace: None,
             selected_surface: None,
             groups: Vec::new(),
@@ -274,15 +351,27 @@ pub fn restore_with(
     keep_launch_flags: bool,
     extra_args: &dyn Fn(&str) -> Vec<String>,
 ) -> Result<usize, CoreError> {
+    let snapshot = migrate(snapshot)?;
     validate(&snapshot)?;
     // Restoring over a live session must replace it, not append to it. The
     // old PTYs are closed first so a protocol-driven restore cannot leak
     // processes or leave stale surface ids for the new snapshot to collide
     // with.
     state.reset(ops);
+    let Snapshot {
+        windows,
+        selected_window,
+        selected_workspace,
+        selected_surface,
+        groups,
+        workspaces,
+        ..
+    } = snapshot;
+    state.windows = windows;
+    let default_window = state.windows.first().map(|w| w.id.clone());
     let mut restored = 0;
 
-    for wsnap in snapshot.workspaces {
+    for wsnap in workspaces {
         let crate::store::WorkspaceSnapshot {
             workspace: ws,
             panes,
@@ -303,6 +392,7 @@ pub fn restore_with(
         }
         state.workspaces.push(Workspace {
             active_surface: None,
+            window_id: ws.window_id.clone().or_else(|| default_window.clone()),
             root: ws.root.clone(),
             ..ws.clone()
         });
@@ -346,15 +436,24 @@ pub fn restore_with(
                     };
                     (argv, cwd)
                 }
-                None => (Vec::new(), surface.cwd.clone()),
+                None => (surface.argv.clone(), surface.cwd.clone()),
             };
-            let mut env = Vec::new();
-            if let Some(resume) = resume {
-                for (key, value) in &resume.env {
-                    // Identity variables belong to the new generation, not the
-                    // saved process.
-                    if !key.starts_with("BERTH_") {
-                        env.push((key.clone(), value.clone()));
+            let mut env: Vec<(String, String)> = Vec::new();
+            match resume {
+                Some(resume) => {
+                    for (key, value) in &resume.env {
+                        // Identity variables belong to the new generation, not
+                        // the saved process.
+                        if !key.starts_with("BERTH_") {
+                            env.push((key.clone(), value.clone()));
+                        }
+                    }
+                }
+                None => {
+                    for (key, value) in &surface.env {
+                        if !key.starts_with("BERTH_") {
+                            env.push((key.clone(), value.clone()));
+                        }
                     }
                 }
             }
@@ -449,22 +548,23 @@ pub fn restore_with(
         }
     }
 
-    if snapshot.selected_workspace.is_some()
-        && snapshot
-            .selected_workspace
-            .as_deref()
-            .and_then(|id| state.workspace(id))
-            .is_some()
-    {
-        state.selected_workspace = snapshot.selected_workspace;
-    } else {
-        state.selected_workspace = state.workspaces.first().map(|w| w.id.clone());
+    state.groups = groups;
+
+    let window_id = selected_window
+        .filter(|id| state.window(id).is_some())
+        .or_else(|| state.windows.first().map(|w| w.id.clone()));
+    state.selected_window = window_id.clone();
+    if let Some(id) = &window_id {
+        state.sync_selection_from_window(id);
     }
-    state.groups = snapshot.groups;
+    if state.selected_workspace.is_none() {
+        state.selected_workspace = selected_workspace
+            .filter(|id| state.workspace(id).is_some())
+            .or_else(|| state.workspaces.first().map(|w| w.id.clone()));
+    }
 
     let selected_ws = state.selected_workspace.clone();
-    state.selected_surface = snapshot
-        .selected_surface
+    state.selected_surface = selected_surface
         .filter(|id| {
             state
                 .surface(id)
@@ -475,6 +575,13 @@ pub fn restore_with(
                 .as_deref()
                 .and_then(|w| state.active_surface_of_workspace(w))
         });
+    let mirrored_surface = state.selected_surface.clone();
+    if let (Some(window_id), Some(workspace_id)) = (window_id, selected_ws)
+        && let Some(win) = state.window_mut(&window_id)
+    {
+        win.active_workspace = Some(workspace_id);
+        win.active_surface = mirrored_surface;
+    }
     Ok(restored)
 }
 
@@ -486,6 +593,7 @@ pub fn ensure_default_workspace(
     if !state.workspaces.is_empty() {
         return Ok(());
     }
+    state.ensure_window();
     state.create_workspace(Some("main"), dirs_fallback().as_deref(), None, ops)?;
     Ok(())
 }
@@ -597,6 +705,72 @@ mod tests {
         assert_eq!(back.workspaces.len(), 2);
         assert_eq!(back.workspaces[1].workspace.name, "two");
         assert!(back.workspaces.iter().any(|w| !w.agents.is_empty()));
+    }
+
+    #[test]
+    fn snapshot_roundtrips_windows_zoom_and_broadcast() {
+        let mut st = seeded();
+        let window_id = st.windows[0].id.clone();
+        let pane_id = st.panes.keys().next().unwrap().clone();
+        st.set_zoomed_pane(&pane_id, true).unwrap();
+        st.window_mut(&window_id).unwrap().broadcast = true;
+        st.window_mut(&window_id).unwrap().bounds = Some(crate::model::WindowBounds {
+            x: 10,
+            y: 20,
+            width: 900,
+            height: 700,
+            maximized: false,
+            scale: 2.0,
+        });
+
+        let snap = st.snapshot();
+        let mut fresh = AppState::default();
+        restore(&mut fresh, snap, &NullOps).unwrap();
+
+        assert_eq!(fresh.windows.len(), 1);
+        assert!(fresh.windows[0].broadcast);
+        assert_eq!(fresh.windows[0].bounds.unwrap().width, 900);
+        assert!(
+            fresh
+                .workspaces
+                .iter()
+                .any(|w| w.zoomed_pane.as_deref() == Some(pane_id.as_str()))
+        );
+    }
+
+    #[test]
+    fn v1_snapshot_migrates_into_one_window() {
+        let st = seeded();
+        let mut snap = st.snapshot();
+        snap.version = 1;
+        snap.windows.clear();
+        snap.selected_window = None;
+        for wsnap in &mut snap.workspaces {
+            wsnap.workspace.window_id = None;
+        }
+
+        let migrated = migrate(snap).unwrap();
+        assert_eq!(migrated.version, SESSION_VERSION);
+        assert_eq!(migrated.windows.len(), 1);
+        let window_id = migrated.windows[0].id.clone();
+        assert!(
+            migrated
+                .workspaces
+                .iter()
+                .all(|w| w.workspace.window_id.as_deref() == Some(window_id.as_str()))
+        );
+        assert_eq!(
+            migrated.selected_window.as_deref(),
+            Some(window_id.as_str())
+        );
+    }
+
+    #[test]
+    fn validate_rejects_a_dangling_window_id() {
+        let st = seeded();
+        let mut snap = st.snapshot();
+        snap.workspaces[0].workspace.window_id = Some("wdw_dead".into());
+        assert!(validate(&snap).is_err());
     }
 
     #[test]

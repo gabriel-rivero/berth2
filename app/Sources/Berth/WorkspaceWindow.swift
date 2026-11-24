@@ -74,6 +74,15 @@ final class MainWindow: NSWindow {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 
+    /// Called when this window becomes key, so the shell can select its core
+    /// window (per-window sidebars and status).
+    var onBecomeKey: (() -> Void)?
+
+    override func becomeKey() {
+        super.becomeKey()
+        onBecomeKey?()
+    }
+
     func updateSidebar(_ model: SidebarModel) {
         sidebar.update(model)
     }
@@ -90,8 +99,15 @@ final class MainWindow: NSWindow {
                 + "surfaces=\(layout.surfaceIDs.count)")
         LayoutRebuild.perform {
             title = layout.name.isEmpty ? "Berth" : layout.name
+            let root: WorkspaceLayout.Node
+            if let zoomed = layout.zoomedPane,
+               let pane = layout.panes.first(where: { $0.id == zoomed }) {
+                root = .leaf(paneID: pane.id, activeSurface: pane.activeSurface)
+            } else {
+                root = layout.root
+            }
             let node = LayoutBuilder.build(
-                layout.root, layout: layout, views: views, actions: actions)
+                root, layout: layout, views: views, actions: actions)
             contentHost.subviews.forEach { $0.removeFromSuperview() }
             guard let node else { return }
             node.frame = contentHost.bounds
@@ -111,6 +127,47 @@ final class MainWindow: NSWindow {
         if let view = views[id] {
             makeFirstResponder(view)
         }
+    }
+
+    /// The pane's active surface in the requested direction, for arrow-key
+    /// spatial focus. Frames are compared in window coordinates.
+    func surfaceInDirection(_ direction: String, from surfaceID: String) -> String? {
+        let panes = Self.allPanes(in: contentHost)
+        guard let source = panes.first(where: { $0.surfaceIDs.contains(surfaceID) })
+        else { return nil }
+        let sourceRect = source.convert(source.bounds, to: nil)
+        let center = NSPoint(x: sourceRect.midX, y: sourceRect.midY)
+        var best: (score: Double, pane: PaneView)?
+        for pane in panes where pane !== source {
+            let rect = pane.convert(pane.bounds, to: nil)
+            let dx = Double(rect.midX - center.x)
+            let dy = Double(rect.midY - center.y)
+            let forward: Double
+            let lateral: Double
+            switch direction {
+            case "left" where dx < -1: (forward, lateral) = (-dx, abs(dy))
+            case "right" where dx > 1: (forward, lateral) = (dx, abs(dy))
+            case "up" where dy > 1: (forward, lateral) = (dy, abs(dx))
+            case "down" where dy < -1: (forward, lateral) = (-dy, abs(dx))
+            default: continue
+            }
+            let score = forward + lateral * 0.5
+            if best == nil || score < best!.score {
+                best = (score, pane)
+            }
+        }
+        return best?.pane.surfaceID
+    }
+
+    private static func allPanes(in view: NSView) -> [PaneView] {
+        var found: [PaneView] = []
+        if let pane = view as? PaneView {
+            found.append(pane)
+        }
+        for child in view.subviews {
+            found.append(contentsOf: allPanes(in: child))
+        }
+        return found
     }
 
     func toggleSidebar() {

@@ -53,6 +53,15 @@ enum ShortcutAction: String, CaseIterable {
     case nextPane
     case previousPane
     case newWorkspace
+    case newWindow
+    case zoomPane
+    case toggleBroadcast
+    case duplicateTab
+    case restartTab
+    case focusLeft
+    case focusRight
+    case focusUp
+    case focusDown
     case palette
     case jumpAttention
     case showAttention
@@ -73,6 +82,15 @@ enum ShortcutAction: String, CaseIterable {
         case .nextPane: return "Next Pane"
         case .previousPane: return "Previous Pane"
         case .newWorkspace: return "New Workspace"
+        case .newWindow: return "New Window"
+        case .zoomPane: return "Zoom Pane"
+        case .toggleBroadcast: return "Broadcast Input"
+        case .duplicateTab: return "Duplicate Tab"
+        case .restartTab: return "Restart Tab"
+        case .focusLeft: return "Focus Pane Left"
+        case .focusRight: return "Focus Pane Right"
+        case .focusUp: return "Focus Pane Up"
+        case .focusDown: return "Focus Pane Down"
         case .palette: return "Command Palette"
         case .jumpAttention: return "Jump to Attention"
         case .showAttention: return "Attention…"
@@ -95,6 +113,15 @@ enum ShortcutAction: String, CaseIterable {
         case .nextPane: return "cmd+]"
         case .previousPane: return "cmd+["
         case .newWorkspace: return "cmd+n"
+        case .newWindow: return "cmd+shift+n"
+        case .zoomPane: return "cmd+shift+enter"
+        case .toggleBroadcast: return "cmd+shift+b"
+        case .duplicateTab: return "cmd+shift+k"
+        case .restartTab: return "cmd+shift+r"
+        case .focusLeft: return "cmd+opt+left"
+        case .focusRight: return "cmd+opt+right"
+        case .focusUp: return "cmd+opt+up"
+        case .focusDown: return "cmd+opt+down"
         case .palette: return "cmd+shift+p"
         case .jumpAttention: return "cmd+shift+u"
         case .showAttention: return "cmd+i"

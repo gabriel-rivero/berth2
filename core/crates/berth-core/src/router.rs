@@ -7,7 +7,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use crate::agent::AgentState;
-use crate::model::{NotifLevel, Orientation, Pane, Resume, Surface};
+use crate::model::{NotifLevel, Orientation, Pane, PaneNode, Resume, Surface, WindowBounds};
 use crate::protocol::{
     APP_NAME, APP_VERSION, ErrorCode, PROTOCOL_VERSION, Request, Response, names,
 };
@@ -62,17 +62,118 @@ fn handle(
             "features": ["agents", "notifications", "events", "session"],
         })),
 
+        // ---- window ----------------------------------------------------
+        "window.list" => Ok(json!({
+            "windows": state.windows,
+            "selected_window": state.selected_window,
+            "selected_workspace": state.selected_workspace,
+            "selected_surface": state.selected_surface,
+        })),
+        "window.create" => {
+            let p: WindowCreate = params(raw)?;
+            let window = state.create_window(p.name.as_deref());
+            if let Some(workspace_id) = p.workspace_id {
+                state.assign_workspace_to_window(&workspace_id, &window.id)?;
+            }
+            if p.focus.unwrap_or(true) {
+                state.select_window(&window.id)?;
+                if let Some(s) = state
+                    .window(&window.id)
+                    .and_then(|w| w.active_surface.clone())
+                {
+                    let _ = ops.focus(&s);
+                }
+            }
+            let window = state.window(&window.id).cloned().unwrap_or(window);
+            Ok(json!({"window": window}))
+        }
+        "window.get" => {
+            let p: WindowIdParam = params(raw)?;
+            let window = state
+                .window(&p.window_id)
+                .cloned()
+                .ok_or_else(|| CoreError::not_found(format!("no window {}", p.window_id)))?;
+            Ok(json!({"window": window}))
+        }
+        "window.select" => {
+            let p: WindowIdParam = params(raw)?;
+            state.select_window(&p.window_id)?;
+            if let Some(s) = state
+                .window(&p.window_id)
+                .and_then(|w| w.active_surface.clone())
+            {
+                let _ = ops.focus(&s);
+            }
+            Ok(json!({}))
+        }
+        "window.update" => {
+            let p: WindowUpdate = params(raw)?;
+            if let Some(workspace_id) = &p.active_workspace
+                && state.workspace(workspace_id).is_none()
+            {
+                return Err(CoreError::not_found(format!("no workspace {workspace_id}")));
+            }
+            let window = state
+                .window_mut(&p.window_id)
+                .ok_or_else(|| CoreError::not_found(format!("no window {}", p.window_id)))?;
+            if let Some(name) = p.name {
+                window.name = name;
+            }
+            if p.clear_bounds.unwrap_or(false) {
+                window.bounds = None;
+            } else if let Some(bounds) = p.bounds {
+                window.bounds = Some(bounds);
+            }
+            if p.monitor.is_some() {
+                window.monitor = p.monitor;
+            }
+            if let Some(width) = p.sidebar_width {
+                window.sidebar_width = Some(width.clamp(0.0, 5000.0));
+            }
+            if let Some(broadcast) = p.broadcast {
+                window.broadcast = broadcast;
+            }
+            if let Some(workspace_id) = p.active_workspace {
+                window.active_workspace = Some(workspace_id);
+            }
+            let snapshot = window.clone();
+            state.emit(names::WINDOW_CHANGED, json!(snapshot));
+            Ok(json!({"window": snapshot}))
+        }
+        "window.close" => {
+            let p: WindowIdParam = params(raw)?;
+            let was_selected = state.selected_window.as_deref() == Some(p.window_id.as_str());
+            state.close_window(&p.window_id, ops)?;
+            if was_selected
+                && let Some(s) = state
+                    .selected_window
+                    .as_deref()
+                    .and_then(|id| state.window(id))
+                    .and_then(|w| w.active_surface.clone())
+            {
+                let _ = ops.focus(&s);
+            }
+            Ok(json!({}))
+        }
+
         // ---- workspace -------------------------------------------------
         "workspace.list" => Ok(json!({
             "workspaces": state.workspaces,
             "groups": state.groups,
+            "windows": state.windows,
+            "selected_window": state.selected_window,
             "selected_workspace": state.selected_workspace,
             "selected_surface": state.selected_surface,
         })),
         "workspace.create" => {
             let p: WorkspaceCreate = params(raw)?;
-            let ws =
-                state.create_workspace(p.name.as_deref(), p.cwd.as_deref(), p.group_id, ops)?;
+            let ws = state.create_workspace_in(
+                p.window_id.as_deref(),
+                p.name.as_deref(),
+                p.cwd.as_deref(),
+                p.group_id,
+                ops,
+            )?;
             if p.focus.unwrap_or(true) {
                 state.select_workspace(&ws.id)?;
                 if let Some(s) = state.active_surface_of_workspace(&ws.id) {
@@ -262,6 +363,97 @@ fn handle(
             for surface_id in pane.surfaces {
                 state.close_surface(&surface_id, ops)?;
             }
+            Ok(json!({}))
+        }
+        "pane.zoom" => {
+            let p: PaneZoom = params(raw)?;
+            let pane = state
+                .panes
+                .get(&p.pane_id)
+                .cloned()
+                .ok_or_else(|| CoreError::not_found(format!("no pane {}", p.pane_id)))?;
+            let current = state
+                .workspace(&pane.workspace_id)
+                .and_then(|w| w.zoomed_pane.clone());
+            let zoomed = p
+                .zoomed
+                .unwrap_or(current.as_deref() != Some(p.pane_id.as_str()));
+            let zoomed_pane = state.set_zoomed_pane(&p.pane_id, zoomed)?;
+            Ok(json!({"zoomed_pane": zoomed_pane}))
+        }
+        "pane.swap" => {
+            let p: PaneSwap = params(raw)?;
+            let a = state
+                .panes
+                .get(&p.pane_id)
+                .cloned()
+                .ok_or_else(|| CoreError::not_found(format!("no pane {}", p.pane_id)))?;
+            let b = state
+                .panes
+                .get(&p.target_pane_id)
+                .cloned()
+                .ok_or_else(|| CoreError::not_found(format!("no pane {}", p.target_pane_id)))?;
+            if a.workspace_id != b.workspace_id {
+                return Err(CoreError::new(
+                    ErrorCode::InvalidState,
+                    "panes are in different workspaces",
+                ));
+            }
+            let ws = state
+                .workspace_mut(&a.workspace_id)
+                .ok_or_else(|| CoreError::not_found("workspace for pane"))?;
+            if !ws.root.swap(&p.pane_id, &p.target_pane_id) {
+                return Err(CoreError::not_found("pane not in tree"));
+            }
+            let snapshot = ws.clone();
+            state.emit(
+                names::PANE_SWAPPED,
+                json!({
+                    "workspace_id": a.workspace_id,
+                    "pane_id": p.pane_id,
+                    "target_pane_id": p.target_pane_id,
+                    "workspace": snapshot,
+                }),
+            );
+            Ok(json!({}))
+        }
+        "pane.move" => {
+            let p: PaneSwap = params(raw)?;
+            let a = state
+                .panes
+                .get(&p.pane_id)
+                .cloned()
+                .ok_or_else(|| CoreError::not_found(format!("no pane {}", p.pane_id)))?;
+            let b = state
+                .panes
+                .get(&p.target_pane_id)
+                .cloned()
+                .ok_or_else(|| CoreError::not_found(format!("no pane {}", p.target_pane_id)))?;
+            if a.workspace_id != b.workspace_id {
+                return Err(CoreError::new(
+                    ErrorCode::InvalidState,
+                    "panes are in different workspaces",
+                ));
+            }
+            let ws = state
+                .workspace_mut(&a.workspace_id)
+                .ok_or_else(|| CoreError::not_found("workspace for pane"))?;
+            if !ws
+                .root
+                .move_leaf(&p.pane_id, &p.target_pane_id, p.before.unwrap_or(false))
+            {
+                return Err(CoreError::not_found("pane not in tree"));
+            }
+            let snapshot = ws.clone();
+            state.emit(
+                names::PANE_MOVED,
+                json!({
+                    "workspace_id": a.workspace_id,
+                    "pane_id": p.pane_id,
+                    "target_pane_id": p.target_pane_id,
+                    "workspace": snapshot,
+                }),
+            );
             Ok(json!({}))
         }
 
@@ -457,33 +649,49 @@ fn handle(
                 .surface(&p.surface_id)
                 .cloned()
                 .ok_or_else(|| CoreError::not_found(format!("no surface {}", p.surface_id)))?;
-            let pane = state
-                .panes
-                .get_mut(&surface.pane_id)
-                .ok_or_else(|| CoreError::not_found("pane for surface"))?;
-            let from = pane
-                .surfaces
-                .iter()
-                .position(|id| id == &p.surface_id)
-                .ok_or_else(|| CoreError::not_found("surface not in its pane"))?;
-            let active = pane.active_surface().map(str::to_string);
-            let to = p.index.min(pane.surfaces.len().saturating_sub(1));
-            if from != to {
-                let id = pane.surfaces.remove(from);
-                pane.surfaces.insert(to, id);
-                if let Some(active) = active {
-                    pane.active = pane
-                        .surfaces
-                        .iter()
-                        .position(|id| *id == active)
-                        .unwrap_or(pane.active);
+
+            let target_pane = match (&p.pane_id, &p.window_id) {
+                (Some(pane_id), _) => pane_id.clone(),
+                (None, Some(window_id)) => target_pane_for_window(state, window_id)?,
+                (None, None) => {
+                    let index = p.index.unwrap_or(usize::MAX);
+                    reorder_surface(state, &surface.id, index)?;
+                    return Ok(json!({}));
                 }
-            }
-            state.emit(
-                names::SURFACE_MOVED,
-                json!({"surface_id": p.surface_id, "index": to}),
-            );
+            };
+            move_surface_to_pane(state, surface, &target_pane, p.index)?;
             Ok(json!({}))
+        }
+        "surface.restart" => {
+            let p: SurfaceIdParam = params(raw)?;
+            let surface = state
+                .surface(&p.surface_id)
+                .cloned()
+                .ok_or_else(|| CoreError::not_found(format!("no surface {}", p.surface_id)))?;
+            let (argv, cwd, env) = launch_for_surface(state, &surface);
+            respawn_surface(state, &surface, cwd, argv, env, ops)?;
+            Ok(json!({"surface_id": surface.id}))
+        }
+        "surface.duplicate" => {
+            let p: SurfaceDuplicate = params(raw)?;
+            let surface = state
+                .surface(&p.surface_id)
+                .cloned()
+                .ok_or_else(|| CoreError::not_found(format!("no surface {}", p.surface_id)))?;
+            let (argv, cwd, env) = launch_for_surface(state, &surface);
+            let duplicate = state.add_surface(
+                &surface.pane_id,
+                SpawnRequest {
+                    cwd: Some(cwd).filter(|c| !c.is_empty()),
+                    argv,
+                    env,
+                    cols: surface.cols.max(80),
+                    rows: surface.rows.max(24),
+                },
+                ops,
+                p.focus.unwrap_or(false),
+            )?;
+            Ok(json!({"surface_id": duplicate.id}))
         }
         "surface.send_text" => {
             let p: SendText = params(raw)?;
@@ -750,15 +958,31 @@ fn state_set_weight(state: &mut AppState, pane: &Pane, weight: f32) -> bool {
 }
 
 fn default_pane(state: &AppState) -> Option<String> {
-    let ws = match &state.selected_workspace {
-        Some(id) => state.workspace(id)?,
-        None => state.workspaces.first()?,
-    };
-    ws.active_surface
+    let workspace = state
+        .selected_workspace
+        .as_deref()
+        .and_then(|id| state.workspace(id))
+        .or_else(|| {
+            state
+                .selected_window
+                .as_deref()
+                .and_then(|id| state.window(id))
+                .and_then(|w| w.active_workspace.as_deref())
+                .and_then(|id| state.workspace(id))
+        })
+        .or_else(|| {
+            state.workspaces.iter().find(|w| {
+                w.window_id.as_deref() == state.selected_window.as_deref()
+                    || state.selected_window.is_none()
+            })
+        })
+        .or_else(|| state.workspaces.first())?;
+    workspace
+        .active_surface
         .as_deref()
         .and_then(|s| state.surface(s))
         .map(|s| s.pane_id.clone())
-        .or_else(|| ws.root.leaves().first().map(|s| s.to_string()))
+        .or_else(|| workspace.root.leaves().first().map(|s| s.to_string()))
 }
 
 fn close_workspace(state: &mut AppState, ops: &dyn SurfaceOps, id: &str) -> Result<(), CoreError> {
@@ -798,8 +1022,295 @@ fn move_workspace(state: &mut AppState, id: &str, index: usize) -> Result<(), Co
     Ok(())
 }
 
+// ---- surface movement helpers -----------------------------------------
+
+/// Reorder a tab inside its own pane. `index` is clamped.
+fn reorder_surface(state: &mut AppState, surface_id: &str, index: usize) -> Result<(), CoreError> {
+    let surface = state
+        .surface(surface_id)
+        .cloned()
+        .ok_or_else(|| CoreError::not_found(format!("no surface {surface_id}")))?;
+    let pane = state
+        .panes
+        .get_mut(&surface.pane_id)
+        .ok_or_else(|| CoreError::not_found("pane for surface"))?;
+    let from = pane
+        .surfaces
+        .iter()
+        .position(|id| id == surface_id)
+        .ok_or_else(|| CoreError::not_found("surface not in its pane"))?;
+    let active = pane.active_surface().map(str::to_string);
+    let to = index.min(pane.surfaces.len().saturating_sub(1));
+    if from != to {
+        let id = pane.surfaces.remove(from);
+        pane.surfaces.insert(to, id);
+        if let Some(active) = active {
+            pane.active = pane
+                .surfaces
+                .iter()
+                .position(|id| *id == active)
+                .unwrap_or(pane.active);
+        }
+    }
+    state.emit(
+        names::SURFACE_MOVED,
+        json!({"surface_id": surface_id, "index": to}),
+    );
+    Ok(())
+}
+
+/// The pane a surface lands in when the caller names a window. Creates a
+/// workspace in that window when it has none.
+fn target_pane_for_window(state: &mut AppState, window_id: &str) -> Result<String, CoreError> {
+    if state.window(window_id).is_none() {
+        return Err(CoreError::not_found(format!("no window {window_id}")));
+    }
+    let workspace_id = state
+        .window(window_id)
+        .and_then(|w| w.active_workspace.clone())
+        .filter(|id| state.workspace(id).is_some())
+        .or_else(|| {
+            state
+                .workspaces
+                .iter()
+                .find(|w| w.window_id.as_deref() == Some(window_id))
+                .map(|w| w.id.clone())
+        });
+    let workspace_id = match workspace_id {
+        Some(id) => id,
+        None => {
+            let workspace = state.create_empty_workspace_in(window_id, None)?;
+            return workspace
+                .root
+                .leaves()
+                .first()
+                .map(|pane| pane.to_string())
+                .ok_or_else(|| {
+                    CoreError::new(ErrorCode::InvalidState, "target workspace has no pane")
+                });
+        }
+    };
+    state
+        .workspace(&workspace_id)
+        .and_then(|w| w.root.leaves().first().map(|pane| pane.to_string()))
+        .ok_or_else(|| CoreError::new(ErrorCode::InvalidState, "target workspace has no pane"))
+}
+
+/// Move a surface into another pane, reparenting it and pruning an emptied
+/// source pane (and its workspace, if that was the last pane).
+fn move_surface_to_pane(
+    state: &mut AppState,
+    surface: Surface,
+    target_pane_id: &str,
+    index: Option<usize>,
+) -> Result<(), CoreError> {
+    let target = state
+        .panes
+        .get(target_pane_id)
+        .cloned()
+        .ok_or_else(|| CoreError::not_found(format!("no pane {target_pane_id}")))?;
+    if target.id == surface.pane_id {
+        let index = index.unwrap_or(target.surfaces.len().saturating_sub(1));
+        return reorder_surface(state, &surface.id, index);
+    }
+    let target_workspace = target.workspace_id.clone();
+
+    let mut source_empty = false;
+    if let Some(pane) = state.panes.get_mut(&surface.pane_id) {
+        pane.surfaces.retain(|id| id != &surface.id);
+        if pane.active >= pane.surfaces.len() {
+            pane.active = pane.surfaces.len().saturating_sub(1);
+        }
+        source_empty = pane.surfaces.is_empty();
+    }
+    if let Some(pane) = state.panes.get_mut(target_pane_id) {
+        let at = index
+            .unwrap_or(pane.surfaces.len())
+            .min(pane.surfaces.len());
+        pane.surfaces.insert(at, surface.id.clone());
+        pane.active = at;
+    }
+    if let Some(s) = state.surface_mut(&surface.id) {
+        s.pane_id = target_pane_id.to_string();
+        s.workspace_id = target_workspace.clone();
+    }
+
+    if source_empty {
+        state.panes.remove(&surface.pane_id);
+        let source_workspace = surface.workspace_id.clone();
+        let mut gone = false;
+        if let Some(ws) = state.workspace_mut(&source_workspace) {
+            let root_was_leaf = matches!(
+                &ws.root,
+                PaneNode::Leaf { pane_id } if pane_id == &surface.pane_id
+            );
+            ws.root.remove(&surface.pane_id);
+            if ws.zoomed_pane.as_deref() == Some(surface.pane_id.as_str()) {
+                ws.zoomed_pane = None;
+            }
+            if ws.active_surface.as_deref() == Some(surface.id.as_str()) {
+                ws.active_surface = None;
+            }
+            gone = root_was_leaf || ws.root.is_empty();
+        }
+        if gone {
+            let window_id = state
+                .workspace(&source_workspace)
+                .and_then(|w| w.window_id.clone());
+            state.workspaces.retain(|w| w.id != source_workspace);
+            if state.selected_workspace.as_deref() == Some(source_workspace.as_str()) {
+                state.selected_workspace = None;
+            }
+            if let Some(window_id) = window_id
+                && let Some(win) = state.window_mut(&window_id)
+                && win.active_workspace.as_deref() == Some(source_workspace.as_str())
+            {
+                win.active_workspace = None;
+                win.active_surface = None;
+            }
+            state.emit(
+                names::WORKSPACE_CLOSED,
+                json!({"workspace_id": source_workspace}),
+            );
+        }
+    }
+
+    if let Some(window_id) = state
+        .workspace(&target_workspace)
+        .and_then(|w| w.window_id.clone())
+    {
+        if let Some(win) = state.window_mut(&window_id) {
+            win.active_workspace = Some(target_workspace.clone());
+            win.active_surface = Some(surface.id.clone());
+        }
+        if state.selected_window.as_deref() == Some(window_id.as_str()) {
+            state.selected_workspace = Some(target_workspace.clone());
+            state.selected_surface = Some(surface.id.clone());
+        }
+    }
+    state.emit(
+        names::SURFACE_MOVED,
+        json!({
+            "surface_id": surface.id,
+            "workspace_id": target_workspace,
+            "pane_id": target_pane_id,
+            "index": index,
+        }),
+    );
+    Ok(())
+}
+
+/// The command to replay for a surface: its recorded launch, else an agent's
+/// resume payload, else a bare shell in the saved cwd.
+fn launch_for_surface(
+    state: &AppState,
+    surface: &Surface,
+) -> (Vec<String>, String, Vec<(String, String)>) {
+    if !surface.argv.is_empty() {
+        return (
+            surface.argv.clone(),
+            surface.cwd.clone(),
+            surface.env.clone(),
+        );
+    }
+    if let Some(agent) = state.agent_for_surface(&surface.id)
+        && let Some(resume) = &agent.resume
+    {
+        let cwd = if resume.cwd.is_empty() {
+            surface.cwd.clone()
+        } else {
+            resume.cwd.clone()
+        };
+        let env = resume
+            .env
+            .iter()
+            .filter(|(key, _)| !key.starts_with("BERTH_"))
+            .cloned()
+            .collect();
+        return (resume.argv.clone(), cwd, env);
+    }
+    (Vec::new(), surface.cwd.clone(), surface.env.clone())
+}
+
+fn respawn_surface(
+    state: &mut AppState,
+    surface: &Surface,
+    cwd: String,
+    argv: Vec<String>,
+    env: Vec<(String, String)>,
+    ops: &dyn SurfaceOps,
+) -> Result<(), CoreError> {
+    let _ = ops.close(&surface.id);
+    let mut env: Vec<(String, String)> = env
+        .into_iter()
+        .filter(|(key, _)| !key.starts_with("BERTH_"))
+        .collect();
+    env.push(("BERTH_SURFACE_ID".into(), surface.id.clone()));
+    env.push(("BERTH_WORKSPACE_ID".into(), surface.workspace_id.clone()));
+    env.push(("BERTH_PROTOCOL".into(), PROTOCOL_VERSION.to_string()));
+    if let Some(agent_id) = &surface.agent_id {
+        env.push(("BERTH_AGENT_ID".into(), agent_id.clone()));
+    }
+    let spawned = ops
+        .spawn(SpawnRequest {
+            cwd: Some(cwd).filter(|c| !c.is_empty()),
+            argv,
+            env,
+            cols: surface.cols.max(80),
+            rows: surface.rows.max(24),
+        })
+        .map_err(|e| CoreError::new(e.code, format!("restart failed: {}", e.message)))?;
+    if let Some(s) = state.surface_mut(&surface.id) {
+        s.pid = if spawned.pid == 0 {
+            None
+        } else {
+            Some(spawned.pid)
+        };
+        s.tty = if spawned.tty.is_empty() {
+            None
+        } else {
+            Some(spawned.tty)
+        };
+    }
+    if let Some(snapshot) = state.surface(&surface.id).cloned() {
+        state.emit(names::SURFACE_RESTARTED, json!(snapshot));
+    }
+    Ok(())
+}
+
 // ---- params -----------------------------------------------------------
 
+#[derive(Debug, Deserialize)]
+struct WindowIdParam {
+    window_id: String,
+}
+#[derive(Debug, Deserialize)]
+struct WindowCreate {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    workspace_id: Option<String>,
+    #[serde(default)]
+    focus: Option<bool>,
+}
+#[derive(Debug, Deserialize)]
+struct WindowUpdate {
+    window_id: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    bounds: Option<WindowBounds>,
+    #[serde(default)]
+    clear_bounds: Option<bool>,
+    #[serde(default)]
+    monitor: Option<String>,
+    #[serde(default)]
+    sidebar_width: Option<f64>,
+    #[serde(default)]
+    broadcast: Option<bool>,
+    #[serde(default)]
+    active_workspace: Option<String>,
+}
 #[derive(Debug, Deserialize)]
 struct IdParam {
     workspace_id: String,
@@ -819,6 +1330,19 @@ struct PaneResize {
     weight: f32,
 }
 #[derive(Debug, Deserialize)]
+struct PaneZoom {
+    pane_id: String,
+    #[serde(default)]
+    zoomed: Option<bool>,
+}
+#[derive(Debug, Deserialize)]
+struct PaneSwap {
+    pane_id: String,
+    target_pane_id: String,
+    #[serde(default)]
+    before: Option<bool>,
+}
+#[derive(Debug, Deserialize)]
 struct SplitResize {
     split_id: String,
     index: usize,
@@ -832,6 +1356,8 @@ struct WorkspaceCreate {
     cwd: Option<String>,
     #[serde(default)]
     group_id: Option<String>,
+    #[serde(default)]
+    window_id: Option<String>,
     #[serde(default)]
     focus: Option<bool>,
 }
@@ -942,7 +1468,18 @@ struct SurfaceRename {
 #[derive(Debug, Deserialize)]
 struct SurfaceMove {
     surface_id: String,
-    index: usize,
+    #[serde(default)]
+    index: Option<usize>,
+    #[serde(default)]
+    pane_id: Option<String>,
+    #[serde(default)]
+    window_id: Option<String>,
+}
+#[derive(Debug, Deserialize)]
+struct SurfaceDuplicate {
+    surface_id: String,
+    #[serde(default)]
+    focus: Option<bool>,
 }
 #[derive(Debug, Deserialize)]
 struct SendText {
@@ -1066,6 +1603,12 @@ pub const METHODS: &[&str] = &[
     "system.hello",
     "system.ping",
     "system.capabilities",
+    "window.list",
+    "window.create",
+    "window.get",
+    "window.select",
+    "window.update",
+    "window.close",
     "workspace.list",
     "workspace.create",
     "workspace.get",
@@ -1080,6 +1623,9 @@ pub const METHODS: &[&str] = &[
     "group.delete",
     "pane.list",
     "pane.focus",
+    "pane.zoom",
+    "pane.swap",
+    "pane.move",
     "pane.resize",
     "split.resize",
     "pane.close",
@@ -1093,6 +1639,8 @@ pub const METHODS: &[&str] = &[
     "surface.update",
     "surface.rename",
     "surface.move",
+    "surface.restart",
+    "surface.duplicate",
     "surface.send_text",
     "surface.send_key",
     "surface.read_text",
@@ -1135,6 +1683,148 @@ mod tests {
         let r = dispatch(state, &NullOps, &req(method, params));
         assert!(r.ok, "{} failed: {:?}", method, r.error);
         r.result.unwrap()
+    }
+
+    fn first_surface(state: &mut AppState) -> String {
+        call(state, "surface.list", json!({}))["surfaces"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    fn pane_of(state: &AppState, surface_id: &str) -> String {
+        state.surface(surface_id).unwrap().pane_id.clone()
+    }
+
+    #[test]
+    fn windows_scope_workspaces_and_selection() {
+        let mut st = AppState::default();
+        let w1 = call(&mut st, "window.create", json!({"name": "one"}));
+        let w1id = w1["window"]["id"].as_str().unwrap().to_string();
+        let ws1 = call(&mut st, "workspace.create", json!({"name": "a"}))["workspace"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let w2 = call(&mut st, "window.create", json!({"name": "two"}));
+        let w2id = w2["window"]["id"].as_str().unwrap().to_string();
+        let ws2 = call(&mut st, "workspace.create", json!({"name": "b"}))["workspace"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let listed = call(&mut st, "window.list", json!({}));
+        assert_eq!(listed["windows"].as_array().unwrap().len(), 2);
+        assert_eq!(listed["selected_window"], json!(w2id));
+
+        let workspaces = call(&mut st, "workspace.list", json!({}));
+        let find = |id: &str| {
+            workspaces["workspaces"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|w| w["id"] == id)
+                .cloned()
+                .unwrap()
+        };
+        assert_eq!(find(&ws1)["window_id"], json!(w1id));
+        assert_eq!(find(&ws2)["window_id"], json!(w2id));
+
+        call(&mut st, "window.select", json!({"window_id": w1id}));
+        let after = call(&mut st, "window.list", json!({}));
+        assert_eq!(after["selected_window"], json!(w1id));
+        assert_eq!(after["selected_workspace"], json!(ws1));
+
+        call(&mut st, "window.close", json!({"window_id": w2id}));
+        let listed = call(&mut st, "window.list", json!({}));
+        assert_eq!(listed["windows"].as_array().unwrap().len(), 1);
+        let workspaces = call(&mut st, "workspace.list", json!({}));
+        assert_eq!(workspaces["workspaces"].as_array().unwrap().len(), 1);
+
+        let refused = dispatch(
+            &mut st,
+            &NullOps,
+            &req("window.close", json!({"window_id": w1id})),
+        );
+        assert!(!refused.ok, "the last window must not close");
+    }
+
+    #[test]
+    fn pane_zoom_swap_and_move_keep_the_tree_valid() {
+        let mut st = AppState::default();
+        let wsid = call(&mut st, "workspace.create", json!({"name": "main"}))["workspace"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let sid = first_surface(&mut st);
+        let p1 = pane_of(&st, &sid);
+        let split = call(
+            &mut st,
+            "surface.split",
+            json!({"surface_id": sid, "direction": "right"}),
+        );
+        let p2 = split["pane_id"].as_str().unwrap().to_string();
+
+        let zoomed = call(&mut st, "pane.zoom", json!({"pane_id": p1}));
+        assert_eq!(zoomed["zoomed_pane"], json!(p1));
+        let restored = call(
+            &mut st,
+            "pane.zoom",
+            json!({"pane_id": p1, "zoomed": false}),
+        );
+        assert!(restored["zoomed_pane"].is_null());
+
+        call(
+            &mut st,
+            "pane.swap",
+            json!({"pane_id": p1, "target_pane_id": p2}),
+        );
+        assert!(st.panes.contains_key(&p1) && st.panes.contains_key(&p2));
+
+        call(
+            &mut st,
+            "pane.move",
+            json!({"pane_id": p1, "target_pane_id": p2}),
+        );
+        let workspace = st.workspace(&wsid).unwrap();
+        assert_eq!(workspace.root.leaves().len(), 2);
+    }
+
+    #[test]
+    fn surface_move_duplicate_and_restart_keep_identity() {
+        let mut st = AppState::default();
+        call(&mut st, "workspace.create", json!({"name": "main"}));
+        let sid = first_surface(&mut st);
+        let split = call(
+            &mut st,
+            "surface.split",
+            json!({"surface_id": sid, "direction": "right"}),
+        );
+        let p2 = split["pane_id"].as_str().unwrap().to_string();
+
+        let duplicate = call(&mut st, "surface.duplicate", json!({"surface_id": sid}));
+        let dup_id = duplicate["surface_id"].as_str().unwrap().to_string();
+        assert_ne!(dup_id, sid);
+
+        call(
+            &mut st,
+            "surface.move",
+            json!({"surface_id": dup_id, "pane_id": p2}),
+        );
+        assert_eq!(st.surface(&dup_id).unwrap().pane_id, p2);
+
+        let restarted = call(&mut st, "surface.restart", json!({"surface_id": sid}));
+        assert_eq!(restarted["surface_id"], json!(sid));
+
+        let w2 = call(&mut st, "window.create", json!({"name": "other"}));
+        let w2id = w2["window"]["id"].as_str().unwrap().to_string();
+        call(
+            &mut st,
+            "surface.move",
+            json!({"surface_id": dup_id, "window_id": w2id}),
+        );
+        let moved = st.surface(&dup_id).unwrap();
+        let workspace = st.workspace(&moved.workspace_id).unwrap();
+        assert_eq!(workspace.window_id.as_deref(), Some(w2id.as_str()));
     }
 
     #[test]

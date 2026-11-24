@@ -84,6 +84,14 @@ enum MainMenu {
         add(terminalMenu, "Previous Tab", #selector(AppDelegate.previousTab(_:)), .previousTab)
         add(terminalMenu, "Next Pane", #selector(AppDelegate.nextPane(_:)), .nextPane)
         add(terminalMenu, "Previous Pane", #selector(AppDelegate.previousPane(_:)), .previousPane)
+        terminalMenu.addItem(.separator())
+        add(terminalMenu, "Duplicate Tab", #selector(AppDelegate.duplicateTab(_:)), .duplicateTab)
+        add(terminalMenu, "Restart Tab", #selector(AppDelegate.restartTab(_:)), .restartTab)
+        terminalMenu.addItem(.separator())
+        add(terminalMenu, "Zoom Pane", #selector(AppDelegate.zoomPane(_:)), .zoomPane)
+        add(
+            terminalMenu, "Broadcast Input",
+            #selector(AppDelegate.toggleBroadcast(_:)), .toggleBroadcast)
 
         // Workspace menu: creation plus 1..9 jump targets.
         let workspaceItem = NSMenuItem()
@@ -121,12 +129,19 @@ enum MainMenu {
         viewMenu.addItem(.separator())
         add(viewMenu, "Command Palette", #selector(AppDelegate.showPalette(_:)), .palette)
         add(viewMenu, "Toggle Sidebar", #selector(AppDelegate.toggleSidebar(_:)), .toggleSidebar)
+        viewMenu.addItem(.separator())
+        add(viewMenu, "Focus Pane Left", #selector(AppDelegate.focusLeft(_:)), .focusLeft)
+        add(viewMenu, "Focus Pane Right", #selector(AppDelegate.focusRight(_:)), .focusRight)
+        add(viewMenu, "Focus Pane Up", #selector(AppDelegate.focusUp(_:)), .focusUp)
+        add(viewMenu, "Focus Pane Down", #selector(AppDelegate.focusDown(_:)), .focusDown)
 
         // Window menu. ⌘W is the tab above; ⌘⇧W is the window itself.
         let windowItem = NSMenuItem()
         mainMenu.addItem(windowItem)
         let windowMenu = NSMenu(title: "Window")
         windowItem.submenu = windowMenu
+        add(windowMenu, "New Window", #selector(AppDelegate.newWindow(_:)), .newWindow)
+        windowMenu.addItem(.separator())
         windowMenu.addItem(
             withTitle: "Minimize",
             action: #selector(NSWindow.performMiniaturize(_:)),

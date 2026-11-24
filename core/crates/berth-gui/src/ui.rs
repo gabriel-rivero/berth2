@@ -5,6 +5,8 @@
 //! ordering rules (pinned, then attention, then core order) mirror the macOS
 //! sidebar; the pane rectangles come from [`crate::layout`].
 
+use std::collections::HashMap;
+
 use berth_core::model::AgentSurface;
 use berth_core::{AppState, Attention, Surface};
 
@@ -132,6 +134,17 @@ pub struct PaneView {
     pub tab_bar: Rect,
     /// A newly arrived attention event flashes this pane's ring.
     pub attention_flash: bool,
+    /// The overflow button when the tab strip cannot show every tab.
+    pub overflow: Option<Rect>,
+}
+
+/// Per-frame inputs that come from the shell rather than the core.
+#[derive(Default, Clone, Copy)]
+pub struct PaneOptions<'a> {
+    /// Maximise this pane over the workspace.
+    pub zoom: Option<&'a str>,
+    /// First visible tab per pane while its strip is scrolled.
+    pub tab_scroll: Option<&'a HashMap<String, usize>>,
 }
 
 pub struct AgentView {
@@ -163,6 +176,13 @@ pub enum RowKind {
         color: Option<String>,
     },
     Workspace(WorkspaceView),
+    /// One agent under its workspace, so a workspace with several agents gets
+    /// a row each instead of one summary line.
+    Agent {
+        workspace_id: String,
+        surface_id: String,
+        agent: AgentView,
+    },
 }
 
 pub struct SidebarRow {
@@ -344,12 +364,53 @@ pub fn abbreviate(path: &str) -> String {
 
 /// Build the sidebar rows. Groups keep core order; each group's workspaces are
 /// ordered by pinned/attention and hidden when the group is collapsed.
+/// Kept for the tests and any caller that does not filter.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn build_sidebar(
     state: &AppState,
     area: Rect,
     row_height: f64,
     theme: &Theme,
     scroll: usize,
+) -> Sidebar {
+    build_sidebar_filtered(state, area, row_height, theme, scroll, None)
+}
+
+fn workspace_matches_filter(
+    state: &AppState,
+    workspace: &berth_core::model::Workspace,
+    filter: &str,
+) -> bool {
+    let needle = filter.to_lowercase();
+    if workspace.name.to_lowercase().contains(&needle) {
+        return true;
+    }
+    if let Some(surface) = workspace
+        .active_surface
+        .as_deref()
+        .and_then(|surface_id| state.surface(surface_id))
+        && surface.cwd.to_lowercase().contains(&needle)
+    {
+        return true;
+    }
+    state
+        .agents
+        .values()
+        .filter(|agent| agent.workspace_id == workspace.id)
+        .any(|agent| {
+            agent.name.to_lowercase().contains(&needle)
+                || agent.provider.to_lowercase().contains(&needle)
+        })
+}
+
+/// Sidebar rows with a case-insensitive filter over names, cwds and agents.
+pub fn build_sidebar_filtered(
+    state: &AppState,
+    area: Rect,
+    row_height: f64,
+    theme: &Theme,
+    scroll: usize,
+    filter: Option<&str>,
 ) -> Sidebar {
     let mut rows = Vec::new();
     let mut y = 0usize;
@@ -377,6 +438,12 @@ pub fn build_sidebar(
 
     let workspace_row = |id: &str, y: usize, height: usize| -> Option<SidebarRow> {
         let workspace = state.workspace(id)?;
+        if let Some(filter) = filter
+            && !filter.is_empty()
+            && !workspace_matches_filter(state, workspace, filter)
+        {
+            return None;
+        }
         let agent = workspace_agent(state, id);
         let live = workspace
             .active_surface
@@ -433,6 +500,25 @@ pub fn build_sidebar(
         })
     };
 
+    let push_agents = |rows: &mut Vec<SidebarRow>, y: &mut usize, workspace_id: &str| {
+        let primary = workspace_agent(state, workspace_id).map(|agent| agent.id.clone());
+        for agent in state.agents.values() {
+            if agent.workspace_id != workspace_id || Some(&agent.id) == primary.as_ref() {
+                continue;
+            }
+            let rect = Rect::new(area.x + 14, *y, area.w.saturating_sub(14), group_height);
+            rows.push(SidebarRow {
+                kind: RowKind::Agent {
+                    workspace_id: workspace_id.to_string(),
+                    surface_id: agent.surface_id.clone(),
+                    agent: agent_view(agent, theme),
+                },
+                rect,
+            });
+            *y = y.saturating_add(group_height);
+        }
+    };
+
     for group in &state.groups {
         push_group(
             &mut rows,
@@ -455,6 +541,7 @@ pub fn build_sidebar(
             if let Some(row) = workspace_row(&id, y, workspace_height) {
                 y = y.saturating_add(workspace_height);
                 rows.push(row);
+                push_agents(&mut rows, &mut y, &id);
             }
         }
     }
@@ -473,6 +560,7 @@ pub fn build_sidebar(
         if let Some(row) = workspace_row(&id, y, workspace_height) {
             y = y.saturating_add(workspace_height);
             rows.push(row);
+            push_agents(&mut rows, &mut y, &id);
         }
     }
 
@@ -498,6 +586,11 @@ pub fn build_sidebar(
     }
 }
 
+/// Width reserved for the tab-overflow button.
+pub const OVERFLOW_WIDTH: usize = 24;
+/// No tab shrinks below this; beyond it the strip scrolls and overflows.
+pub const MIN_TAB_WIDTH: usize = 72;
+
 /// The visible workspace's panes, their tab strips and the draggable dividers.
 pub fn build_panes(
     state: &AppState,
@@ -505,6 +598,7 @@ pub fn build_panes(
     cell_height: usize,
     tab_height: usize,
     flash: Option<&str>,
+    options: PaneOptions<'_>,
 ) -> (Vec<PaneView>, Vec<Divider>) {
     let Some(workspace_id) = active_workspace(state) else {
         return (Vec::new(), Vec::new());
@@ -521,7 +615,20 @@ pub fn build_panes(
                 .is_some_and(|surface| surface.workspace_id == workspace.id)
         })
         .or_else(|| workspace.active_surface.clone());
-    let (leaves, dividers) = layout::layout(&workspace.root, area);
+    let zoom = options
+        .zoom
+        .or(workspace.zoomed_pane.as_deref())
+        .filter(|pane| workspace.root.contains(pane));
+    let (leaves, dividers) = match zoom {
+        Some(pane_id) => (
+            vec![layout::Leaf {
+                pane_id: pane_id.to_string(),
+                rect: area,
+            }],
+            Vec::new(),
+        ),
+        None => layout::layout(&workspace.root, area),
+    };
     let panes = leaves
         .into_iter()
         .map(|leaf| {
@@ -532,16 +639,29 @@ pub fn build_panes(
             content.h = content.h.saturating_sub(bar.h);
             let mut tabs = Vec::new();
             let mut surface = None;
+            let mut overflow = None;
             if let Some(pane) = state.panes.get(&pane_id) {
                 surface = pane.active_surface().map(str::to_owned);
-                let mut x = bar.x;
                 let count = pane.surfaces.len().max(1);
-                let share = bar.w / count;
-                for (index, surface_id) in pane.surfaces.iter().enumerate() {
+                let needs_overflow = count * MIN_TAB_WIDTH + OVERFLOW_WIDTH > bar.w;
+                let strip_width = if needs_overflow {
+                    bar.w.saturating_sub(OVERFLOW_WIDTH)
+                } else {
+                    bar.w
+                };
+                let skip = options
+                    .tab_scroll
+                    .and_then(|map| map.get(&pane_id).copied())
+                    .unwrap_or(0)
+                    .min(count.saturating_sub(1));
+                let visible = count - skip;
+                let share = strip_width / visible.max(1);
+                let mut x = bar.x;
+                for (index, surface_id) in pane.surfaces.iter().enumerate().skip(skip) {
                     let Some(tab_surface) = state.surface(surface_id) else {
                         continue;
                     };
-                    let remaining = bar.right().saturating_sub(x);
+                    let remaining = strip_width.saturating_sub(x.saturating_sub(bar.x));
                     if remaining < 16 {
                         break;
                     }
@@ -549,7 +669,9 @@ pub fn build_panes(
                     let text_width = title.chars().count() * cell_height / 2;
                     // Tabs share the strip equally and truncate their label, so
                     // a long OSC title cannot hide the tabs after it.
-                    let width = (text_width + 34).min(share.max(48)).min(remaining);
+                    let width = (text_width + 34)
+                        .min(share.max(MIN_TAB_WIDTH.min(strip_width)))
+                        .min(remaining);
                     let close = Rect::new(
                         x + width.saturating_sub(cell_height + 6),
                         bar.y + (bar.h.saturating_sub(cell_height) / 2),
@@ -565,6 +687,14 @@ pub fn build_panes(
                     });
                     x = x.saturating_add(width);
                 }
+                if needs_overflow {
+                    overflow = Some(Rect::new(
+                        bar.right().saturating_sub(OVERFLOW_WIDTH),
+                        bar.y,
+                        OVERFLOW_WIDTH.min(bar.w),
+                        bar.h,
+                    ));
+                }
             }
             let focused = surface.is_some() && surface.as_deref() == active.as_deref();
             let attention_flash = surface.as_deref() == flash;
@@ -577,6 +707,7 @@ pub fn build_panes(
                 tabs,
                 tab_bar: bar,
                 attention_flash,
+                overflow,
             }
         })
         .collect();
@@ -616,6 +747,39 @@ mod tests {
         assert_eq!(tab_index_at(&tabs, 110), 1);
         assert_eq!(tab_index_at(&tabs, 250), 1);
         assert_eq!(tab_index_at(&[], 10), 0);
+    }
+
+    #[test]
+    fn given_a_zoomed_pane_when_building_then_only_that_pane_is_shown() {
+        let mut state = AppState::default();
+        let workspace = state
+            .create_workspace(Some("one"), None, None, &berth_core::NullOps)
+            .unwrap();
+        let surface_id = workspace.active_surface.clone().unwrap();
+        let pane_id = state.surface(&surface_id).unwrap().pane_id.clone();
+        state
+            .split_surface(
+                &surface_id,
+                Orientation::Horizontal,
+                false,
+                berth_core::SpawnRequest::default(),
+                false,
+                &berth_core::NullOps,
+            )
+            .unwrap();
+        state.set_zoomed_pane(&pane_id, true).unwrap();
+
+        let (panes, dividers) = build_panes(
+            &state,
+            Rect::new(0, 0, 400, 300),
+            16,
+            28,
+            None,
+            PaneOptions::default(),
+        );
+        assert_eq!(panes.len(), 1);
+        assert!(dividers.is_empty());
+        assert_eq!(panes[0].pane_id, pane_id);
     }
 
     #[test]
@@ -715,6 +879,8 @@ mod tests {
             progress: None,
             bell_count: 0,
             agent_id: None,
+            argv: Vec::new(),
+            env: Vec::new(),
             created_ms: 0,
         }
     }
@@ -722,7 +888,14 @@ mod tests {
     #[test]
     fn given_no_workspace_when_building_panes_then_none_are_returned() {
         let state = AppState::default();
-        let (panes, dividers) = build_panes(&state, Rect::new(0, 0, 100, 100), 16, 28, None);
+        let (panes, dividers) = build_panes(
+            &state,
+            Rect::new(0, 0, 100, 100),
+            16,
+            28,
+            None,
+            PaneOptions::default(),
+        );
         assert!(panes.is_empty());
         assert!(dividers.is_empty());
     }
@@ -783,7 +956,14 @@ mod tests {
         if let Some(ws) = state.workspace_mut(&workspace.id) {
             ws.root = root;
         }
-        let (panes, dividers) = build_panes(&state, Rect::new(0, 0, 200, 100), 16, 28, None);
+        let (panes, dividers) = build_panes(
+            &state,
+            Rect::new(0, 0, 200, 100),
+            16,
+            28,
+            None,
+            PaneOptions::default(),
+        );
         assert_eq!(panes.len(), 2);
         assert_eq!(dividers.len(), 1);
         for pane in &panes {
@@ -877,7 +1057,7 @@ mod tests {
         .rows;
         let first = rows.iter().find_map(|row| match &row.kind {
             RowKind::Workspace(workspace) => Some(workspace.id.clone()),
-            RowKind::Group { .. } => None,
+            RowKind::Group { .. } | RowKind::Agent { .. } => None,
         });
         assert_eq!(first.as_deref(), Some(loud.as_str()));
     }
@@ -906,7 +1086,7 @@ mod tests {
             .iter()
             .filter_map(|row| match &row.kind {
                 RowKind::Workspace(workspace) => Some(workspace.id.clone()),
-                RowKind::Group { .. } => None,
+                RowKind::Group { .. } | RowKind::Agent { .. } => None,
             })
             .collect();
         assert_eq!(ids.first().map(String::as_str), Some(pinned.id.as_str()));

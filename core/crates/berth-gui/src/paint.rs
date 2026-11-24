@@ -1029,6 +1029,20 @@ impl<'a> Painter<'a> {
             RowKind::Workspace(workspace) => {
                 self.workspace_row(font, workspace, theme, compact);
             }
+            RowKind::Agent { agent, .. } => {
+                self.fill(row.rect, theme.sidebar_bg);
+                let y = row.rect.y + (row.rect.h.saturating_sub(cell.height) / 2);
+                let x = row.rect.x + 4;
+                let used = self.glyph(font, (x, y), agent.glyph, TextStyle::NORMAL, agent.color);
+                self.text_elided(
+                    font,
+                    (x + used + 6, y),
+                    &format!("{}  {}", agent.name, agent.state_label),
+                    TextStyle::NORMAL,
+                    theme.text_secondary,
+                    row.rect.w.saturating_sub(used + 12),
+                );
+            }
         }
     }
 
@@ -1196,6 +1210,21 @@ impl<'a> Painter<'a> {
                 } else {
                     theme.tab_text_dim
                 },
+                cell.width,
+            );
+        }
+        if let Some(rect) = pane.overflow {
+            self.fill(rect, theme.tab_bar_bg);
+            self.fill(Rect::new(rect.x, rect.y, 1, rect.h), theme.pane_border);
+            self.text(
+                font,
+                (
+                    rect.x + rect.w.saturating_sub(cell.width) / 2,
+                    rect.y + rect.h.saturating_sub(cell.height) / 2,
+                ),
+                "»",
+                TextStyle::NORMAL,
+                theme.tab_text_dim,
                 cell.width,
             );
         }

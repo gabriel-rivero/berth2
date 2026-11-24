@@ -411,6 +411,12 @@ fn main() {
         frames: sync_output::FrameHold::default(),
         focus_reported: None,
         pending_clipboard: VecDeque::new(),
+        stash: HashMap::new(),
+        core_of: HashMap::new(),
+        tab_scroll: HashMap::new(),
+        sidebar_filter: String::new(),
+        sidebar_filter_active: false,
+        geometry_due: None,
     };
 
     if let Err(error) = event_loop.run_app(&mut app) {
@@ -519,6 +525,17 @@ enum Overlay {
         selection: String,
         selected: usize,
     },
+    /// The tabs a pane's strip cannot show.
+    TabMenu {
+        pane_id: String,
+        selected: usize,
+    },
+    /// Right-click actions for a tab or pane.
+    Context {
+        surface_id: Option<String>,
+        pane_id: Option<String>,
+        selected: usize,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -535,6 +552,7 @@ impl Overlay {
             | Overlay::Attention { selected }
             | Overlay::Settings { selected, .. } => *selected,
             Overlay::ClipboardRead { selected, .. } => *selected,
+            Overlay::TabMenu { selected, .. } | Overlay::Context { selected, .. } => *selected,
             Overlay::Rename { .. } | Overlay::Confirm { .. } => 0,
             Overlay::Search { selected, .. } => *selected,
         }
@@ -546,7 +564,9 @@ impl Overlay {
             | Overlay::Attention { selected }
             | Overlay::Settings { selected, .. }
             | Overlay::Search { selected, .. }
-            | Overlay::ClipboardRead { selected, .. } => *selected = index,
+            | Overlay::ClipboardRead { selected, .. }
+            | Overlay::TabMenu { selected, .. }
+            | Overlay::Context { selected, .. } => *selected = index,
             Overlay::Rename { .. } | Overlay::Confirm { .. } => {}
         }
     }
@@ -678,75 +698,83 @@ struct Gui {
     focus_reported: Option<String>,
     /// OSC 52 read requests waiting for the modal confirmation.
     pending_clipboard: VecDeque<(String, String)>,
+    /// Windows that are not the one currently taking events. The active
+    /// window's state stays in the fields above so every existing helper keeps
+    /// working; switching swaps a `WinStash` in and out.
+    stash: HashMap<WindowId, WinStash>,
+    /// Native window id to the core window that owns it.
+    core_of: HashMap<WindowId, String>,
+    /// First visible tab of a pane whose tabs overflow the strip.
+    tab_scroll: HashMap<String, usize>,
+    sidebar_filter: String,
+    /// The sidebar filter field is taking keystrokes.
+    sidebar_filter_active: bool,
+    /// Debounced geometry write after a move or resize.
+    geometry_due: Option<Instant>,
+}
+
+/// Per-window presentation state stored while another window is active.
+struct WinStash {
+    window: Arc<Window>,
+    context: softbuffer::Context<Arc<Window>>,
+    surface: softbuffer::Surface<Arc<Window>, Arc<Window>>,
+    pointer: (f64, f64),
+    modifiers: ModifiersState,
+    title: String,
+    scale: f64,
+    sidebar_visible: bool,
+    sidebar_width: f64,
+    sidebar_scroll: usize,
+    drag: Drag,
+    overlay: Option<Overlay>,
+    window_focused: bool,
+    a11y: Option<accesskit_winit::Adapter>,
+    a11y_active: bool,
+    a11y_text: String,
+    tab_scroll: HashMap<String, usize>,
+    sidebar_filter: String,
+    sidebar_filter_active: bool,
 }
 
 impl ApplicationHandler<UserEvent> for Gui {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.window.is_some() {
+        if self.window.is_some() || !self.stash.is_empty() {
             return;
         }
-        let window = match event_loop.create_window(
-            Window::default_attributes()
-                .with_title("Berth")
-                .with_inner_size(LogicalSize::new(1180.0, 720.0))
-                .with_min_inner_size(LogicalSize::new(640.0, 320.0))
-                // The accessibility adapter must exist before the window is
-                // shown, so it starts hidden and is revealed below.
-                .with_visible(false),
-        ) {
-            Ok(window) => Arc::new(window),
-            Err(error) => {
+        // One native window per core window. A fresh state has none, so mint
+        // the first one through the protocol and let reconcile build from it.
+        let (windows, selected) = {
+            let mut state = lock(&self.state);
+            if state.windows.is_empty() {
+                let request = Request {
+                    id: serde_json::Value::Null,
+                    method: "window.create".to_string(),
+                    params: serde_json::json!({"name": "main"}),
+                };
+                let _ = berth_core::dispatch(&mut state, self.host.as_ref(), &request);
+            }
+            (state.windows.clone(), state.selected_window.clone())
+        };
+        self.flush_events();
+
+        for core in &windows {
+            if let Err(error) = self.open_window(event_loop, core) {
                 eprintln!("berth-gui: window: {error}");
                 self.exit_code = 1;
                 event_loop.exit();
                 return;
             }
-        };
-        trace_phase(self.started, "window");
-        // Build both fonts while softbuffer, the accessibility adapter and the
-        // pane layout are set up; the first frame joins them.
-        self.scale = window.scale_factor();
-        self.font_job = Some(font::FontSlot::spawn(
-            self.config.font_pixels(self.font_points(), self.scale),
-            self.config.font_family.clone(),
-            self.config.font_options(),
-        ));
-        self.chrome_job = Some(font::FontSlot::spawn(
-            CHROME_FONT_SIZE * self.scale as f32,
-            self.config.font_family.clone(),
-            self.config.font_options(),
-        ));
-        let context = match softbuffer::Context::new(window.clone()) {
-            Ok(context) => context,
-            Err(error) => {
-                eprintln!("berth-gui: softbuffer context: {error}");
-                self.exit_code = 1;
-                event_loop.exit();
-                return;
-            }
-        };
-        let surface = match softbuffer::Surface::new(&context, window.clone()) {
-            Ok(surface) => surface,
-            Err(error) => {
-                eprintln!("berth-gui: softbuffer surface: {error}");
-                self.exit_code = 1;
-                event_loop.exit();
-                return;
-            }
-        };
-        trace_phase(self.started, "surface");
-        window.set_ime_allowed(true);
-        self.a11y = Some(accesskit_winit::Adapter::with_event_loop_proxy(
-            &window,
-            self.proxy.clone(),
-        ));
-        window.set_visible(true);
-        self.sidebar_width = self.config.sidebar_pixels().max(config::MIN_SIDEBAR_WIDTH);
-        self.context = Some(context);
-        self.surface = Some(surface);
+            self.stash_active();
+        }
+        let target = selected
+            .as_deref()
+            .and_then(|id| self.core_of.iter().find(|(_, core)| *core == id))
+            .map(|(native, _)| *native)
+            .or_else(|| self.stash.keys().next().copied());
+        if let Some(id) = target {
+            self.load_window(id);
+        }
         trace_phase(self.started, "adapter");
-        crate::window::set_opacity(&window, self.config.opacity);
-        self.window = Some(window);
         self.request_redraw();
     }
 
@@ -756,7 +784,7 @@ impl ApplicationHandler<UserEvent> for Gui {
         window_id: WindowId,
         event: WindowEvent,
     ) {
-        if self.window.as_ref().map(|window| window.id()) != Some(window_id) {
+        if self.current_window_id() != Some(window_id) && !self.load_window(window_id) {
             return;
         }
         if let Some(window) = self.window.clone()
@@ -766,13 +794,35 @@ impl ApplicationHandler<UserEvent> for Gui {
         }
         match event {
             WindowEvent::CloseRequested => {
-                self.save_and_close();
-                event_loop.exit();
+                if self.window_count() <= 1 {
+                    self.save_and_close();
+                    event_loop.exit();
+                    return;
+                }
+                if let Some(core_id) = self.current_core_window() {
+                    let _ =
+                        self.dispatch("window.close", serde_json::json!({"window_id": core_id}));
+                }
+                self.core_of.remove(&window_id);
+                self.window = None;
+                self.context = None;
+                self.surface = None;
+                self.a11y = None;
+                self.overlay = None;
+                self.drag = Drag::None;
+                if let Some(next) = self.stash.keys().next().copied() {
+                    self.load_window(next);
+                }
+                self.request_redraw();
             }
             WindowEvent::RedrawRequested => self.redraw(),
             WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
                 self.sync_scale();
+                self.geometry_due = Some(Instant::now());
                 self.request_redraw();
+            }
+            WindowEvent::Moved(_) => {
+                self.geometry_due = Some(Instant::now());
             }
             WindowEvent::Focused(focused) => {
                 self.window_focused = focused;
@@ -785,8 +835,14 @@ impl ApplicationHandler<UserEvent> for Gui {
                 {
                     self.send_clipboard_response(&surface_id, &selection, None);
                 }
-                if focused && let Some(surface_id) = self.active_surface() {
-                    let _ = self.host.focus(&surface_id);
+                if focused {
+                    if let Some(core_id) = self.current_core_window() {
+                        let _ = self
+                            .dispatch("window.select", serde_json::json!({"window_id": core_id}));
+                    }
+                    if let Some(surface_id) = self.active_surface() {
+                        let _ = self.host.focus(&surface_id);
+                    }
                 }
                 self.request_redraw();
             }
@@ -892,6 +948,29 @@ impl ApplicationHandler<UserEvent> for Gui {
         self.tick_selection_autoscroll();
         self.sync_focus_events();
         self.open_pending_clipboard();
+        if self
+            .geometry_due
+            .is_some_and(|at| at.elapsed() >= Duration::from_millis(250))
+        {
+            self.geometry_due = None;
+            self.persist_window_state();
+        }
+        self.sync_windows(event_loop);
+        let selected_core = lock(&self.state).selected_window.clone();
+        if let Some(core_id) = selected_core
+            && self.current_core_window().as_deref() != Some(core_id.as_str())
+            && let Some(native) = self
+                .core_of
+                .iter()
+                .find(|(_, core)| **core == core_id)
+                .map(|(native, _)| *native)
+        {
+            self.switch_window(native);
+            if let Some(window) = &self.window {
+                window.focus_window();
+            }
+            self.request_redraw();
+        }
         if self.frames.release_expired(Instant::now()) {
             self.request_redraw();
         }
@@ -1090,10 +1169,17 @@ impl Gui {
         let nav = self.nav();
         let pane = {
             let state = lock(&self.state);
-            ui::build_panes(&state, nav.area, nav.cell.height, nav.tab_height, None)
-                .0
-                .into_iter()
-                .find(|pane| pane.surface.as_deref() == Some(surface_id.as_str()))
+            ui::build_panes(
+                &state,
+                nav.area,
+                nav.cell.height,
+                nav.tab_height,
+                None,
+                self.pane_options(),
+            )
+            .0
+            .into_iter()
+            .find(|pane| pane.surface.as_deref() == Some(surface_id.as_str()))
         };
         let Some(pane) = pane else {
             return;
@@ -1207,6 +1293,213 @@ impl Gui {
         }
     }
 
+    // ---- native windows ------------------------------------------------
+
+    fn current_window_id(&self) -> Option<WindowId> {
+        self.window.as_ref().map(|window| window.id())
+    }
+
+    fn current_core_window(&self) -> Option<String> {
+        self.current_window_id()
+            .and_then(|id| self.core_of.get(&id).cloned())
+    }
+
+    fn window_count(&self) -> usize {
+        self.stash.len() + usize::from(self.window.is_some())
+    }
+
+    /// Build the presentation state for one core window and leave it active.
+    fn open_window(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        core: &berth_core::model::Window,
+    ) -> Result<(), String> {
+        let mut attributes = Window::default_attributes()
+            .with_title(if core.name.is_empty() {
+                "Berth"
+            } else {
+                &core.name
+            })
+            .with_min_inner_size(LogicalSize::new(640.0, 320.0))
+            // The accessibility adapter must exist before the window is shown,
+            // so it starts hidden and is revealed below.
+            .with_visible(false);
+        match core.bounds {
+            Some(bounds) => {
+                attributes = attributes
+                    .with_position(winit::dpi::LogicalPosition::new(
+                        bounds.x as f64,
+                        bounds.y as f64,
+                    ))
+                    .with_inner_size(LogicalSize::new(
+                        bounds.width.max(320) as f64,
+                        bounds.height.max(240) as f64,
+                    ));
+            }
+            None => {
+                attributes = attributes.with_inner_size(LogicalSize::new(1180.0, 720.0));
+            }
+        }
+        let window = Arc::new(
+            event_loop
+                .create_window(attributes)
+                .map_err(|error| error.to_string())?,
+        );
+        self.scale = window.scale_factor();
+        self.font_job = Some(font::FontSlot::spawn(
+            self.config.font_pixels(self.font_points(), self.scale),
+            self.config.font_family.clone(),
+            self.config.font_options(),
+        ));
+        self.chrome_job = Some(font::FontSlot::spawn(
+            CHROME_FONT_SIZE * self.scale as f32,
+            self.config.font_family.clone(),
+            self.config.font_options(),
+        ));
+        let context = softbuffer::Context::new(window.clone())
+            .map_err(|error| format!("softbuffer context: {error}"))?;
+        let surface = softbuffer::Surface::new(&context, window.clone())
+            .map_err(|error| format!("softbuffer surface: {error}"))?;
+        window.set_ime_allowed(true);
+        self.a11y = Some(accesskit_winit::Adapter::with_event_loop_proxy(
+            &window,
+            self.proxy.clone(),
+        ));
+        window.set_visible(true);
+        crate::window::set_opacity(&window, self.config.opacity);
+
+        self.sidebar_width = core
+            .sidebar_width
+            .unwrap_or(self.config.sidebar_pixels())
+            .clamp(config::MIN_SIDEBAR_WIDTH, config::MAX_SIDEBAR_WIDTH);
+        self.sidebar_visible = true;
+        self.sidebar_scroll = 0;
+        self.sidebar_filter.clear();
+        self.sidebar_filter_active = false;
+        self.pointer = (0.0, 0.0);
+        self.modifiers = ModifiersState::empty();
+        self.title = core.name.clone();
+        self.drag = Drag::None;
+        self.overlay = None;
+        self.window_focused = false;
+        self.a11y_active = false;
+        self.a11y_text.clear();
+        self.tab_scroll.clear();
+        self.context = Some(context);
+        self.surface = Some(surface);
+        self.core_of.insert(window.id(), core.id.clone());
+        self.window = Some(window);
+        Ok(())
+    }
+
+    fn stash_active(&mut self) {
+        let Some(window) = self.window.take() else {
+            return;
+        };
+        let id = window.id();
+        let (Some(context), Some(surface)) = (self.context.take(), self.surface.take()) else {
+            self.window = Some(window);
+            return;
+        };
+        let stash = WinStash {
+            window,
+            context,
+            surface,
+            pointer: self.pointer,
+            modifiers: self.modifiers,
+            title: std::mem::take(&mut self.title),
+            scale: self.scale,
+            sidebar_visible: self.sidebar_visible,
+            sidebar_width: self.sidebar_width,
+            sidebar_scroll: self.sidebar_scroll,
+            drag: std::mem::replace(&mut self.drag, Drag::None),
+            overlay: self.overlay.take(),
+            window_focused: self.window_focused,
+            a11y: self.a11y.take(),
+            a11y_active: self.a11y_active,
+            a11y_text: std::mem::take(&mut self.a11y_text),
+            tab_scroll: std::mem::take(&mut self.tab_scroll),
+            sidebar_filter: std::mem::take(&mut self.sidebar_filter),
+            sidebar_filter_active: self.sidebar_filter_active,
+        };
+        self.stash.insert(id, stash);
+    }
+
+    fn load_window(&mut self, id: WindowId) -> bool {
+        let Some(stash) = self.stash.remove(&id) else {
+            return false;
+        };
+        self.window = Some(stash.window);
+        self.context = Some(stash.context);
+        self.surface = Some(stash.surface);
+        self.pointer = stash.pointer;
+        self.modifiers = stash.modifiers;
+        self.title = stash.title;
+        self.scale = stash.scale;
+        self.sidebar_visible = stash.sidebar_visible;
+        self.sidebar_width = stash.sidebar_width;
+        self.sidebar_scroll = stash.sidebar_scroll;
+        self.drag = stash.drag;
+        self.overlay = stash.overlay;
+        self.window_focused = stash.window_focused;
+        self.a11y = stash.a11y;
+        self.a11y_active = stash.a11y_active;
+        self.a11y_text = stash.a11y_text;
+        self.tab_scroll = stash.tab_scroll;
+        self.sidebar_filter = stash.sidebar_filter;
+        self.sidebar_filter_active = stash.sidebar_filter_active;
+        // Transient input state must not follow the pointer between windows.
+        self.preedit = None;
+        self.mouse_down = None;
+        true
+    }
+
+    fn switch_window(&mut self, id: WindowId) {
+        if self.current_window_id() == Some(id) {
+            return;
+        }
+        self.stash_active();
+        if !self.load_window(id) {
+            // The target vanished; keep whatever window is still available.
+            if let Some(id) = self.stash.keys().next().copied() {
+                self.load_window(id);
+            }
+        }
+    }
+
+    /// Persist geometry and sidebar width for the active core window.
+    fn persist_window_state(&mut self) {
+        let Some(core_id) = self.current_core_window() else {
+            return;
+        };
+        let Some(window) = self.window.clone() else {
+            return;
+        };
+        let size = window.inner_size();
+        let position = window
+            .outer_position()
+            .unwrap_or(PhysicalPosition::new(0, 0));
+        let scale = window.scale_factor();
+        let monitor = window.current_monitor().and_then(|monitor| monitor.name());
+        let bounds = serde_json::json!({
+            "x": position.x,
+            "y": position.y,
+            "width": size.width,
+            "height": size.height,
+            "maximized": false,
+            "scale": scale,
+        });
+        let mut params = serde_json::json!({
+            "window_id": core_id,
+            "bounds": bounds,
+            "sidebar_width": self.sidebar_width,
+        });
+        if let Some(monitor) = monitor {
+            params["monitor"] = serde_json::json!(monitor);
+        }
+        let _ = self.dispatch("window.update", params);
+    }
+
     /// The surface the selected workspace wants shown.
     fn active_surface(&self) -> Option<String> {
         ui::active_surface(&lock(&self.state))
@@ -1262,11 +1555,106 @@ impl Gui {
 
     fn content_area(&self, width: usize, height: usize) -> Rect {
         let sidebar = self.sidebar_pixels().min(width.saturating_sub(120));
-        Rect::new(sidebar, 0, width.saturating_sub(sidebar), height)
+        let top = self.menu_bar_height();
+        let bottom = self.status_height();
+        Rect::new(
+            sidebar,
+            top,
+            width.saturating_sub(sidebar),
+            height.saturating_sub(top + bottom),
+        )
+    }
+
+    fn menu_bar_height(&self) -> usize {
+        (24.0 * self.scale) as usize
+    }
+
+    fn status_height(&self) -> usize {
+        (22.0 * self.scale) as usize
+    }
+
+    /// One line for the status bar: mode chips, the workspace and the window.
+    fn status_text(&self) -> String {
+        let (broadcast, window_index, workspace) = {
+            let state = lock(&self.state);
+            let current = self.current_core_window();
+            let broadcast = current
+                .as_deref()
+                .and_then(|id| state.window(id))
+                .map(|window| window.broadcast)
+                .unwrap_or(false);
+            let index = current
+                .as_deref()
+                .and_then(|id| state.windows.iter().position(|window| window.id == id))
+                .map(|index| (index + 1, state.windows.len()))
+                .unwrap_or((0, 0));
+            let workspace = ui::active_workspace(&state).and_then(|id| {
+                let workspace = state.workspace(&id)?;
+                let zoomed = workspace.zoomed_pane.is_some();
+                let cwd = workspace
+                    .active_surface
+                    .as_deref()
+                    .and_then(|surface| state.surface(surface))
+                    .map(|surface| surface.cwd.clone())
+                    .unwrap_or_default();
+                Some((workspace.name.clone(), cwd, zoomed))
+            });
+            (broadcast, index, workspace)
+        };
+        let mut parts = Vec::new();
+        let mut modifiers = String::new();
+        if self.modifiers.control_key() {
+            modifiers.push('⌃');
+        }
+        if self.modifiers.alt_key() {
+            modifiers.push('⌥');
+        }
+        if self.modifiers.shift_key() {
+            modifiers.push('⇧');
+        }
+        if self.modifiers.super_key() {
+            modifiers.push('⌘');
+        }
+        if !modifiers.is_empty() {
+            parts.push(modifiers);
+        }
+        if broadcast {
+            parts.push("BROADCAST".to_string());
+        }
+        if let Some((name, cwd, zoomed)) = workspace {
+            if zoomed {
+                parts.push("ZOOM".to_string());
+            }
+            parts.push(name);
+            if let Some(base) = cwd.trim_end_matches('/').rsplit('/').next()
+                && !base.is_empty()
+            {
+                parts.push(base.to_string());
+            }
+        }
+        if window_index.1 > 0 {
+            parts.push(format!("{}/{}", window_index.0, window_index.1));
+        }
+        parts.join("  ·  ")
     }
 
     fn tab_height(&self) -> usize {
         (ui::TAB_HEIGHT * self.scale) as usize
+    }
+
+    fn pane_options(&self) -> ui::PaneOptions<'_> {
+        ui::PaneOptions {
+            zoom: None,
+            tab_scroll: Some(&self.tab_scroll),
+        }
+    }
+
+    fn sidebar_filter_arg(&self) -> Option<&str> {
+        if self.sidebar_filter.is_empty() {
+            None
+        } else {
+            Some(self.sidebar_filter.as_str())
+        }
     }
 
     fn workspace_row_height(&self) -> f64 {
@@ -1522,16 +1910,24 @@ impl Gui {
 
         let (panes, _dividers) = {
             let state = lock(&self.state);
-            ui::build_panes(&state, area, cell.height, tab_height, flash.as_deref())
+            ui::build_panes(
+                &state,
+                area,
+                cell.height,
+                tab_height,
+                flash.as_deref(),
+                self.pane_options(),
+            )
         };
         let rows = if area.x > 0 {
             let state = lock(&self.state);
-            ui::build_sidebar(
+            ui::build_sidebar_filtered(
                 &state,
                 Rect::new(0, 0, area.x, height),
                 self.workspace_row_height(),
                 &theme,
                 self.sidebar_scroll,
+                self.sidebar_filter_arg(),
             )
             .rows
         } else {
@@ -1554,6 +1950,55 @@ impl Gui {
         {
             let mut painter = Painter::new(&mut buffer, width, height);
             painter.fill(Rect::new(0, 0, width, height), theme.terminal_bg);
+            // Menu and status strips belong to the content column, so the
+            // sidebar keeps full height for its own rows.
+            let menu_height = self.menu_bar_height();
+            let status_height = self.status_height();
+            let menu_rect = Rect::new(
+                area.x,
+                0,
+                width.saturating_sub(area.x),
+                menu_height.min(height),
+            );
+            let status_rect = Rect::new(
+                area.x,
+                height.saturating_sub(status_height),
+                width.saturating_sub(area.x),
+                status_height.min(height),
+            );
+            let status_text = self.status_text();
+            let status_bg = if status_text.contains("BROADCAST") {
+                theme.attention_input
+            } else {
+                theme.tab_bar_bg
+            };
+            let chrome_cell = self.chrome_font().cell();
+            painter.fill(menu_rect, theme.tab_bar_bg);
+            let menu_font = self.chrome_font();
+            painter.text(
+                menu_font,
+                (
+                    menu_rect.x + 10,
+                    menu_rect.y + menu_rect.h.saturating_sub(chrome_cell.height) / 2,
+                ),
+                "Berth   Terminal   View   Window",
+                font::TextStyle::NORMAL,
+                theme.text_secondary,
+                menu_rect.w.saturating_sub(20),
+            );
+            painter.fill(status_rect, status_bg);
+            let status_font = self.chrome_font();
+            painter.text_elided(
+                status_font,
+                (
+                    status_rect.x + 10,
+                    status_rect.y + status_rect.h.saturating_sub(chrome_cell.height) / 2,
+                ),
+                &status_text,
+                font::TextStyle::NORMAL,
+                theme.text_secondary,
+                status_rect.w.saturating_sub(20),
+            );
             if area.x > 0 {
                 self.paint_sidebar(&mut painter, &rows, Rect::new(0, 0, area.x, height), theme);
             }
@@ -1818,6 +2263,22 @@ impl Gui {
     ) {
         painter.fill(area, theme.sidebar_bg);
         let compact = self.config.compact_sidebar;
+        let filter_text = if self.sidebar_filter_active || !self.sidebar_filter.is_empty() {
+            Some((
+                format!(
+                    "{}{}",
+                    if self.sidebar_filter_active {
+                        "/"
+                    } else {
+                        "filter: "
+                    },
+                    self.sidebar_filter
+                ),
+                self.sidebar_filter_active,
+            ))
+        } else {
+            None
+        };
         let font = self.chrome_font();
         let cell = font.cell();
         painter.text(
@@ -1852,6 +2313,20 @@ impl Gui {
             theme.text_tertiary,
             group_button.w.saturating_sub(2),
         );
+        if let Some((text, active)) = &filter_text {
+            painter.text(
+                font,
+                (12 + cell.width * 11, 8),
+                text,
+                font::TextStyle::NORMAL,
+                if *active {
+                    theme.accent
+                } else {
+                    theme.text_tertiary
+                },
+                area.w.saturating_sub(12 + cell.width * 11 + 70),
+            );
+        }
         for row in rows {
             painter.sidebar_row(font, row, theme, compact);
         }
@@ -1868,7 +2343,14 @@ impl Gui {
         let nav = self.nav();
         let (panes, _) = {
             let state = lock(&self.state);
-            ui::build_panes(&state, nav.area, nav.cell.height, nav.tab_height, None)
+            ui::build_panes(
+                &state,
+                nav.area,
+                nav.cell.height,
+                nav.tab_height,
+                None,
+                self.pane_options(),
+            )
         };
         let pane = ui::pane_at(&panes, point.0, point.1)?;
         let surface_id = pane.surface.clone()?;
@@ -2025,6 +2507,42 @@ impl Gui {
         links::link_at(&row, target.col as usize).map(|(_, _, link)| link)
     }
 
+    /// Open the tab/pane action menu for a right-click. Returns false when the
+    /// press landed somewhere with no pane.
+    fn open_context(&mut self, point: (usize, usize)) -> bool {
+        let nav = self.nav();
+        if nav.area.x > 0 && point.0 < nav.area.x {
+            return false;
+        }
+        let panes = {
+            let state = lock(&self.state);
+            ui::build_panes(
+                &state,
+                nav.area,
+                nav.cell.height,
+                nav.tab_height,
+                None,
+                self.pane_options(),
+            )
+            .0
+        };
+        let Some(pane) = ui::pane_at(&panes, point.0, point.1) else {
+            return false;
+        };
+        let surface_id = pane
+            .tabs
+            .iter()
+            .find(|tab| tab.rect.contains(point.0, point.1))
+            .map(|tab| tab.id.clone())
+            .or_else(|| pane.surface.clone());
+        self.overlay = Some(Overlay::Context {
+            surface_id,
+            pane_id: Some(pane.pane_id.clone()),
+            selected: 0,
+        });
+        true
+    }
+
     fn open_link_under_pointer(&mut self) {
         if let Some(link) = self.link_under_pointer()
             && let Err(error) = links::open(&link)
@@ -2056,7 +2574,14 @@ impl Gui {
         let nav = self.nav();
         let (panes, dividers) = {
             let state = lock(&self.state);
-            ui::build_panes(&state, nav.area, nav.cell.height, nav.tab_height, None)
+            ui::build_panes(
+                &state,
+                nav.area,
+                nav.cell.height,
+                nav.tab_height,
+                None,
+                self.pane_options(),
+            )
         };
         if let Some(divider) = dividers
             .iter()
@@ -2147,6 +2672,10 @@ impl Gui {
             self.open_link_under_pointer();
             return;
         }
+        if button == MouseButton::Right && self.open_context(point) {
+            self.request_redraw();
+            return;
+        }
         if self.report_button(button, false) {
             self.mouse_down = Some(button);
             return;
@@ -2162,12 +2691,13 @@ impl Gui {
     fn middle_pressed(&mut self, point: (usize, usize)) {
         let nav = self.nav();
         let state = lock(&self.state);
-        let rows = ui::build_sidebar(
+        let rows = ui::build_sidebar_filtered(
             &state,
             Rect::new(0, 0, nav.area.x, nav.height),
             self.workspace_row_height(),
             &self.theme,
             self.sidebar_scroll,
+            self.sidebar_filter_arg(),
         )
         .rows;
         drop(state);
@@ -2182,7 +2712,14 @@ impl Gui {
         }
         let (panes, _) = {
             let state = lock(&self.state);
-            ui::build_panes(&state, nav.area, nav.cell.height, nav.tab_height, None)
+            ui::build_panes(
+                &state,
+                nav.area,
+                nav.cell.height,
+                nav.tab_height,
+                None,
+                self.pane_options(),
+            )
         };
         for pane in &panes {
             if let Some(tab) = pane
@@ -2204,7 +2741,14 @@ impl Gui {
         }
         let (panes, dividers) = {
             let state = lock(&self.state);
-            ui::build_panes(&state, nav.area, nav.cell.height, nav.tab_height, None)
+            ui::build_panes(
+                &state,
+                nav.area,
+                nav.cell.height,
+                nav.tab_height,
+                None,
+                self.pane_options(),
+            )
         };
         if let Some(divider) = dividers
             .iter()
@@ -2216,6 +2760,20 @@ impl Gui {
         for pane in &panes {
             if !pane.rect.contains(point.0, point.1) {
                 continue;
+            }
+            if let Some(overflow) = pane.overflow
+                && overflow.contains(point.0, point.1)
+            {
+                let selected = lock(&self.state)
+                    .panes
+                    .get(&pane.pane_id)
+                    .map(|pane| pane.active)
+                    .unwrap_or(0);
+                self.overlay = Some(Overlay::TabMenu {
+                    pane_id: pane.pane_id.clone(),
+                    selected,
+                });
+                return;
             }
             if let Some(tab) = pane
                 .tabs
@@ -2321,12 +2879,13 @@ impl Gui {
         }
         let rows = {
             let state = lock(&self.state);
-            ui::build_sidebar(
+            ui::build_sidebar_filtered(
                 &state,
                 Rect::new(0, 0, nav.area.x, nav.height),
                 self.workspace_row_height(),
                 &self.theme,
                 self.sidebar_scroll,
+                self.sidebar_filter_arg(),
             )
             .rows
         };
@@ -2400,6 +2959,14 @@ impl Gui {
                     last_target: None,
                 };
             }
+            ui::RowKind::Agent {
+                workspace_id,
+                surface_id,
+                ..
+            } => {
+                self.select_workspace(workspace_id);
+                self.activate(surface_id);
+            }
         }
     }
 
@@ -2440,7 +3007,15 @@ impl Gui {
             .max(1);
         let total = {
             let state = lock(&self.state);
-            ui::build_sidebar(&state, area, self.workspace_row_height(), &self.theme, 0).total
+            ui::build_sidebar_filtered(
+                &state,
+                area,
+                self.workspace_row_height(),
+                &self.theme,
+                0,
+                self.sidebar_filter_arg(),
+            )
+            .total
         };
         let max = total.saturating_sub(capacity);
         let current = self.sidebar_scroll as i32;
@@ -2461,12 +3036,13 @@ impl Gui {
         }
         let rows = {
             let state = lock(&self.state);
-            ui::build_sidebar(
+            ui::build_sidebar_filtered(
                 &state,
                 Rect::new(0, 0, nav.area.x, nav.height),
                 self.workspace_row_height(),
                 &self.theme,
                 self.sidebar_scroll,
+                self.sidebar_filter_arg(),
             )
             .rows
         };
@@ -2520,7 +3096,14 @@ impl Gui {
                     };
                     let (panes, _) = {
                         let state = lock(&self.state);
-                        ui::build_panes(&state, nav.area, nav.cell.height, nav.tab_height, None)
+                        ui::build_panes(
+                            &state,
+                            nav.area,
+                            nav.cell.height,
+                            nav.tab_height,
+                            None,
+                            self.pane_options(),
+                        )
                     };
                     let Some(pane) = ui::pane_at(&panes, point.0, point.1) else {
                         return;
@@ -2623,11 +3206,30 @@ impl Gui {
         }
         let (panes, _) = {
             let state = lock(&self.state);
-            ui::build_panes(&state, nav.area, cell.height, nav.tab_height, None)
+            ui::build_panes(
+                &state,
+                nav.area,
+                cell.height,
+                nav.tab_height,
+                None,
+                self.pane_options(),
+            )
         };
         let Some(pane) = ui::pane_at(&panes, point.0, point.1) else {
             return;
         };
+        if pane.tab_bar.contains(point.0, point.1) {
+            let count = lock(&self.state)
+                .panes
+                .get(&pane.pane_id)
+                .map(|pane| pane.surfaces.len())
+                .unwrap_or(0);
+            let step = if lines > 0 { -1 } else { 1 };
+            let offset = self.tab_scroll.entry(pane.pane_id.clone()).or_insert(0);
+            *offset = ((*offset as i32 + step).max(0) as usize).min(count.saturating_sub(1));
+            self.request_redraw();
+            return;
+        }
         let Some(surface_id) = pane.surface.clone() else {
             return;
         };
@@ -2950,23 +3552,22 @@ impl Gui {
     /// Send pasted text to the active surface, wrapped when the program asked
     /// for bracketed paste.
     fn send_paste(&mut self, text: &str) {
-        let Some(surface_id) = self.active_surface() else {
-            return;
-        };
-        let bracketed = self
-            .host
-            .screen_view(&surface_id)
-            .map(|view| view.bracketed_paste)
-            .unwrap_or(false);
-        let payload = if bracketed {
-            format!("\x1b[200~{text}\x1b[201~")
-        } else {
-            text.to_string()
-        };
-        if let Err(error) = self.host.send_text(&surface_id, &payload) {
-            eprintln!("berth-gui: paste: {error}");
+        for surface_id in &self.input_targets() {
+            let bracketed = self
+                .host
+                .screen_view(surface_id)
+                .map(|view| view.bracketed_paste)
+                .unwrap_or(false);
+            let payload = if bracketed {
+                format!("\x1b[200~{text}\x1b[201~")
+            } else {
+                text.to_string()
+            };
+            if let Err(error) = self.host.send_text(surface_id, &payload) {
+                eprintln!("berth-gui: paste: {error}");
+            }
+            self.reset_scroll(surface_id);
         }
-        self.reset_scroll(&surface_id);
     }
 
     fn reset_scroll(&mut self, surface_id: &str) {
@@ -3011,10 +3612,25 @@ impl Gui {
             Command::PreviousTab => self.cycle_tab(-1),
             Command::NextPane => self.cycle_pane(1),
             Command::PreviousPane => self.cycle_pane(-1),
+            Command::FocusLeft => self.focus_direction('l'),
+            Command::FocusRight => self.focus_direction('r'),
+            Command::FocusUp => self.focus_direction('u'),
+            Command::FocusDown => self.focus_direction('d'),
             Command::NewWorkspace => {
                 if let Err(error) = self.dispatch("workspace.create", serde_json::json!({})) {
                     eprintln!("berth-gui: workspace.create: {error}");
                 }
+            }
+            Command::NewWindow => self.new_window(),
+            Command::NextWindow => self.next_window(),
+            Command::TogglePaneZoom => self.toggle_pane_zoom(),
+            Command::ToggleBroadcast => self.toggle_broadcast(),
+            Command::DuplicateTab => self.surface_action("surface.duplicate"),
+            Command::RestartTab => self.surface_action("surface.restart"),
+            Command::SidebarFilter => {
+                self.sidebar_filter_active = true;
+                self.sidebar_filter.clear();
+                self.request_redraw();
             }
             Command::ToggleSidebar => {
                 self.sidebar_visible = !self.sidebar_visible;
@@ -3067,6 +3683,273 @@ impl Gui {
             Command::ZoomReset => self.reset_zoom(),
         }
         self.request_redraw();
+    }
+
+    // ---- window and pane actions ---------------------------------------
+
+    fn new_window(&mut self) {
+        if let Err(error) = self.dispatch("window.create", serde_json::json!({})) {
+            eprintln!("berth-gui: window.create: {error}");
+        }
+        self.request_redraw();
+    }
+
+    fn next_window(&mut self) {
+        let (windows, current) = {
+            let state = lock(&self.state);
+            (state.windows.clone(), state.selected_window.clone())
+        };
+        if windows.len() < 2 {
+            return;
+        }
+        let index = windows
+            .iter()
+            .position(|w| Some(&w.id) == current.as_ref())
+            .unwrap_or(0);
+        let next = windows[(index + 1) % windows.len()].id.clone();
+        let _ = self.dispatch("window.select", serde_json::json!({"window_id": next}));
+    }
+
+    fn toggle_pane_zoom(&mut self) {
+        let Some(surface_id) = self.active_surface() else {
+            return;
+        };
+        let pane_id = lock(&self.state)
+            .surface(&surface_id)
+            .map(|surface| surface.pane_id.clone());
+        let Some(pane_id) = pane_id else {
+            return;
+        };
+        if let Err(error) = self.dispatch("pane.zoom", serde_json::json!({"pane_id": pane_id})) {
+            eprintln!("berth-gui: pane.zoom: {error}");
+        }
+        self.sized.clear();
+        self.request_redraw();
+    }
+
+    fn toggle_broadcast(&mut self) {
+        let Some(window_id) = self.current_core_window() else {
+            return;
+        };
+        let current = self
+            .current_core_window()
+            .and_then(|id| lock(&self.state).window(&id).map(|w| w.broadcast))
+            .unwrap_or(false);
+        if let Err(error) = self.dispatch(
+            "window.update",
+            serde_json::json!({"window_id": window_id, "broadcast": !current}),
+        ) {
+            eprintln!("berth-gui: window.update: {error}");
+        }
+        self.request_redraw();
+    }
+
+    fn surface_action(&mut self, method: &str) {
+        let Some(surface_id) = self.active_surface() else {
+            return;
+        };
+        if let Err(error) = self.dispatch(method, serde_json::json!({"surface_id": surface_id})) {
+            eprintln!("berth-gui: {method}: {error}");
+        }
+    }
+
+    fn context_action(&mut self, index: usize, surface_id: Option<&str>, pane_id: Option<&str>) {
+        match index {
+            0 => {
+                let params = pane_id
+                    .map(|pane_id| serde_json::json!({"pane_id": pane_id}))
+                    .unwrap_or_else(|| serde_json::json!({}));
+                let _ = self.dispatch("surface.create", params);
+            }
+            1..=3 => {
+                let Some(surface_id) = surface_id else {
+                    return;
+                };
+                let method = match index {
+                    1 => "surface.duplicate",
+                    2 => "surface.restart",
+                    _ => "surface.close",
+                };
+                let _ = self.dispatch(method, serde_json::json!({"surface_id": surface_id}));
+            }
+            4 | 5 => {
+                let Some(surface_id) = surface_id else {
+                    return;
+                };
+                let direction = if index == 4 { "right" } else { "down" };
+                let _ = self.dispatch(
+                    "surface.split",
+                    serde_json::json!({"surface_id": surface_id, "direction": direction}),
+                );
+            }
+            6 => self.toggle_pane_zoom(),
+            7 => self.toggle_broadcast(),
+            8 => {
+                let Some(surface_id) = surface_id else {
+                    return;
+                };
+                let (windows, current) = {
+                    let state = lock(&self.state);
+                    (state.windows.clone(), state.selected_window.clone())
+                };
+                if windows.len() < 2 {
+                    return;
+                }
+                let index = windows
+                    .iter()
+                    .position(|window| Some(&window.id) == current.as_ref())
+                    .unwrap_or(0);
+                let target = windows[(index + 1) % windows.len()].id.clone();
+                let _ = self.dispatch(
+                    "surface.move",
+                    serde_json::json!({"surface_id": surface_id, "window_id": target}),
+                );
+            }
+            _ => {}
+        }
+        self.request_redraw();
+    }
+
+    /// Surfaces that receive typed input. Broadcast returns the active tab of
+    /// every pane in the visible workspace.
+    fn input_targets(&self) -> Vec<String> {
+        let state = lock(&self.state);
+        let broadcast = self
+            .current_core_window()
+            .and_then(|id| state.window(&id).map(|window| window.broadcast))
+            .unwrap_or(false);
+        if !broadcast {
+            return ui::active_surface(&state).into_iter().collect();
+        }
+        let Some(workspace_id) = ui::active_workspace(&state) else {
+            return Vec::new();
+        };
+        let Some(workspace) = state.workspace(&workspace_id) else {
+            return Vec::new();
+        };
+        workspace
+            .root
+            .leaves()
+            .iter()
+            .filter_map(|pane_id| {
+                state
+                    .panes
+                    .get(*pane_id)
+                    .and_then(|pane| pane.active_surface())
+                    .map(str::to_string)
+            })
+            .collect()
+    }
+
+    /// Arrow-key spatial focus over the visible pane rectangles.
+    fn focus_direction(&mut self, direction: char) {
+        let Some(current) = self.active_surface() else {
+            return;
+        };
+        let nav = self.nav();
+        let panes = {
+            let state = lock(&self.state);
+            ui::build_panes(
+                &state,
+                nav.area,
+                nav.cell.height,
+                nav.tab_height,
+                None,
+                self.pane_options(),
+            )
+            .0
+        };
+        let Some(source) = panes
+            .iter()
+            .find(|pane| pane.surface.as_deref() == Some(current.as_str()))
+        else {
+            return;
+        };
+        let center = |rect: Rect| {
+            (
+                rect.x as f64 + rect.w as f64 / 2.0,
+                rect.y as f64 + rect.h as f64 / 2.0,
+            )
+        };
+        let (sx, sy) = center(source.rect);
+        let mut best: Option<(f64, &PaneView)> = None;
+        for pane in &panes {
+            if pane.surface.as_deref() == Some(current.as_str()) {
+                continue;
+            }
+            let (px, py) = center(pane.rect);
+            let (dx, dy) = (px - sx, py - sy);
+            let (forward, lateral) = match direction {
+                'l' if dx < -1.0 => (-dx, dy.abs()),
+                'r' if dx > 1.0 => (dx, dy.abs()),
+                'u' if dy < -1.0 => (-dy, dx.abs()),
+                'd' if dy > 1.0 => (dy, dx.abs()),
+                _ => continue,
+            };
+            let score = forward + lateral * 0.5;
+            if best.is_none_or(|(best_score, _)| score < best_score) {
+                best = Some((score, pane));
+            }
+        }
+        if let Some((_, pane)) = best
+            && let Some(surface) = &pane.surface
+        {
+            self.activate(&surface.clone());
+        }
+    }
+
+    /// Open native windows for new core windows and drop closed ones.
+    fn sync_windows(&mut self, event_loop: &ActiveEventLoop) {
+        let windows = lock(&self.state).windows.clone();
+        let live: std::collections::HashSet<String> =
+            windows.iter().map(|window| window.id.clone()).collect();
+        let stale: Vec<WindowId> = self
+            .core_of
+            .iter()
+            .filter(|(_, core)| !live.contains(*core))
+            .map(|(native, _)| *native)
+            .collect();
+        for native in stale {
+            self.core_of.remove(&native);
+            if self.current_window_id() == Some(native) {
+                self.window = None;
+                self.context = None;
+                self.surface = None;
+                self.a11y = None;
+                self.overlay = None;
+                self.drag = Drag::None;
+                if let Some(next) = self.stash.keys().next().copied() {
+                    self.load_window(next);
+                }
+            } else {
+                self.stash.remove(&native);
+            }
+        }
+        let known: std::collections::HashSet<String> = self.core_of.values().cloned().collect();
+        for core in &windows {
+            if known.contains(&core.id) {
+                continue;
+            }
+            let previous = self.current_window_id();
+            if previous.is_some() {
+                self.stash_active();
+            }
+            match self.open_window(event_loop, core) {
+                Ok(()) => {
+                    let opened = self.current_window_id();
+                    self.stash_active();
+                    if let Some(id) = previous.or(opened) {
+                        self.load_window(id);
+                    }
+                }
+                Err(error) => {
+                    eprintln!("berth-gui: window: {error}");
+                    if let Some(id) = previous {
+                        self.load_window(id);
+                    }
+                }
+            }
+        }
     }
 
     // ---- panels ------------------------------------------------------
@@ -3150,7 +4033,27 @@ impl Gui {
             Overlay::Rename { .. } => 0,
             Overlay::Search { matches, .. } => matches.len(),
             Overlay::ClipboardRead { .. } => 2,
+            Overlay::TabMenu { pane_id, .. } => lock(&self.state)
+                .panes
+                .get(pane_id)
+                .map(|pane| pane.surfaces.len())
+                .unwrap_or(0),
+            Overlay::Context { .. } => Self::context_labels().len(),
         }
+    }
+
+    fn context_labels() -> [&'static str; 9] {
+        [
+            "New Tab",
+            "Duplicate Tab",
+            "Restart Tab",
+            "Close Tab",
+            "Split Right",
+            "Split Down",
+            "Zoom Pane",
+            "Broadcast Input",
+            "Move Tab to Next Window",
+        ]
     }
 
     fn overlay_key(&mut self, event: &KeyEvent) {
@@ -3219,6 +4122,38 @@ impl Gui {
                 recording,
             } => {
                 self.settings_key(event, &mut close, &mut activate, selected, recording);
+            }
+            Overlay::TabMenu { pane_id, selected } => {
+                let len = lock(&self.state)
+                    .panes
+                    .get(pane_id)
+                    .map(|pane| pane.surfaces.len())
+                    .unwrap_or(0);
+                match &event.logical_key {
+                    Key::Named(NamedKey::Escape) => close = true,
+                    Key::Named(NamedKey::Enter) => activate = true,
+                    Key::Named(NamedKey::ArrowDown) => {
+                        next_selected = Some(panel::move_selection(*selected, 1, len));
+                    }
+                    Key::Named(NamedKey::ArrowUp) => {
+                        next_selected = Some(panel::move_selection(*selected, -1, len));
+                    }
+                    _ => {}
+                }
+            }
+            Overlay::Context { selected, .. } => {
+                let len = Self::context_labels().len();
+                match &event.logical_key {
+                    Key::Named(NamedKey::Escape) => close = true,
+                    Key::Named(NamedKey::Enter) => activate = true,
+                    Key::Named(NamedKey::ArrowDown) => {
+                        next_selected = Some(panel::move_selection(*selected, 1, len));
+                    }
+                    Key::Named(NamedKey::ArrowUp) => {
+                        next_selected = Some(panel::move_selection(*selected, -1, len));
+                    }
+                    _ => {}
+                }
             }
             Overlay::Search {
                 surface_id,
@@ -3595,24 +4530,114 @@ impl Gui {
 
     /// Finish a tab drag: move the tab to the slot under the pointer.
     fn finish_tab_drag(&mut self, surface_id: &str, pane_id: &str, start_x: usize, end_x: usize) {
+        let nav = self.nav();
+        let point = (
+            self.pointer.0.max(0.0) as usize,
+            self.pointer.1.max(0.0) as usize,
+        );
+        let (panes, _) = {
+            let state = lock(&self.state);
+            ui::build_panes(
+                &state,
+                nav.area,
+                nav.cell.height,
+                nav.tab_height,
+                None,
+                self.pane_options(),
+            )
+        };
+        // Dropping over another pane moves the tab there.
+        if let Some(target) = ui::pane_at(&panes, point.0, point.1) {
+            if target.pane_id != pane_id {
+                let _ = self.dispatch(
+                    "surface.move",
+                    serde_json::json!({"surface_id": surface_id, "pane_id": target.pane_id}),
+                );
+            } else if start_x.abs_diff(end_x) >= 6 {
+                let index = ui::tab_index_at(&target.tabs, end_x);
+                let _ = self.dispatch(
+                    "surface.move",
+                    serde_json::json!({"surface_id": surface_id, "index": index}),
+                );
+            }
+            return;
+        }
         if start_x.abs_diff(end_x) < 6 {
             return;
         }
-        let nav = self.nav();
-        let (panes, _) = {
-            let state = lock(&self.state);
-            ui::build_panes(&state, nav.area, nav.cell.height, nav.tab_height, None)
-        };
-        let Some(pane) = panes.iter().find(|pane| pane.pane_id == pane_id) else {
+        // Outside every pane: another window, a torn-off window, or the source
+        // strip when the pointer landed on chrome.
+        let Some((global_x, global_y)) = self.global_pointer() else {
             return;
         };
-        let target = ui::tab_index_at(&pane.tabs, end_x);
-        if let Err(error) = self.dispatch(
-            "surface.move",
-            serde_json::json!({"surface_id": surface_id, "index": target}),
-        ) {
-            eprintln!("berth-gui: surface.move: {error}");
+        if let Some(core_window) = self.core_window_at(global_x, global_y) {
+            let _ = self.dispatch(
+                "surface.move",
+                serde_json::json!({"surface_id": surface_id, "window_id": core_window}),
+            );
+            return;
         }
+        if !self.inside_current_window(global_x, global_y) {
+            if let Ok(created) = self.dispatch("window.create", serde_json::json!({"name": "tab"}))
+                && let Some(id) = created["window"]["id"].as_str()
+            {
+                let _ = self.dispatch(
+                    "surface.move",
+                    serde_json::json!({"surface_id": surface_id, "window_id": id}),
+                );
+            }
+            return;
+        }
+        if let Some(pane) = panes.iter().find(|pane| pane.pane_id == pane_id) {
+            let index = ui::tab_index_at(&pane.tabs, end_x);
+            let _ = self.dispatch(
+                "surface.move",
+                serde_json::json!({"surface_id": surface_id, "index": index}),
+            );
+        }
+    }
+
+    fn global_pointer(&self) -> Option<(f64, f64)> {
+        let window = self.window.as_ref()?;
+        let origin = window.outer_position().ok()?;
+        Some((
+            origin.x as f64 + self.pointer.0,
+            origin.y as f64 + self.pointer.1,
+        ))
+    }
+
+    fn window_bounds(&self, window: &Window) -> Option<(f64, f64, f64, f64)> {
+        let origin = window.outer_position().ok()?;
+        let size = window.inner_size();
+        Some((
+            origin.x as f64,
+            origin.y as f64,
+            size.width as f64,
+            size.height as f64,
+        ))
+    }
+
+    /// The core window whose native window is under a global point.
+    fn core_window_at(&self, x: f64, y: f64) -> Option<String> {
+        for (native, stash) in &self.stash {
+            let Some((left, top, width, height)) = self.window_bounds(&stash.window) else {
+                continue;
+            };
+            if x >= left && y >= top && x < left + width && y < top + height {
+                return self.core_of.get(native).cloned();
+            }
+        }
+        None
+    }
+
+    fn inside_current_window(&self, x: f64, y: f64) -> bool {
+        let Some(window) = self.window.as_ref() else {
+            return false;
+        };
+        let Some((left, top, width, height)) = self.window_bounds(window) else {
+            return false;
+        };
+        x >= left && y >= top && x < left + width && y < top + height
     }
 
     /// Title, optional query, rows, selection and footer hint for the panel.
@@ -3713,6 +4738,57 @@ impl Gui {
                     hint: "↑↓ choose · enter confirm · esc deny".to_string(),
                 })
             }
+            Overlay::TabMenu { pane_id, selected } => {
+                let rows = {
+                    let state = lock(&self.state);
+                    state
+                        .panes
+                        .get(pane_id)
+                        .map(|pane| {
+                            pane.surfaces
+                                .iter()
+                                .enumerate()
+                                .map(|(index, surface_id)| {
+                                    let label = state
+                                        .surface(surface_id)
+                                        .map(|surface| ui::tab_title(surface, index))
+                                        .unwrap_or_else(|| surface_id.clone());
+                                    panel::PanelRow {
+                                        label,
+                                        detail: if index == pane.active {
+                                            "active".to_string()
+                                        } else {
+                                            String::new()
+                                        },
+                                        color: None,
+                                    }
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                };
+                Some(PanelContent {
+                    title: "Tabs".to_string(),
+                    query: None,
+                    rows,
+                    selected: *selected,
+                    hint: "↑↓ move · enter switch · esc close".to_string(),
+                })
+            }
+            Overlay::Context { selected, .. } => Some(PanelContent {
+                title: "Actions".to_string(),
+                query: None,
+                rows: Self::context_labels()
+                    .iter()
+                    .map(|label| panel::PanelRow {
+                        label: (*label).to_string(),
+                        detail: String::new(),
+                        color: None,
+                    })
+                    .collect(),
+                selected: *selected,
+                hint: "↑↓ move · enter run · esc close".to_string(),
+            }),
             Overlay::Settings {
                 selected,
                 recording,
@@ -3817,6 +4893,20 @@ impl Gui {
                 };
                 self.send_clipboard_response(&surface_id, &selection, text.as_deref());
             }
+            Some(Overlay::TabMenu { pane_id, selected }) => {
+                let surface_id = lock(&self.state)
+                    .panes
+                    .get(&pane_id)
+                    .and_then(|pane| pane.surfaces.get(selected).cloned());
+                if let Some(surface_id) = surface_id {
+                    self.activate(&surface_id);
+                }
+            }
+            Some(Overlay::Context {
+                surface_id,
+                pane_id,
+                selected,
+            }) => self.context_action(selected, surface_id.as_deref(), pane_id.as_deref()),
             Some(Overlay::Settings {
                 selected,
                 recording,
@@ -3922,6 +5012,7 @@ impl Gui {
     /// Save the session and drop the journal, so a clean exit never looks like
     /// a crash.
     fn save_and_close(&mut self) {
+        self.persist_window_state();
         if let Err(error) = save_session(&self.state) {
             eprintln!("berth-gui: session.save: {error}");
             log::line(&format!("session save failed on exit: {error}"));
@@ -3941,11 +5032,11 @@ impl Gui {
             }
             Ime::Commit(text) => {
                 self.preedit = None;
-                if let Some(surface_id) = self.active_surface() {
-                    if let Err(error) = self.host.send_text(&surface_id, &text) {
+                for surface_id in &self.input_targets() {
+                    if let Err(error) = self.host.send_text(surface_id, &text) {
                         eprintln!("berth-gui: ime: {error}");
                     }
-                    self.reset_scroll(&surface_id);
+                    self.reset_scroll(surface_id);
                 }
             }
         }
@@ -3961,7 +5052,15 @@ impl Gui {
         let area = self.content_area(width, height);
         let panes = {
             let state = lock(&self.state);
-            ui::build_panes(&state, area, cell.height, self.tab_height(), None).0
+            ui::build_panes(
+                &state,
+                area,
+                cell.height,
+                self.tab_height(),
+                None,
+                self.pane_options(),
+            )
+            .0
         };
         let Some(pane) = panes.iter().find(|pane| pane.focused) else {
             return;
@@ -3990,6 +5089,28 @@ impl Gui {
     // ---- keyboard ----------------------------------------------------
 
     fn key(&mut self, event: KeyEvent) {
+        if self.sidebar_filter_active {
+            match &event.logical_key {
+                Key::Named(NamedKey::Escape) => {
+                    self.sidebar_filter_active = false;
+                    self.sidebar_filter.clear();
+                }
+                Key::Named(NamedKey::Enter) => self.sidebar_filter_active = false,
+                Key::Named(NamedKey::Backspace) => {
+                    self.sidebar_filter.pop();
+                }
+                Key::Character(text)
+                    if !self.modifiers.control_key()
+                        && !self.modifiers.super_key()
+                        && !self.modifiers.alt_key() =>
+                {
+                    self.sidebar_filter.push_str(text);
+                }
+                _ => {}
+            }
+            self.request_redraw();
+            return;
+        }
         if self.overlay.is_some() {
             self.overlay_key(&event);
             return;
@@ -4003,12 +5124,13 @@ impl Gui {
             self.run_command(command);
             return;
         }
-        if let Some(surface_id) = self.active_surface() {
-            self.reset_scroll(&surface_id);
-        }
-        let Some(surface_id) = self.active_surface() else {
+        let targets = self.input_targets();
+        if targets.is_empty() {
             return;
-        };
+        }
+        for surface_id in &targets {
+            self.reset_scroll(surface_id);
+        }
         // Cmd/Super belongs to the platform shell; the window only claims the
         // line motions macOS terminals provide.
         if self.modifiers.super_key() {
@@ -4017,7 +5139,9 @@ impl Gui {
                 && !self.modifiers.shift_key()
                 && let Some(name) = super_arrow_key(&event.logical_key)
             {
-                let _ = self.host.send_key(&surface_id, name, &[]);
+                for surface_id in &targets {
+                    let _ = self.host.send_key(surface_id, name, &[]);
+                }
             }
             return;
         }
@@ -4027,18 +5151,19 @@ impl Gui {
         } else {
             KeyAction::Press
         };
-        self.send_key_event(&surface_id, &event, action);
+        for surface_id in &targets {
+            self.send_key_event(surface_id, &event, action);
+        }
     }
 
     /// A release reaches the PTY only when the program asked for event types.
     fn key_release(&mut self, event: KeyEvent) {
-        if self.overlay.is_some() || self.modifiers.super_key() {
+        if self.sidebar_filter_active || self.overlay.is_some() || self.modifiers.super_key() {
             return;
         }
-        let Some(surface_id) = self.active_surface() else {
-            return;
-        };
-        self.send_key_event(&surface_id, &event, KeyAction::Release);
+        for surface_id in &self.input_targets() {
+            self.send_key_event(surface_id, &event, KeyAction::Release);
+        }
     }
 
     /// Encode one key event for the surface's keyboard protocol.

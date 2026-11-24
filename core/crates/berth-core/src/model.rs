@@ -27,6 +27,49 @@ pub struct Workspace {
     pub root: PaneNode,
     #[serde(default)]
     pub active_surface: Option<String>,
+    #[serde(default)]
+    pub window_id: Option<String>,
+    /// A pane maximised over this workspace's tree. `None` is the normal layout.
+    #[serde(default)]
+    pub zoomed_pane: Option<String>,
+}
+
+/// One native window. Workspaces are grouped by `window_id`; selection is
+/// per-window so each shell can render an independent sidebar.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct Window {
+    pub id: String,
+    pub name: String,
+    pub created_ms: u64,
+    #[serde(default)]
+    pub bounds: Option<WindowBounds>,
+    #[serde(default)]
+    pub monitor: Option<String>,
+    #[serde(default)]
+    pub sidebar_width: Option<f64>,
+    #[serde(default)]
+    pub active_workspace: Option<String>,
+    #[serde(default)]
+    pub active_surface: Option<String>,
+    /// Type into every pane of the active workspace.
+    #[serde(default)]
+    pub broadcast: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct WindowBounds {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    #[serde(default)]
+    pub maximized: bool,
+    #[serde(default = "default_scale")]
+    pub scale: f64,
+}
+
+fn default_scale() -> f64 {
+    1.0
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -242,6 +285,60 @@ impl PaneNode {
             }
         }
     }
+
+    /// Orientation of the nearest split that holds `pane_id`.
+    pub fn orientation_of(&self, pane_id: &str) -> Option<Orientation> {
+        match self {
+            Self::Leaf { .. } => None,
+            Self::Split {
+                orientation,
+                children,
+                ..
+            } => {
+                for child in children {
+                    if child.contains(pane_id) {
+                        return child.orientation_of(pane_id).or(Some(*orientation));
+                    }
+                }
+                None
+            }
+        }
+    }
+
+    /// Exchange the positions of two leaves without changing the tree shape.
+    pub fn swap(&mut self, a: &str, b: &str) -> bool {
+        if a == b || !self.contains(a) || !self.contains(b) {
+            return false;
+        }
+        fn replace(node: &mut PaneNode, from: &str, to: String) -> bool {
+            match node {
+                PaneNode::Leaf { pane_id } if pane_id == from => {
+                    *pane_id = to;
+                    true
+                }
+                PaneNode::Leaf { .. } => false,
+                PaneNode::Split { children, .. } => {
+                    children.iter_mut().any(|c| replace(c, from, to.clone()))
+                }
+            }
+        }
+        let temp = "__berth_swap__".to_string();
+        replace(self, a, temp.clone())
+            && replace(self, b, a.to_string())
+            && replace(self, &temp, b.to_string())
+    }
+
+    /// Move the leaf `from` next to `to`, in the same orientation as the target.
+    pub fn move_leaf(&mut self, from: &str, to: &str, before: bool) -> bool {
+        if from == to || !self.contains(from) || !self.contains(to) {
+            return false;
+        }
+        let orientation = self.orientation_of(to).unwrap_or(Orientation::Horizontal);
+        if !self.remove(from) {
+            return false;
+        }
+        self.split_side(to, from, orientation, before)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -295,6 +392,12 @@ pub struct Surface {
     pub bell_count: u32,
     #[serde(default)]
     pub agent_id: Option<String>,
+    /// The command this surface was launched with, replayed by
+    /// `surface.restart`/`surface.duplicate` and by restore.
+    #[serde(default)]
+    pub argv: Vec<String>,
+    #[serde(default)]
+    pub env: Vec<(String, String)>,
     pub created_ms: u64,
 }
 

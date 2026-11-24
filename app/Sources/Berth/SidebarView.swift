@@ -64,6 +64,9 @@ struct SidebarWorkspace {
     let pinned: Bool
     let groupID: String?
     let pid: Int?
+    /// The core window this workspace belongs to; the row only appears in
+    /// that window's sidebar.
+    var windowID: String? = nil
     var agent: SidebarAgent? = nil
 }
 

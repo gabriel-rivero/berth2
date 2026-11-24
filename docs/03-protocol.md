@@ -73,6 +73,18 @@ Event:
 | `system.ping` | `{}` | `{pong:true, uptime_ms}` |
 | `system.capabilities` | `{}` | `{methods:[…], events:[…], features:[…]}` |
 
+### window
+| method | params | result |
+| --- | --- | --- |
+| `window.list` | `{}` | `{windows:[Window], selected_window, selected_workspace, selected_surface}` |
+| `window.get` | `{window_id}` | `{window:Window}` |
+| `window.create` | `{name?, workspace_id?, focus?}` | `{window:Window}` — `workspace_id` moves that workspace into the new window (tear-off) |
+| `window.select` | `{window_id}` | `{}` |
+| `window.update` | `{window_id, name?, bounds?, monitor?, sidebar_width?, broadcast?, active_workspace?, clear_bounds?}` | `{window:Window}` |
+| `window.close` | `{window_id}` | `{}` — closes its workspaces; the last window is never removed |
+
+`Window` is `{id, name, created_ms, bounds?, monitor?, sidebar_width?, active_workspace?, active_surface?, broadcast}`. `bounds` is `{x, y, width, height, maximized, scale}`. `Workspace.window_id` names the window that shows it; `AppState.selected_window` names the focused one. The top-level `selected_workspace`/`selected_surface` mirror the selected window so older clients keep working.
+
 ### workspace
 | method | params | result |
 | --- | --- | --- |
@@ -98,6 +110,9 @@ Event:
 | --- | --- | --- |
 | `pane.list` | `{workspace_id?}` | `{panes:[Pane]}` |
 | `pane.focus` | `{pane_id}` | `{}` |
+| `pane.zoom` | `{pane_id, zoomed?}` | `{zoomed_pane}` — omitted `zoomed` toggles; `null` restores the tree |
+| `pane.swap` | `{pane_id, target_pane_id}` | `{}` — exchange two leaves |
+| `pane.move` | `{pane_id, target_pane_id, before?}` | `{}` — move a leaf next to another |
 | `pane.resize` | `{pane_id, weight}` | `{}` |
 | `split.resize` | `{split_id, index, weight}` | `{}` |
 | `pane.close` | `{pane_id}` | `{}` |
@@ -114,7 +129,9 @@ Event:
 | `surface.close` | `{surface_id}` | `{}` |
 | `surface.update` | `{surface_id, title?, cwd?, progress?, clear_progress?, bell?, exited?}` | `{}` |
 | `surface.rename` | `{surface_id, title}` | `{}` — sets the user title; an empty string clears it |
-| `surface.move` | `{surface_id, index}` | `{}` — reorders the tab inside its pane |
+| `surface.move` | `{surface_id, index?, pane_id?, window_id?}` | `{}` — reorders inside its pane; a `pane_id` moves it to that pane, a `window_id` moves it to that window (tear-off) |
+| `surface.restart` | `{surface_id}` | `{surface_id}` — respawn the saved command under the same id |
+| `surface.duplicate` | `{surface_id, focus?}` | `{surface_id}` — new tab with the same cwd/argv/env |
 | `surface.send_text` | `{surface_id, text}` | `{}` |
 | `surface.send_key` | `{surface_id, key:"enter"\|"ctrl-c"\|"esc"\|…, mods?:[…]}` | `{}` |
 | `surface.read_text` | `{surface_id, scope:"screen"\|"scrollback", max_bytes?}` | `{text, truncated}` |
@@ -204,6 +221,11 @@ part of the next snapshot.
 | `agent.attention_changed` | `{agent_id, attention, reason}` |
 | `agent.progress` | `{agent_id, progress, detail?}` |
 | `workspace.created` / `workspace.closed` / `workspace.changed` | `{workspace}` |
+| `window.created` / `window.closed` / `window.changed` | `{window}` / `{window_id}` / `{window}` |
+| `window.selected` | `{window_id}` |
+| `pane.zoom_changed` | `{workspace_id, pane_id, workspace}` (`pane_id` is `null` when restored) |
+| `pane.swapped` / `pane.moved` | `{workspace_id, pane_id, target_pane_id, workspace}` |
+| `surface.restarted` | `{surface}` |
 | `workspace.selected` | `{workspace_id}` |
 | `workspace.moved` | `{workspace_id, index}` |
 | `group.created` / `group.updated` | `{group}` |

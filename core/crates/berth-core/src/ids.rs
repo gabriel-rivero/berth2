@@ -4,6 +4,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub const WORKSPACE: &str = "ws";
+pub const WINDOW: &str = "wdw";
 pub const GROUP: &str = "grp";
 pub const PANE: &str = "pne";
 pub const SURFACE: &str = "srf";
@@ -37,7 +38,7 @@ pub fn looks_valid(id: &str) -> bool {
     };
     matches!(
         prefix,
-        WORKSPACE | GROUP | PANE | SURFACE | AGENT | NOTIFICATION
+        WORKSPACE | WINDOW | GROUP | PANE | SURFACE | AGENT | NOTIFICATION
     ) && (6..=24).contains(&rest.len())
         && rest.chars().all(|c| c.is_ascii_hexdigit())
 }

@@ -21,7 +21,30 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
 
     /// Main-thread confined.
     private var surfaces: [String: GhosttySurfaceView] = [:]
-    private var window: MainWindow?
+    /// One native window per core window id.
+    private var windows: [String: MainWindow] = [:]
+    private var selectedWindowID: String?
+    /// The workspace each native window is showing.
+    private var windowWorkspace: [String: String] = [:]
+    private var windowStructure: [String: String] = [:]
+    private var windowBroadcast: [String: Bool] = [:]
+
+    var selectedCoreWindowID: String? { selectedWindowID }
+
+    @MainActor
+    func broadcastEnabled(for coreWindow: String) -> Bool {
+        windowBroadcast[coreWindow] ?? false
+    }
+
+    @MainActor
+    func surfaceInDirection(_ direction: String, from surfaceID: String) -> String? {
+        guard let coreWindow = selectedWindowID else { return nil }
+        return windows[coreWindow]?.surfaceInDirection(direction, from: surfaceID)
+    }
+
+    private var window: MainWindow? {
+        selectedWindowID.flatMap { windows[$0] }
+    }
     private var surfaceWorkspace: [String: String] = [:]
     private var didAskForNotificationPermission = false
     private var lastLayoutJSON: [String: String] = [:]
@@ -29,8 +52,6 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
     private var sidebarBase: [SidebarWorkspace] = []
     private var sidebarGroups: [SidebarGroupInfo] = []
     private var selectedWorkspaceID: String?
-    private var lastAppliedStructure: String?
-    private var lastSelectedWorkspace: String?
     private var lastActiveSurface: String?
     private var lastAttention: [String: String] = [:]
     /// One pending reconcile per runloop turn. Socket bursts used to queue one
@@ -166,8 +187,14 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
             surfaces.removeAll()
             surfaceWorkspace.removeAll()
             lastActiveSurface = nil
-            window?.orderOut(nil)
-            window = nil
+            for window in windows.values {
+                window.orderOut(nil)
+            }
+            windows.removeAll()
+            windowWorkspace.removeAll()
+            windowStructure.removeAll()
+            windowBroadcast.removeAll()
+            selectedWindowID = nil
         }
     }
 
@@ -176,7 +203,11 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
             guard let view = surfaces[surfaceId] else {
                 throw FfiError.Internal(message: "unknown surface \(surfaceId)")
             }
-            guard let window else {
+            let workspace = surfaceWorkspace[surfaceId]
+            let coreWindow = workspace.flatMap { workspace in
+                windowWorkspace.first { $0.value == workspace }?.key
+            } ?? selectedWindowID
+            guard let coreWindow, let window = windows[coreWindow] else {
                 // During restore the window is built by reconcileAll.
                 return
             }
@@ -336,7 +367,7 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
                     collapsed: item["collapsed"] as? Bool ?? false)
             }
             sidebarGroups = groups
-            selectedWorkspaceID = result["selected_workspace"] as? String
+            selectedWindowID = result["selected_window"] as? String
 
             let agentItems = Self.agentItems(engine)
             let agentInfos = agentItems.compactMap(Self.sidebarAgent(from:))
@@ -354,11 +385,15 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
             }
 
             if workspaces.isEmpty {
-                window?.close()
-                window = nil
+                for window in windows.values {
+                    window.close()
+                }
+                windows.removeAll()
+                windowWorkspace.removeAll()
+                windowStructure.removeAll()
+                windowBroadcast.removeAll()
                 sidebarBase = []
-                lastAppliedStructure = nil
-                lastSelectedWorkspace = nil
+                lastActiveSurface = nil
                 return
             }
 
@@ -384,67 +419,114 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
                     pinned: layout.pinned,
                     groupID: layout.groupID,
                     pid: active?.pid,
+                    windowID: item["window_id"] as? String,
                     agent: primaryAgent[id]))
             }
             sidebarBase = base
             lastLayoutJSON = lastLayoutJSON.filter { layouts[$0.key] != nil }
 
-            let win = window ?? MainWindow()
-            if window == nil {
-                window = win
-                win.sidebar.onSelect = { [weak self] id in
-                    self?.sendFromUI("workspace.select", ["workspace_id": id])
-                }
-                win.sidebar.onMove = { [weak self] id, index in
-                    self?.sendFromUI(
-                        "workspace.move", ["workspace_id": id, "index": index])
-                }
-                win.sidebar.onToggleGroup = { [weak self] id, collapsed in
-                    self?.sendFromUI(
-                        "group.update", ["group_id": id, "collapsed": collapsed])
-                }
-                win.sidebar.onNewWorkspace = { [weak self] in
-                    self?.sendFromUI("workspace.create", ["name": "workspace"])
-                }
-                win.sidebar.onClose = { [weak self] id in
-                    self?.sendFromUI("workspace.close", ["workspace_id": id])
-                }
-                win.makeKeyAndOrderFront(nil)
-                NSApp.activate(ignoringOtherApps: true)
+            // One native window per core window. An older server without the
+            // window namespace still gets a single window.
+            var specs = result["windows"] as? [[String: Any]] ?? []
+            if specs.isEmpty {
+                specs = [[
+                    "id": selectedWindowID ?? "wdw_default",
+                    "name": "Berth",
+                    "active_workspace": result["selected_workspace"] as? String ?? "",
+                ]]
             }
+            var live: Set<String> = []
+            for spec in specs {
+                guard let coreID = spec["id"] as? String else { continue }
+                live.insert(coreID)
+                let win: MainWindow
+                if let existing = windows[coreID] {
+                    win = existing
+                } else {
+                    win = MainWindow()
+                    windows[coreID] = win
+                    wireSidebar(win, coreWindow: coreID)
+                    win.makeKeyAndOrderFront(nil)
+                }
+                if let bounds = spec["bounds"] as? [String: Any],
+                   bounds["maximized"] as? Bool != true,
+                   let x = bounds["x"] as? Double,
+                   let y = bounds["y"] as? Double,
+                   let width = bounds["width"] as? Double,
+                   let height = bounds["height"] as? Double,
+                   width >= 320, height >= 240 {
+                    win.setFrame(
+                        NSRect(x: x, y: y, width: width, height: height),
+                        display: false)
+                }
+                let workspace = spec["active_workspace"] as? String
+                    ?? workspaces.first {
+                        ($0["window_id"] as? String) == coreID
+                    }?["id"] as? String
+                    ?? (coreID == selectedWindowID
+                        ? result["selected_workspace"] as? String : nil)
+                windowWorkspace[coreID] = workspace
+                windowBroadcast[coreID] = spec["broadcast"] as? Bool ?? false
+            }
+            for (coreID, win) in windows where !live.contains(coreID) {
+                win.close()
+                windows.removeValue(forKey: coreID)
+                windowWorkspace.removeValue(forKey: coreID)
+                windowStructure.removeValue(forKey: coreID)
+                windowBroadcast.removeValue(forKey: coreID)
+            }
+            if let selectedWindowID, let workspace = windowWorkspace[selectedWindowID] {
+                selectedWorkspaceID = workspace
+            } else {
+                selectedWorkspaceID = result["selected_workspace"] as? String
+            }
+
             let focused = focusedSurfaceID
             for info in agentInfos
             where info.needsAttention
                 && lastAttention[info.id] != info.attention
                 && info.surfaceID != focused {
-                win.ring(surfaceID: info.surfaceID)
+                if let coreID = windowWorkspace.first(where: {
+                    $0.value == info.workspaceID
+                })?.key, let win = windows[coreID] {
+                    win.ring(surfaceID: info.surfaceID)
+                }
             }
             lastAttention = Dictionary(
                 uniqueKeysWithValues: agentInfos.map { ($0.id, $0.attention) })
             publishSidebar()
 
-            let selected = selectedWorkspaceID.flatMap { layouts[$0] != nil ? $0 : nil }
-                ?? layouts.keys.sorted().first
-            if let selected, let layout = layouts[selected] {
-                let structuralChange = lastSelectedWorkspace != selected
-                    || lastAppliedStructure != layout.structureKey
-                if structuralChange {
+            for (coreID, win) in windows {
+                guard let workspaceID = windowWorkspace[coreID],
+                      let layout = layouts[workspaceID]
+                else { continue }
+                let structural = windowStructure[coreID] != layout.structureKey
+                if structural {
                     win.apply(layout: layout, views: surfaces, actions: paneActions)
+                    windowStructure[coreID] = layout.structureKey
                     applied = true
-                    lastAppliedStructure = layout.structureKey
-                    lastSelectedWorkspace = selected
-                } else {
+                }
+                if coreID == selectedWindowID {
                     let target = layout.activeSurface.flatMap { surfaces[$0] }
                     if let target,
-                       target !== win.firstResponder,
+                       structural || target !== win.firstResponder,
                        FocusPolicy.shouldPlaceFocus(
                            isKeyWindow: win.isKeyWindow,
                            firstResponderIsTerminal: win.firstResponder is GhosttySurfaceView) {
-                        Diagnostics.trace("ui", "reconcile placed focus on \(target.berthSurfaceID ?? "?")")
+                        Diagnostics.trace(
+                            "ui",
+                            "reconcile placed focus on \(target.berthSurfaceID ?? "?")")
                         win.makeFirstResponder(target)
                     }
+                    lastActiveSurface = layout.activeSurface
+                        ?? layout.root.firstLeafSurface()
                 }
-                lastActiveSurface = layout.activeSurface ?? layout.root.firstLeafSurface()
+            }
+            if let selectedWindowID, let win = windows[selectedWindowID] {
+                if !win.isVisible {
+                    win.makeKeyAndOrderFront(nil)
+                }
+                NSApp.activate(ignoringOtherApps: true)
             }
             refreshMetadata(base)
         }
@@ -461,28 +543,98 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
     }
 
     @MainActor
-    private func publishSidebar() {
-        guard let window else { return }
-        let selected = selectedWorkspaceID ?? sidebarBase.first?.id
-        let workspaces = sidebarBase.map { workspace in
-            let known = metadata[workspace.id]
-            return SidebarWorkspace(
-                id: workspace.id,
-                name: workspace.name,
-                title: workspace.title,
-                cwd: workspace.cwd,
-                branch: known?.branch,
-                ports: known?.ports ?? [],
-                unread: workspace.unread,
-                pinned: workspace.pinned,
-                groupID: workspace.groupID,
-                pid: workspace.pid,
-                agent: workspace.agent)
+    private func wireSidebar(_ win: MainWindow, coreWindow: String) {
+        win.onBecomeKey = { [weak self] in
+            self?.sendFromUI("window.select", ["window_id": coreWindow])
         }
-        window.updateSidebar(SidebarModel(
-            groups: sidebarGroups,
-            workspaces: workspaces,
-            selectedWorkspace: selected))
+        win.sidebar.onSelect = { [weak self] id in
+            self?.sendFromUI("workspace.select", ["workspace_id": id])
+        }
+        win.sidebar.onMove = { [weak self] id, index in
+            self?.sendFromUI("workspace.move", ["workspace_id": id, "index": index])
+        }
+        win.sidebar.onToggleGroup = { [weak self] id, collapsed in
+            self?.sendFromUI("group.update", ["group_id": id, "collapsed": collapsed])
+        }
+        win.sidebar.onNewWorkspace = { [weak self] in
+            self?.sendFromUI("workspace.create", ["name": "workspace"])
+        }
+        win.sidebar.onClose = { [weak self] id in
+            self?.sendFromUI("workspace.close", ["workspace_id": id])
+        }
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didMoveNotification, object: win, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.persistFrame(coreWindow, win) }
+        }
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didResizeNotification, object: win, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.persistFrame(coreWindow, win) }
+        }
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification, object: win, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.handleWindowClosed(coreWindow) }
+        }
+    }
+
+    @MainActor
+    private func persistFrame(_ coreWindow: String, _ win: MainWindow) {
+        guard windows[coreWindow] === win else { return }
+        let frame = win.frame
+        sendFromUI(
+            "window.update",
+            [
+                "window_id": coreWindow,
+                "bounds": [
+                    "x": Int(frame.origin.x),
+                    "y": Int(frame.origin.y),
+                    "width": Int(frame.width),
+                    "height": Int(frame.height),
+                    "maximized": win.isZoomed,
+                    "scale": win.backingScaleFactor,
+                ],
+            ])
+    }
+
+    @MainActor
+    private func handleWindowClosed(_ coreWindow: String) {
+        if windows.count <= 1 {
+            NSApp.terminate(nil)
+            return
+        }
+        sendFromUI("window.close", ["window_id": coreWindow])
+    }
+
+    @MainActor
+    private func publishSidebar() {
+        for (coreID, window) in windows {
+            let selected = windowWorkspace[coreID]
+                ?? sidebarBase.first { $0.windowID == coreID }?.id
+            let workspaces = sidebarBase
+                .filter { $0.windowID == coreID || $0.windowID == nil }
+                .map { workspace in
+                    let known = metadata[workspace.id]
+                    return SidebarWorkspace(
+                        id: workspace.id,
+                        name: workspace.name,
+                        title: workspace.title,
+                        cwd: workspace.cwd,
+                        branch: known?.branch,
+                        ports: known?.ports ?? [],
+                        unread: workspace.unread,
+                        pinned: workspace.pinned,
+                        groupID: workspace.groupID,
+                        pid: workspace.pid,
+                        windowID: coreID,
+                        agent: workspace.agent)
+                }
+            window.updateSidebar(SidebarModel(
+                groups: sidebarGroups,
+                workspaces: workspaces,
+                selectedWorkspace: selected))
+        }
     }
 
     /// Dispatch a request that originated in AppKit. Always main thread.

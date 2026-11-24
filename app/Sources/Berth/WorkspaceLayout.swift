@@ -46,11 +46,13 @@ struct WorkspaceLayout {
     let activeSurface: String?
     let panes: [PaneSpec]
     let surfaces: [String: SurfaceInfo]
+    /// A pane maximised over the tree, if the core has zoom on.
+    let zoomedPane: String?
     /// Splits, panes, tab order and active tab — everything that changes the
     /// view tree. Titles and cwd are deliberately excluded so OSC updates do
     /// not reparent terminal views on every prompt.
     var structureKey: String {
-        "\(id)|\(root.structureKey)"
+        "\(id)|\(zoomedPane ?? "-")|\(root.structureKey)"
     }
 
     func surface(_ id: String?) -> SurfaceInfo? {
@@ -122,7 +124,8 @@ struct WorkspaceLayout {
             surfaceIDs: surfaceIDs,
             activeSurface: workspace["active_surface"] as? String,
             panes: paneSpecs,
-            surfaces: surfaces)
+            surfaces: surfaces,
+            zoomedPane: workspace["zoomed_pane"] as? String)
     }
 
     private static func parseNode(_ value: Any, activeByPane: [String: String]) -> Node? {

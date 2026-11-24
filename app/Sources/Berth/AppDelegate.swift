@@ -89,7 +89,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        true
+        // Closing a window closes its core window; the last one terminates
+        // through handleWindowClosed.
+        false
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -150,6 +152,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func newWorkspace(_ sender: Any?) {
         send("workspace.create", ["name": "workspace"])
+    }
+
+    @objc func newWindow(_ sender: Any?) {
+        send("window.create", ["name": "window"])
+    }
+
+    @objc func zoomPane(_ sender: Any?) {
+        guard let id = BerthCoreHost.shared.focusedSurfaceID,
+              let pane = paneID(forSurface: id)
+        else { return }
+        send("pane.zoom", ["pane_id": pane])
+    }
+
+    @objc func toggleBroadcast(_ sender: Any?) {
+        guard let window = BerthCoreHost.shared.selectedCoreWindowID else { return }
+        let enabled = BerthCoreHost.shared.broadcastEnabled(for: window)
+        send("window.update", ["window_id": window, "broadcast": !enabled])
+    }
+
+    @objc func duplicateTab(_ sender: Any?) {
+        guard let id = BerthCoreHost.shared.focusedSurfaceID else { return }
+        send("surface.duplicate", ["surface_id": id])
+    }
+
+    @objc func restartTab(_ sender: Any?) {
+        guard let id = BerthCoreHost.shared.focusedSurfaceID else { return }
+        send("surface.restart", ["surface_id": id])
+    }
+
+    @objc func focusLeft(_ sender: Any?) { focusDirection("left") }
+    @objc func focusRight(_ sender: Any?) { focusDirection("right") }
+    @objc func focusUp(_ sender: Any?) { focusDirection("up") }
+    @objc func focusDown(_ sender: Any?) { focusDirection("down") }
+
+    private func focusDirection(_ direction: String) {
+        guard let id = BerthCoreHost.shared.focusedSurfaceID,
+              let target = BerthCoreHost.shared.surfaceInDirection(direction, from: id)
+        else { return }
+        send("surface.activate", ["surface_id": target])
     }
 
     @objc func selectWorkspace(_ sender: Any?) {
@@ -332,10 +373,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func paletteCommands() -> [PaletteCommand] {
         [
             PaletteCommand("New Workspace") { [weak self] in self?.newWorkspace(nil) },
+            PaletteCommand("New Window") { [weak self] in self?.newWindow(nil) },
             PaletteCommand("Split Right") { [weak self] in self?.splitRight(nil) },
             PaletteCommand("Split Down") { [weak self] in self?.splitDown(nil) },
             PaletteCommand("New Tab") { [weak self] in self?.newTab(nil) },
+            PaletteCommand("Duplicate Tab") { [weak self] in self?.duplicateTab(nil) },
+            PaletteCommand("Restart Tab") { [weak self] in self?.restartTab(nil) },
             PaletteCommand("Close Tab") { [weak self] in self?.closeFocusedSurface(nil) },
+            PaletteCommand("Zoom Pane") { [weak self] in self?.zoomPane(nil) },
+            PaletteCommand("Broadcast Input") { [weak self] in self?.toggleBroadcast(nil) },
             PaletteCommand("Next Tab") { [weak self] in self?.nextTab(nil) },
             PaletteCommand("Previous Tab") { [weak self] in self?.previousTab(nil) },
             PaletteCommand("Next Pane") { [weak self] in self?.nextPane(nil) },

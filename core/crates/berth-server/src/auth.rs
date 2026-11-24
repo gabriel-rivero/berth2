@@ -33,7 +33,9 @@ pub fn is_read_only(method: &str) -> bool {
     }
     matches!(
         method,
-        "workspace.list"
+        "window.list"
+            | "window.get"
+            | "workspace.list"
             | "workspace.get"
             | "workspace.layout"
             | "group.list"
@@ -143,6 +145,10 @@ mod tests {
     #[test]
     fn read_only_methods_need_no_token() {
         assert!(is_read_only("workspace.list"));
+        assert!(is_read_only("window.list"));
+        assert!(is_read_only("window.get"));
+        assert!(!is_read_only("window.create"));
+        assert!(!is_read_only("pane.zoom"));
         assert!(is_read_only("system.ping"));
         assert!(!is_read_only("workspace.create"));
         assert!(requires_token("surface.send_text"));

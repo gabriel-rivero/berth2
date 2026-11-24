@@ -228,8 +228,9 @@ when Xvfb is absent.
 These are the window's limits; [docs/09-known-gaps.md](09-known-gaps.md) has the
 full audited inventory.
 
-- **One window, one visible workspace.** No multi-window, no detachable panes, no pane
-  zoom.
+- **Multiple windows and pane zoom are in.** `window.create/list/close/select`,
+  per-window sidebar selection, persisted geometry and a maximised pane all come from the
+  core, so both shells share them. Tab tear-off and broadcast input land on the same model.
 - **The protocol floor is otherwise complete.** Synchronized output (DECSET 2026), the
   Kitty keyboard protocol, styled text, OSC 8 hyperlinks, cursor shapes, focus reporting
   and OSC 52 read are supported; OSC 133 shell integration is not. The design is in
@@ -242,9 +243,10 @@ full audited inventory.
 - **Detection is process-name only**, and a Windows notification is not raised.
 - **Linux/X11 is the only scripted path.** Windows and Wayland are compile coverage
   (Wayland now has a smoke); macOS runs the same code path and is the development host.
-- **No menu bar or single-instance handoff.** A second launch refuses to start
-  when the endpoint is live but does not bring the first window forward.
-- **Window geometry is not persisted**; the window opens at 1180×720 each launch.
+- **Single-instance handoff is partial.** A second launch connects, selects an existing
+  window and exits, so it raises the running app instead of opening a second one.
+- **Window geometry is persisted** as a protocol `Window.bounds` value and restored on
+  launch.
 
 ## Next
 

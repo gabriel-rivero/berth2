@@ -110,6 +110,10 @@ impl From<CoreError> for Response {
 /// Event names, collected so the shell, CLI, and schema generator agree.
 pub mod names {
     pub const HELLO: &str = "hello";
+    pub const WINDOW_CREATED: &str = "window.created";
+    pub const WINDOW_CLOSED: &str = "window.closed";
+    pub const WINDOW_CHANGED: &str = "window.changed";
+    pub const WINDOW_SELECTED: &str = "window.selected";
     pub const WORKSPACE_CREATED: &str = "workspace.created";
     pub const WORKSPACE_CLOSED: &str = "workspace.closed";
     pub const WORKSPACE_CHANGED: &str = "workspace.changed";
@@ -119,6 +123,9 @@ pub mod names {
     pub const GROUP_UPDATED: &str = "group.updated";
     pub const GROUP_DELETED: &str = "group.deleted";
     pub const PANE_FOCUS_CHANGED: &str = "pane.focus_changed";
+    pub const PANE_ZOOM_CHANGED: &str = "pane.zoom_changed";
+    pub const PANE_SWAPPED: &str = "pane.swapped";
+    pub const PANE_MOVED: &str = "pane.moved";
     pub const SURFACE_CREATED: &str = "surface.created";
     pub const SURFACE_CLOSED: &str = "surface.closed";
     pub const SURFACE_TITLE_CHANGED: &str = "surface.title_changed";
@@ -128,6 +135,7 @@ pub mod names {
     pub const SURFACE_BELL: &str = "surface.bell";
     pub const SURFACE_PROGRESS: &str = "surface.progress";
     pub const SURFACE_EXITED: &str = "surface.exited";
+    pub const SURFACE_RESTARTED: &str = "surface.restarted";
     pub const AGENT_CREATED: &str = "agent.created";
     pub const AGENT_DELETED: &str = "agent.deleted";
     pub const AGENT_STATE_CHANGED: &str = "agent.state_changed";
@@ -138,6 +146,10 @@ pub mod names {
 
     pub const ALL: &[&str] = &[
         HELLO,
+        WINDOW_CREATED,
+        WINDOW_CLOSED,
+        WINDOW_CHANGED,
+        WINDOW_SELECTED,
         WORKSPACE_CREATED,
         WORKSPACE_CLOSED,
         WORKSPACE_CHANGED,
@@ -147,6 +159,9 @@ pub mod names {
         GROUP_UPDATED,
         GROUP_DELETED,
         PANE_FOCUS_CHANGED,
+        PANE_ZOOM_CHANGED,
+        PANE_SWAPPED,
+        PANE_MOVED,
         SURFACE_CREATED,
         SURFACE_CLOSED,
         SURFACE_TITLE_CHANGED,
@@ -154,6 +169,7 @@ pub mod names {
         SURFACE_BELL,
         SURFACE_PROGRESS,
         SURFACE_EXITED,
+        SURFACE_RESTARTED,
         AGENT_CREATED,
         AGENT_DELETED,
         AGENT_STATE_CHANGED,

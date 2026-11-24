@@ -164,6 +164,24 @@ fn positional(args: &[String]) -> Vec<String> {
     out
 }
 
+/// Accept a pane id directly or resolve a surface id to the pane that holds it.
+fn resolve_pane(client: &mut Client, target: &str) -> Result<String, String> {
+    if target.starts_with("pne_") {
+        return Ok(target.to_string());
+    }
+    let listed = client.call("surface.list", json!({}))?;
+    listed["surfaces"]
+        .as_array()
+        .and_then(|surfaces| {
+            surfaces
+                .iter()
+                .find(|s| s["id"].as_str() == Some(target))
+                .and_then(|s| s["pane_id"].as_str())
+                .map(str::to_string)
+        })
+        .ok_or_else(|| format!("zoom: no pane or surface {target}"))
+}
+
 fn provider_for(argv: &[String]) -> String {
     let program = argv
         .first()
@@ -849,6 +867,17 @@ berth — control a running Berth instance
 usage:
   berth ping
   berth ls [--json]             workspaces, surfaces and agents
+  berth window list [--json]
+  berth window new [--name N] [--workspace WORKSPACE_ID]
+  berth window select WINDOW_ID
+  berth window close WINDOW_ID
+  berth window update WINDOW_ID [--name N] [--broadcast on|off] [--sidebar-width N]
+  berth zoom PANE_OR_SURFACE [--off]
+  berth broadcast on|off|toggle
+  berth restart SURFACE_ID
+  berth duplicate SURFACE_ID
+  berth swap-pane PANE_ID TARGET_PANE_ID
+  berth move-pane PANE_ID --to TARGET_PANE_ID [--before]
   berth agents [--state S]
   berth new [--name N] [--cwd DIR]
   berth close-workspace [WORKSPACE_ID]
@@ -864,7 +893,7 @@ usage:
   berth close-pane PANE_ID
   berth close-surface SURFACE_ID
   berth rename SURFACE_ID TITLE
-  berth move-tab SURFACE_ID INDEX
+  berth move-tab SURFACE_ID [INDEX] [--pane PANE_ID] [--window WINDOW_ID]
   berth save                    write the session snapshot now
   berth send SURFACE_ID TEXT    type into a surface
   berth send-key SURFACE_ID KEY send a named key (enter, esc, ctrl-c, …)
@@ -1087,10 +1116,143 @@ fn run() -> Result<(), String> {
             c.call("pane.close", json!({"pane_id": pid}))?;
         }
 
-        "close-surface" => {
+        "window" => {
             let pos = positional(rest);
-            let sid = pos.first().ok_or("close-surface: missing SURFACE_ID")?;
-            c.call("surface.close", json!({"surface_id": sid}))?;
+            let sub = pos.first().map(String::as_str).unwrap_or("list");
+            match sub {
+                "list" => {
+                    let v = c.call("window.list", json!({}))?;
+                    if rest.iter().any(|a| a == "--json") {
+                        println!("{}", serde_json::to_string_pretty(&v).unwrap());
+                    } else {
+                        let selected = v["selected_window"].as_str().unwrap_or("");
+                        for window in v["windows"].as_array().into_iter().flatten() {
+                            let id = window["id"].as_str().unwrap_or("");
+                            let name = window["name"].as_str().unwrap_or("");
+                            let marker = if id == selected { "*" } else { " " };
+                            let workspace = window["active_workspace"].as_str().unwrap_or("-");
+                            let broadcast = if window["broadcast"].as_bool().unwrap_or(false) {
+                                " broadcast"
+                            } else {
+                                ""
+                            };
+                            println!("{marker} {id}  {name}  {workspace}{broadcast}");
+                        }
+                    }
+                }
+                "new" => {
+                    let mut params = json!({});
+                    if let Some(name) = arg_after(rest, "--name") {
+                        params["name"] = json!(name);
+                    }
+                    if let Some(workspace) = arg_after(rest, "--workspace") {
+                        params["workspace_id"] = json!(workspace);
+                    }
+                    let v = c.call("window.create", params)?;
+                    println!("{}", v["window"]["id"].as_str().unwrap_or(""));
+                }
+                "select" => {
+                    let id = pos.get(1).ok_or("window select: missing WINDOW_ID")?;
+                    c.call("window.select", json!({"window_id": id}))?;
+                }
+                "close" => {
+                    let id = pos.get(1).ok_or("window close: missing WINDOW_ID")?;
+                    c.call("window.close", json!({"window_id": id}))?;
+                }
+                "update" => {
+                    let id = pos.get(1).ok_or("window update: missing WINDOW_ID")?;
+                    let mut params = json!({"window_id": id});
+                    if let Some(name) = arg_after(rest, "--name") {
+                        params["name"] = json!(name);
+                    }
+                    if let Some(width) = arg_after(rest, "--sidebar-width") {
+                        let n: f64 = width
+                            .parse()
+                            .map_err(|_| "window update: --sidebar-width must be a number")?;
+                        params["sidebar_width"] = json!(n);
+                    }
+                    if let Some(value) = arg_after(rest, "--broadcast") {
+                        params["broadcast"] = json!(matches!(value.as_str(), "on" | "true" | "1"));
+                    }
+                    c.call("window.update", params)?;
+                }
+                other => return Err(format!("window: unknown subcommand {other}")),
+            }
+        }
+
+        "zoom" => {
+            let pos = positional(rest);
+            let target = pos.first().ok_or("zoom: missing PANE_OR_SURFACE")?;
+            let pane_id = resolve_pane(&mut c, target)?;
+            let mut params = json!({"pane_id": pane_id});
+            if rest.iter().any(|a| a == "--off") {
+                params["zoomed"] = json!(false);
+            }
+            c.call("pane.zoom", params)?;
+        }
+
+        "broadcast" => {
+            let mode = positional(rest)
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "toggle".to_string());
+            let listed = c.call("window.list", json!({}))?;
+            let window = listed["selected_window"]
+                .as_str()
+                .or_else(|| listed["windows"].as_array()?.first()?.get("id")?.as_str())
+                .ok_or("broadcast: no window")?
+                .to_string();
+            let current = listed["windows"]
+                .as_array()
+                .and_then(|windows| {
+                    windows
+                        .iter()
+                        .find(|w| w["id"].as_str() == Some(window.as_str()))
+                })
+                .and_then(|w| w["broadcast"].as_bool())
+                .unwrap_or(false);
+            let value = match mode.as_str() {
+                "on" => true,
+                "off" => false,
+                "toggle" => !current,
+                other => return Err(format!("broadcast: expected on|off|toggle, got {other}")),
+            };
+            c.call(
+                "window.update",
+                json!({"window_id": window, "broadcast": value}),
+            )?;
+        }
+
+        "restart" => {
+            let pos = positional(rest);
+            let sid = pos.first().ok_or("restart: missing SURFACE_ID")?;
+            let v = c.call("surface.restart", json!({"surface_id": sid}))?;
+            println!("{}", v["surface_id"].as_str().unwrap_or(""));
+        }
+
+        "duplicate" => {
+            let pos = positional(rest);
+            let sid = pos.first().ok_or("duplicate: missing SURFACE_ID")?;
+            let v = c.call("surface.duplicate", json!({"surface_id": sid}))?;
+            println!("{}", v["surface_id"].as_str().unwrap_or(""));
+        }
+
+        "swap-pane" => {
+            let pos = positional(rest);
+            let a = pos.first().ok_or("swap-pane: missing PANE_ID")?;
+            let b = pos.get(1).ok_or("swap-pane: missing TARGET_PANE_ID")?;
+            c.call("pane.swap", json!({"pane_id": a, "target_pane_id": b}))?;
+        }
+
+        "move-pane" => {
+            let pos = positional(rest);
+            let a = pos.first().ok_or("move-pane: missing PANE_ID")?;
+            let target = arg_after(rest, "--to").ok_or("move-pane: missing --to TARGET_PANE_ID")?;
+            let before = rest.iter().any(|arg| arg == "--before");
+            c.call(
+                "pane.move",
+                json!({"pane_id": a, "target_pane_id": target, "before": before}),
+            )?;
         }
 
         "rename" => {
@@ -1103,12 +1265,20 @@ fn run() -> Result<(), String> {
         "move-tab" => {
             let pos = positional(rest);
             let sid = pos.first().ok_or("move-tab: missing SURFACE_ID")?;
-            let index: usize = pos
-                .get(1)
-                .ok_or("move-tab: missing INDEX")?
-                .parse()
-                .map_err(|_| "move-tab: INDEX must be a number")?;
-            c.call("surface.move", json!({"surface_id": sid, "index": index}))?;
+            let mut params = json!({"surface_id": sid});
+            if let Some(index) = pos.get(1) {
+                let index: usize = index
+                    .parse()
+                    .map_err(|_| "move-tab: INDEX must be a number")?;
+                params["index"] = json!(index);
+            }
+            if let Some(pane) = arg_after(rest, "--pane") {
+                params["pane_id"] = json!(pane);
+            }
+            if let Some(window) = arg_after(rest, "--window") {
+                params["window_id"] = json!(window);
+            }
+            c.call("surface.move", params)?;
         }
 
         "save" => {

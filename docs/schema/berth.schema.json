@@ -193,6 +193,10 @@
   },
   "events": [
     "hello",
+    "window.created",
+    "window.closed",
+    "window.changed",
+    "window.selected",
     "workspace.created",
     "workspace.closed",
     "workspace.changed",
@@ -202,6 +206,9 @@
     "group.updated",
     "group.deleted",
     "pane.focus_changed",
+    "pane.zoom_changed",
+    "pane.swapped",
+    "pane.moved",
     "surface.created",
     "surface.closed",
     "surface.title_changed",
@@ -209,6 +216,7 @@
     "surface.bell",
     "surface.progress",
     "surface.exited",
+    "surface.restarted",
     "agent.created",
     "agent.deleted",
     "agent.state_changed",
@@ -221,6 +229,12 @@
     "system.hello",
     "system.ping",
     "system.capabilities",
+    "window.list",
+    "window.create",
+    "window.get",
+    "window.select",
+    "window.update",
+    "window.close",
     "workspace.list",
     "workspace.create",
     "workspace.get",
@@ -235,6 +249,9 @@
     "group.delete",
     "pane.list",
     "pane.focus",
+    "pane.zoom",
+    "pane.swap",
+    "pane.move",
     "pane.resize",
     "split.resize",
     "pane.close",
@@ -246,6 +263,10 @@
     "surface.cycle",
     "surface.close",
     "surface.update",
+    "surface.rename",
+    "surface.move",
+    "surface.restart",
+    "surface.duplicate",
     "surface.send_text",
     "surface.send_key",
     "surface.read_text",
@@ -257,6 +278,8 @@
     "agent.list",
     "agent.clear",
     "agent.ack",
+    "agent.mute",
+    "agent.usage",
     "agent.resume",
     "notification.create",
     "notification.list",
@@ -712,6 +735,14 @@
               "null"
             ]
           },
+          "argv": {
+            "default": [],
+            "description": "The command this surface was launched with, replayed by `surface.restart`/`surface.duplicate` and by restore.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "bell_count": {
             "default": 0,
             "format": "uint32",
@@ -732,6 +763,23 @@
           "cwd": {
             "default": "",
             "type": "string"
+          },
+          "env": {
+            "default": [],
+            "items": {
+              "items": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "type": "array"
           },
           "id": {
             "type": "string"
@@ -782,6 +830,14 @@
               "null"
             ]
           },
+          "user_title": {
+            "default": null,
+            "description": "A name the user set with `surface.rename`. OSC titles never overwrite it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "workspace_id": {
             "type": "string"
           }
@@ -799,6 +855,111 @@
           "terminal"
         ],
         "type": "string"
+      },
+      "Window": {
+        "description": "One native window. Workspaces are grouped by `window_id`; selection is per-window so each shell can render an independent sidebar.",
+        "properties": {
+          "active_surface": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "active_workspace": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "bounds": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/WindowBounds"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "broadcast": {
+            "default": false,
+            "description": "Type into every pane of the active workspace.",
+            "type": "boolean"
+          },
+          "created_ms": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "monitor": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "sidebar_width": {
+            "default": null,
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "created_ms",
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
+      "WindowBounds": {
+        "properties": {
+          "height": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "maximized": {
+            "default": false,
+            "type": "boolean"
+          },
+          "scale": {
+            "default": 1.0,
+            "format": "double",
+            "type": "number"
+          },
+          "width": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "x": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "y": {
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "height",
+          "width",
+          "x",
+          "y"
+        ],
+        "type": "object"
       },
       "Workspace": {
         "properties": {
@@ -853,6 +1014,21 @@
             "format": "uint32",
             "minimum": 0.0,
             "type": "integer"
+          },
+          "window_id": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "zoomed_pane": {
+            "default": null,
+            "description": "A pane maximised over this workspace's tree. `None` is the normal layout.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -916,6 +1092,13 @@
           "null"
         ]
       },
+      "selected_window": {
+        "default": null,
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "selected_workspace": {
         "default": null,
         "type": [
@@ -927,6 +1110,13 @@
         "format": "uint32",
         "minimum": 0.0,
         "type": "integer"
+      },
+      "windows": {
+        "default": [],
+        "items": {
+          "$ref": "#/definitions/Window"
+        },
+        "type": "array"
       },
       "workspaces": {
         "items": {
@@ -944,5 +1134,5 @@
     "type": "object"
   },
   "title": "Berth protocol v1",
-  "version": "0.8.0"
+  "version": "0.16.0"
 }

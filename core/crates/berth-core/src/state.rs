@@ -9,7 +9,7 @@ use crate::agent::{self, AgentState, Attention};
 use crate::ids;
 use crate::model::{
     AgentSurface, Group, NotifLevel, Notification, Orientation, Pane, PaneNode, Resume, Surface,
-    SurfaceKind, Workspace,
+    SurfaceKind, Window, Workspace,
 };
 use crate::protocol::{Event, names};
 use crate::time;
@@ -17,12 +17,14 @@ use crate::{CoreError, ErrorCode, SpawnRequest, SurfaceOps};
 
 #[derive(Debug, Default)]
 pub struct AppState {
+    pub windows: Vec<Window>,
     pub workspaces: Vec<Workspace>,
     pub groups: Vec<Group>,
     pub panes: BTreeMap<String, Pane>,
     pub surfaces: BTreeMap<String, Surface>,
     pub agents: BTreeMap<String, AgentSurface>,
     pub notifications: Vec<Notification>,
+    pub selected_window: Option<String>,
     pub selected_workspace: Option<String>,
     pub selected_surface: Option<String>,
     /// Providers whose OS notifications are silenced. In-app attention stays.
@@ -78,11 +80,13 @@ impl AppState {
             let _ = ops.close(&id);
         }
         self.workspaces.clear();
+        self.windows.clear();
         self.groups.clear();
         self.panes.clear();
         self.surfaces.clear();
         self.agents.clear();
         self.notifications.clear();
+        self.selected_window = None;
         self.selected_workspace = None;
         self.selected_surface = None;
         self.pending.clear();
@@ -148,6 +152,268 @@ impl AppState {
             .map(|s| s.workspace_id.as_str())
     }
 
+    // ---- windows ------------------------------------------------------
+
+    pub fn window(&self, id: &str) -> Option<&Window> {
+        self.windows.iter().find(|w| w.id == id)
+    }
+
+    pub fn window_mut(&mut self, id: &str) -> Option<&mut Window> {
+        self.windows.iter_mut().find(|w| w.id == id)
+    }
+
+    pub fn active_window(&self) -> Option<&Window> {
+        self.selected_window
+            .as_deref()
+            .and_then(|id| self.window(id))
+            .or_else(|| self.windows.first())
+    }
+
+    pub fn window_for_workspace(&self, workspace_id: &str) -> Option<&Window> {
+        let ws = self.workspace(workspace_id)?;
+        ws.window_id
+            .as_deref()
+            .and_then(|id| self.window(id))
+            .or_else(|| self.windows.first())
+    }
+
+    pub fn create_window(&mut self, name: Option<&str>) -> Window {
+        let window = Window {
+            id: ids::mint(ids::WINDOW),
+            name: name
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("window {}", self.windows.len() + 1)),
+            created_ms: time::now_ms(),
+            bounds: None,
+            monitor: None,
+            sidebar_width: None,
+            active_workspace: None,
+            active_surface: None,
+            broadcast: false,
+        };
+        self.windows.push(window.clone());
+        if self.selected_window.is_none() {
+            self.selected_window = Some(window.id.clone());
+        }
+        self.emit(names::WINDOW_CREATED, serde_json::json!(window));
+        window
+    }
+
+    /// The selected window, creating `main` when a state has none.
+    pub fn ensure_window(&mut self) -> String {
+        if let Some(id) = &self.selected_window
+            && self.window(id).is_some()
+        {
+            return id.clone();
+        }
+        if let Some(id) = self.windows.first().map(|w| w.id.clone()) {
+            self.selected_window = Some(id.clone());
+            return id;
+        }
+        self.create_window(Some("main")).id
+    }
+
+    pub fn select_window(&mut self, window_id: &str) -> Result<(), CoreError> {
+        if self.window(window_id).is_none() {
+            return Err(CoreError::not_found(format!("no window {window_id}")));
+        }
+        self.selected_window = Some(window_id.to_string());
+        self.sync_selection_from_window(window_id);
+        self.emit(
+            names::WINDOW_SELECTED,
+            serde_json::json!({"window_id": window_id}),
+        );
+        Ok(())
+    }
+
+    /// Point the global selection at the given window's visible workspace and
+    /// surface. Existing callers (CLI, `workspace.list`) still read the globals.
+    pub fn sync_selection_from_window(&mut self, window_id: &str) {
+        let Some(win) = self.window(window_id).cloned() else {
+            return;
+        };
+        let workspace = win
+            .active_workspace
+            .clone()
+            .filter(|id| self.workspace(id).is_some())
+            .or_else(|| {
+                self.workspaces
+                    .iter()
+                    .find(|w| w.window_id.as_deref() == Some(window_id))
+                    .map(|w| w.id.clone())
+            });
+        let surface = workspace
+            .as_deref()
+            .and_then(|id| self.active_surface_of_workspace(id));
+        if let Some(w) = self.window_mut(window_id) {
+            w.active_workspace = workspace.clone();
+            w.active_surface = surface.clone();
+        }
+        self.selected_window = Some(window_id.to_string());
+        self.selected_workspace = workspace;
+        self.selected_surface = surface;
+    }
+
+    pub fn assign_workspace_to_window(
+        &mut self,
+        workspace_id: &str,
+        window_id: &str,
+    ) -> Result<(), CoreError> {
+        if self.window(window_id).is_none() {
+            return Err(CoreError::not_found(format!("no window {window_id}")));
+        }
+        let ws = self
+            .workspace_mut(workspace_id)
+            .ok_or_else(|| CoreError::not_found(format!("no workspace {workspace_id}")))?;
+        ws.window_id = Some(window_id.to_string());
+        let active = self
+            .workspace(workspace_id)
+            .and_then(|w| w.active_surface.clone());
+        if let Some(win) = self.window_mut(window_id) {
+            if win.active_workspace.is_none() {
+                win.active_workspace = Some(workspace_id.to_string());
+            }
+            if win.active_workspace.as_deref() == Some(workspace_id) {
+                win.active_surface = active;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn close_window(&mut self, window_id: &str, ops: &dyn SurfaceOps) -> Result<(), CoreError> {
+        if self.window(window_id).is_none() {
+            return Err(CoreError::not_found(format!("no window {window_id}")));
+        }
+        if self.windows.len() <= 1 {
+            return Err(CoreError::new(
+                ErrorCode::InvalidState,
+                "cannot close the last window",
+            ));
+        }
+        let workspaces: Vec<String> = self
+            .workspaces
+            .iter()
+            .filter(|w| w.window_id.as_deref() == Some(window_id))
+            .map(|w| w.id.clone())
+            .collect();
+        for id in workspaces {
+            let _ = self.close_workspace(&id, ops);
+        }
+        self.windows.retain(|w| w.id != window_id);
+        if self.selected_window.as_deref() == Some(window_id) {
+            let next = self.windows.first().map(|w| w.id.clone());
+            match next {
+                Some(id) => {
+                    self.selected_window = Some(id.clone());
+                    self.sync_selection_from_window(&id);
+                }
+                None => {
+                    self.selected_window = None;
+                    self.selected_workspace = None;
+                    self.selected_surface = None;
+                }
+            }
+        }
+        self.emit(
+            names::WINDOW_CLOSED,
+            serde_json::json!({"window_id": window_id}),
+        );
+        Ok(())
+    }
+
+    /// Close a workspace and every surface under it.
+    pub fn close_workspace(
+        &mut self,
+        workspace_id: &str,
+        ops: &dyn SurfaceOps,
+    ) -> Result<(), CoreError> {
+        let ws = self
+            .workspace(workspace_id)
+            .cloned()
+            .ok_or_else(|| CoreError::not_found(format!("no workspace {workspace_id}")))?;
+        let mut surfaces: Vec<String> = Vec::new();
+        for pane_id in ws.root.leaves() {
+            if let Some(pane) = self.panes.get(pane_id) {
+                surfaces.extend(pane.surfaces.iter().cloned());
+            }
+        }
+        for surface in surfaces {
+            let _ = self.close_surface(&surface, ops);
+        }
+        if self.workspace(workspace_id).is_some() {
+            self.workspaces.retain(|w| w.id != workspace_id);
+            if self.selected_workspace.as_deref() == Some(workspace_id) {
+                self.selected_workspace = self.workspaces.first().map(|w| w.id.clone());
+            }
+            self.emit(
+                names::WORKSPACE_CLOSED,
+                serde_json::json!({"workspace_id": workspace_id}),
+            );
+        }
+        // A window whose last workspace closed keeps existing but points at
+        // nothing; the shell decides whether that window should close.
+        if let Some(win) = self.window_mut(ws.window_id.as_deref().unwrap_or_default())
+            && win.active_workspace.as_deref() == Some(workspace_id)
+        {
+            win.active_workspace = None;
+            win.active_surface = None;
+        }
+        Ok(())
+    }
+
+    /// Maximise or restore a pane. Returns the workspace's new zoomed pane.
+    pub fn set_zoomed_pane(
+        &mut self,
+        pane_id: &str,
+        zoomed: bool,
+    ) -> Result<Option<String>, CoreError> {
+        let pane = self
+            .panes
+            .get(pane_id)
+            .ok_or_else(|| CoreError::not_found(format!("no pane {pane_id}")))?;
+        let workspace_id = pane.workspace_id.clone();
+        let ws = self
+            .workspace_mut(&workspace_id)
+            .ok_or_else(|| CoreError::not_found("workspace for pane"))?;
+        if !ws.root.contains(pane_id) {
+            return Err(CoreError::new(
+                ErrorCode::InvalidState,
+                format!("pane {pane_id} is not in the workspace tree"),
+            ));
+        }
+        if zoomed {
+            ws.zoomed_pane = Some(pane_id.to_string());
+        } else if ws.zoomed_pane.as_deref() == Some(pane_id) {
+            ws.zoomed_pane = None;
+        }
+        let zoomed_pane = ws.zoomed_pane.clone();
+        let snapshot = ws.clone();
+        self.emit(
+            names::PANE_ZOOM_CHANGED,
+            serde_json::json!({
+                "workspace_id": workspace_id,
+                "pane_id": zoomed_pane,
+                "workspace": snapshot,
+            }),
+        );
+        Ok(zoomed_pane)
+    }
+
+    /// Keep the owning window's visible workspace/surface in step with a
+    /// selection change. Used by every focus path.
+    fn note_window_selection(&mut self, workspace_id: &str, surface_id: Option<&str>) {
+        let window_id = self
+            .workspace(workspace_id)
+            .and_then(|w| w.window_id.clone());
+        if let Some(window_id) = window_id {
+            self.selected_window = Some(window_id.clone());
+            if let Some(win) = self.window_mut(&window_id) {
+                win.active_workspace = Some(workspace_id.to_string());
+                win.active_surface = surface_id.map(str::to_string);
+            }
+        }
+    }
+
     /// The surface a workspace should show: the remembered one when it is
     /// still alive, otherwise the active tab of the first pane.
     pub fn active_surface_of_workspace(&self, workspace_id: &str) -> Option<String> {
@@ -178,6 +444,28 @@ impl AppState {
         group_id: Option<String>,
         ops: &dyn SurfaceOps,
     ) -> Result<Workspace, CoreError> {
+        self.create_workspace_in(None, name, cwd, group_id, ops)
+    }
+
+    /// Create a workspace inside `window_id`, or the selected window when
+    /// `None`. `workspace.create {window_id}` uses the explicit form.
+    pub fn create_workspace_in(
+        &mut self,
+        window_id: Option<&str>,
+        name: Option<&str>,
+        cwd: Option<&str>,
+        group_id: Option<String>,
+        ops: &dyn SurfaceOps,
+    ) -> Result<Workspace, CoreError> {
+        let window_id = match window_id {
+            Some(id) => {
+                if self.window(id).is_none() {
+                    return Err(CoreError::not_found(format!("no window {id}")));
+                }
+                id.to_string()
+            }
+            None => self.ensure_window(),
+        };
         let now = time::now_ms();
         let ws_id = ids::mint(ids::WORKSPACE);
         let pane_id = ids::mint(ids::PANE);
@@ -196,6 +484,8 @@ impl AppState {
             created_ms: now,
             root: PaneNode::leaf(pane_id.clone()),
             active_surface: None,
+            window_id: Some(window_id.clone()),
+            zoomed_pane: None,
         };
 
         let surface = self.spawn_into(&ws, &pane_id, cwd, vec![], vec![], ops)?;
@@ -203,12 +493,67 @@ impl AppState {
 
         self.workspaces.push(ws);
         self.selected_workspace.get_or_insert(ws_id.clone());
+        if let Some(win) = self.window_mut(&window_id)
+            && win.active_workspace.is_none()
+        {
+            win.active_workspace = Some(ws_id.clone());
+            win.active_surface = Some(surface.id.clone());
+        }
         let snapshot = self.workspace(&ws_id).cloned();
         self.emit(names::WORKSPACE_CREATED, serde_json::json!(snapshot));
 
         self.workspace(&ws_id)
             .cloned()
             .ok_or_else(|| CoreError::internal("workspace vanished"))
+    }
+
+    /// Create a workspace with one pane but no surface. Used when a window is
+    /// about to receive a moved tab, so a tear-off does not leave a spare
+    /// default shell behind.
+    pub fn create_empty_workspace_in(
+        &mut self,
+        window_id: &str,
+        name: Option<&str>,
+    ) -> Result<Workspace, CoreError> {
+        if self.window(window_id).is_none() {
+            return Err(CoreError::not_found(format!("no window {window_id}")));
+        }
+        let ws_id = ids::mint(ids::WORKSPACE);
+        let pane_id = ids::mint(ids::PANE);
+        let ws = Workspace {
+            id: ws_id.clone(),
+            name: name
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("workspace {}", self.workspaces.len() + 1)),
+            group_id: None,
+            icon: None,
+            color: None,
+            pinned: false,
+            unread: 0,
+            created_ms: time::now_ms(),
+            root: PaneNode::leaf(pane_id.clone()),
+            active_surface: None,
+            window_id: Some(window_id.to_string()),
+            zoomed_pane: None,
+        };
+        self.workspaces.push(ws.clone());
+        self.panes.insert(
+            pane_id.clone(),
+            Pane {
+                id: pane_id,
+                workspace_id: ws_id.clone(),
+                surfaces: Vec::new(),
+                active: 0,
+            },
+        );
+        if let Some(win) = self.window_mut(window_id)
+            && win.active_workspace.is_none()
+        {
+            win.active_workspace = Some(ws_id.clone());
+            win.active_surface = None;
+        }
+        self.emit(names::WORKSPACE_CREATED, serde_json::json!(ws));
+        Ok(ws)
     }
 
     /// Spawn a terminal surface into an existing pane and register metadata.
@@ -222,6 +567,8 @@ impl AppState {
         ops: &dyn SurfaceOps,
     ) -> Result<Surface, CoreError> {
         let surface_id = ids::mint(ids::SURFACE);
+        let launch_argv = argv.clone();
+        let launch_env = env.clone();
         let mut req = SpawnRequest {
             cwd: cwd.map(str::to_string),
             argv,
@@ -264,6 +611,8 @@ impl AppState {
             progress: None,
             bell_count: 0,
             agent_id: None,
+            argv: launch_argv,
+            env: launch_env,
             created_ms: time::now_ms(),
         };
 
@@ -309,6 +658,7 @@ impl AppState {
             ops.focus(&surface.id)?;
             self.selected_workspace = Some(ws.id.clone());
             self.selected_surface = Some(surface.id.clone());
+            self.note_window_selection(&ws.id, Some(&surface.id));
             self.emit(
                 names::PANE_FOCUS_CHANGED,
                 serde_json::json!({"pane_id": pane_id, "surface_id": surface.id}),
@@ -335,6 +685,7 @@ impl AppState {
         ops.focus(surface_id)?;
         self.selected_workspace = Some(surface.workspace_id.clone());
         self.selected_surface = Some(surface.id.clone());
+        self.note_window_selection(&surface.workspace_id, Some(&surface.id));
 
         let mut changed = None;
         if let Some(w) = self.workspace_mut(&surface.workspace_id)
@@ -440,6 +791,7 @@ impl AppState {
             ops.focus(&new_surface.id)?;
             self.selected_workspace = Some(ws.id.clone());
             self.selected_surface = Some(new_surface.id.clone());
+            self.note_window_selection(&ws.id, Some(&new_surface.id));
             self.emit(
                 names::PANE_FOCUS_CHANGED,
                 serde_json::json!({"pane_id": new_pane_id, "surface_id": new_surface.id}),
@@ -493,12 +845,23 @@ impl AppState {
                     PaneNode::Leaf { pane_id } if pane_id == &surface.pane_id
                 );
                 ws.root.remove(&surface.pane_id);
+                if ws.zoomed_pane.as_deref() == Some(surface.pane_id.as_str()) {
+                    ws.zoomed_pane = None;
+                }
                 ws_gone = root_was_leaf || ws.root.is_empty();
             }
             if ws_gone {
+                let window_id = self.workspace(&ws_id).and_then(|w| w.window_id.clone());
                 self.workspaces.retain(|w| w.id != ws_id);
                 if self.selected_workspace.as_deref() == Some(ws_id.as_str()) {
                     self.selected_workspace = self.workspaces.first().map(|w| w.id.clone());
+                }
+                if let Some(window_id) = window_id
+                    && let Some(win) = self.window_mut(&window_id)
+                    && win.active_workspace.as_deref() == Some(ws_id.as_str())
+                {
+                    win.active_workspace = None;
+                    win.active_surface = None;
                 }
                 self.emit(
                     names::WORKSPACE_CLOSED,
@@ -550,6 +913,7 @@ impl AppState {
         if let Some(s) = surface {
             self.selected_surface = Some(s);
         }
+        self.note_window_selection(workspace_id, self.selected_surface.clone().as_deref());
         self.emit(
             names::WORKSPACE_SELECTED,
             serde_json::json!({"workspace_id": workspace_id}),

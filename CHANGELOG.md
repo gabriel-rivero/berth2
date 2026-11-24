@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- **Multiple windows.** `window.create/list/get/select/update/close` join the protocol,
+  each `Workspace` names its window, selection is per-window, and the session snapshot
+  (now `version: 2`) stores windows, geometry, sidebar width and broadcast. v1 sessions
+  migrate automatically into one `main` window, so existing layouts keep restoring.
+- **Pane zoom, swap and move.** `pane.zoom` maximises a pane (persisted on the
+  workspace), `pane.swap` exchanges two leaves and `pane.move` moves one next to another.
+  The portable window treats zoom as a layout override and paints a `ZOOM` chip.
+- **Tab tear-off, restart and duplicate.** `surface.move` gains `pane_id` and
+  `window_id` targets; `surface.restart` respawns the saved command under the same id and
+  `surface.duplicate` opens the same cwd/argv/env as a sibling tab. Surfaces now persist
+  their launch argv/env so both survive a restore.
+- **Broadcast input.** `Window.broadcast` routes typed keys, paste and IME commits to the
+  active tab of every pane in the visible workspace, with a persistent status banner.
+- **Geometric focus.** Arrow chords pick the nearest pane by rectangle on both shells.
+- **Window state and handoff.** Bounds, monitor and sidebar width persist through
+  `window.update`; the portable window saves them debounced and raises the selected window
+  when another client selects it.
+- **Sidebar depth and chrome.** The portable sidebar filters by name/cwd/agent, shows one
+  row per agent, and the window gains an in-window menu strip, a status line (modifiers,
+  broadcast, zoom, cwd, window index), a resize cursor over dividers, a right-click action
+  menu, a scrollable tab strip with a `»` overflow menu, and font zoom kept session-only.
+- **CLI.** `berth window …`, `berth zoom`, `berth broadcast`, `berth restart`,
+  `berth duplicate`, `berth swap-pane`, `berth move-pane`, and `berth move-tab --pane/--window`.
+- **AppKit.** Window registry with per-window sidebars, pane zoom, persisted geometry,
+  New Window / Zoom Pane / Broadcast / Duplicate / Restart / geometric-focus menu items and
+  palette entries, and last-window semantics that close a core window instead of exiting.
+
 ## 0.16.0 — 2026-11-24
 
 ### Features

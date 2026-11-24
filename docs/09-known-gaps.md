@@ -82,22 +82,21 @@ app itself has the gaps listed in
 
 ### Layout, workspaces and tabs
 
-- **One window, one visible workspace.** No multiple windows, detachable
-  surfaces or overview.
+- **Multiple windows, pane zoom, swap and move are in.** Windows are a core model with
+  per-window selection and persisted geometry; a pane can be maximised, swapped or moved
+  between splits. Tab tear-off works across panes and windows in the portable shell.
 - **Sidebar polish is partial.** Groups can be created, renamed, collapsed and
   picked from a fixed colour cycle; workspaces show an icon if one is stored and
-  a colour bar. There is no colour picker or icon picker, no sidebar filter, and
-  a workspace still shows one agent line plus an agent count rather than a row
-  per agent.
-- **No tab overflow menu.** Tabs resize down to a minimum label; a very large
-  number of tabs squeezes every label. Rename and drag-reorder are in.
-- **No pane maximize/zoom, swap or move.** Splits and closes are created by
-  chords or the protocol; there is no context menu.
-- **No divider cursor change.** The grab band is 7 px and the pointer stays an
-  arrow.
-- **No menus or status bar.**
-- **Window geometry is not persisted.** A dragged sidebar width and the window
-  size are lost on relaunch; the window opens at 1180×720 every time.
+  a colour bar. The portable window has a sidebar filter, a colour/icon cycle and one
+  row per agent; there is no free-form colour or icon picker.
+- **Tab overflow lands as a scrollable strip.** The strip scrolls with the wheel and a
+  `»` button opens the hidden tabs. Rename and drag-reorder are in.
+- **Menus live in the window.** The portable shell draws an in-window menu strip and a
+  right-click action menu; the AppKit shell uses the native menu bar.
+- **No divider cursor change in AppKit.** The portable window switches to a resize cursor
+  over dividers; the AppKit split views keep the arrow.
+- **Window geometry is persisted** in `Window.bounds`; a second launch hands off to the
+  running instance and raises a window.
 - **No copy mode or paste history.** Selection is mouse-only and the clipboard
   keeps one entry.
 

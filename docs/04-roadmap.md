@@ -103,6 +103,16 @@ sequence above produces the documented state.
 
 Goal: the layout model cmux and every other terminal already have.
 
+**Landed in 0.16.x** (protocol, core, persistence, CLI and both shells): multiple
+windows with per-window sidebar selection and geometry, pane zoom/swap/move, tab
+tear-off across panes and windows, a scrollable tab strip with an overflow menu,
+broadcast input, geometric focus, sidebar filtering and one row per agent, an
+in-window menu strip and status line with a resize cursor, right-click tab/pane
+actions, and a v1→v2 session migration that keeps existing layouts. The AppKit shell
+gained the window registry, pane zoom, geometry persistence and the new menu items;
+its broadcast flag is not yet wired into the key path, and RTL chrome plus the
+sidebar colour/icon picker remain.
+
 - **Multiple windows** in both shells: `window.create/list/close/select` in the protocol,
   windows in the session snapshot, per-window sidebar and workspace selection, CLI
   commands.
@@ -169,6 +179,13 @@ show its history.
 - **Provider coverage**: add the providers that hook without per-project configuration
   (Gemini CLI, Cursor CLI, Amp) to the current four, and detect a provider behind a
   wrapper script or a renamed argv.
+- **Harness skills and plugins.** `berth hooks install` currently writes lifecycle hooks
+  only: the harness reports its state to Berth but is never told what Berth can do. Ship
+  an installed skill/instruction bundle per harness (Claude Code, opencode, Copilot,
+  Command Code, and the new providers) that teaches the agent when to create a window or
+  pane, move a tab, zoom or broadcast, launch with `berth run`, and read a surface back;
+  add `berth skills install|print` beside `berth hooks`, keep the text generated from the
+  protocol so it cannot drift, and cover it in the acceptance script.
 - **Journal**: replayable structural events, or an explicit decision to keep snapshots
   and say why in the protocol doc.
 - **Headless app-test loop** for the real GUI, so acceptance runs on CI (M5 carryover).
@@ -254,6 +271,7 @@ not an oversight.
 | Menus, status bar, divider cursor, right-click menus, RTL chrome | 0.16 |
 | Window geometry, single-instance handoff, sidebar filter and pickers, per-agent rows | 0.16 |
 | Agent inbox, cost meter, provider coverage and detection, mute row | 0.18 |
+| Harness skills/plugins (installed instructions for windows, panes, broadcast, run) | 0.18 |
 | Notification filters, bulk ack, badge, sound, menu-bar item | 0.18 |
 | Journal semantics, headless app test, push callbacks, graceful SIGTERM | 0.18 |
 | Accessibility beyond the pane, high contrast | 0.18 |
@@ -280,3 +298,21 @@ Stop or re-scope if any holds after 0.16:
 - The terminal floor forces replacing the portable window's shaping or buffer model
   rather than extending it: reflow plus ligatures plus OSC 8 must fit in 0.15–0.16, or
   the portable window becomes a thin client of the macOS core instead.
+
+## Known gaps after 0.16.1
+
+These are the 0.16 items that shipped partially, recorded so they are decisions and not
+oversights. They are picked up by the milestones named beside them.
+
+| Gap | Where it goes |
+| --- | --- |
+| AppKit broadcast sets the flag but typed input still goes only to the focused surface | 0.16.x follow-up |
+| AppKit has no tab tear-off, tab overflow, status bar or right-click tab/pane menus | 0.16.x follow-up |
+| AppKit sidebar has no filter, one-row-per-agent or colour/icon pickers | 0.16.x follow-up |
+| RTL shaping for sidebar rows, tab labels and panel text in either shell | 0.16.x follow-up |
+| Pane swap/move are protocol and CLI only; no palette or menu entry | 0.16.x follow-up |
+| The portable menu strip is decorative; it has no dropdowns | 0.16.x follow-up |
+| The portable shell still exits on a busy socket instead of raising the running window | 0.16.x follow-up |
+| Harness plugins are lifecycle hooks only; they install no skills or instructions | 0.18 |
+| AppKit parity list (search, rename/reorder, groups, a11y, socket, config keys) | 1.0 |
+
