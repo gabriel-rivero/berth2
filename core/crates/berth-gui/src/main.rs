@@ -56,6 +56,7 @@ mod output_rules;
 mod paint;
 mod panel;
 mod paste_history;
+mod picker;
 mod quick;
 mod search;
 mod session_log;
@@ -64,6 +65,7 @@ mod shells;
 mod sync_output;
 mod theme;
 mod ui;
+mod wallpaper;
 mod window;
 
 use config::Config;
@@ -430,11 +432,17 @@ fn main() {
         }
     }
     event_loop.set_control_flow(ControlFlow::Wait);
+    let wallpaper = config
+        .wallpaper
+        .source()
+        .and_then(|source| wallpaper::Wallpaper::load(&source))
+        .map(Arc::new);
     let mut app = Gui {
         state,
         host,
         server,
         theme: config.theme(),
+        wallpaper,
         system_light: false,
         font_zoom: 0.0,
         config,
@@ -519,6 +527,7 @@ fn main() {
         logged: HashMap::new(),
         dropped: Vec::new(),
         recent: Vec::new(),
+        picking_wallpaper: false,
     };
 
     if let Err(error) = event_loop.run_app(&mut app) {
@@ -899,6 +908,10 @@ struct Gui {
     host: Arc<PtyHost>,
     server: Option<ServerHandle>,
     theme: Theme,
+    /// The picture drawn behind the terminal, decoded once per source. Held
+    /// behind an `Arc` so the paint pass can borrow the pixels without keeping
+    /// a borrow of `self` alive across the font lookups.
+    wallpaper: Option<Arc<wallpaper::Wallpaper>>,
     /// Whether the OS currently reports a light appearance, from the window's
     /// theme and the `ThemeChanged` event.
     system_light: bool,
@@ -1022,6 +1035,10 @@ struct Gui {
     /// How much of each pane has been written to its log, so output already
     /// logged is not written twice.
     logged: HashMap<String, usize>,
+    /// Set while the wallpaper picker is up. On macOS the dialog runs a nested
+    /// event loop, so a keypress can re-enter the window's handler while it is
+    /// open; without this a second dialog would stack on the first.
+    picking_wallpaper: bool,
 }
 
 /// Last branch read for a cwd, with the time it was read. A cwd change or a
@@ -2567,9 +2584,23 @@ impl Gui {
         let mut buffer = soft
             .buffer_mut()
             .map_err(|error| format!("softbuffer buffer: {error}"))?;
+        // Held for the whole frame: the painter borrows the pixels, so the
+        // picture must outlive the block that draws it.
+        let wallpaper = self.wallpaper.clone();
         {
             let mut painter = Painter::new(&mut buffer, width, height);
-            painter.fill(Rect::new(0, 0, width, height), theme.terminal_bg);
+            // The picture is laid over the base background, so the whole window
+            // gets it once here and every pane fill composites on top.
+            if let Some(image) = wallpaper.as_deref() {
+                painter.set_wallpaper(Some(paint::WallpaperLayer {
+                    window: Rect::new(0, 0, width, height),
+                    width: image.width,
+                    height: image.height,
+                    pixels: &image.pixels,
+                    alpha: self.config.wallpaper.alpha(),
+                }));
+            }
+            painter.terminal(Rect::new(0, 0, width, height), theme.terminal_bg);
             // Menu and status strips belong to the content column, so the
             // sidebar keeps full height for its own rows.
             let menu_height = self.menu_bar_height();
@@ -2677,7 +2708,7 @@ impl Gui {
                 {
                     painter.stroke(pane.rect, theme.accent);
                 }
-                painter.fill(pane.content, theme.terminal_bg);
+                painter.terminal(pane.content, theme.terminal_bg);
                 let font = self.chrome_font();
                 painter.tab_strip(font, pane, theme);
                 if let Drag::Tab {
@@ -5466,6 +5497,7 @@ impl Gui {
                 if let Some(row) = rows.get(*selected) {
                     match row.field {
                         settings::Field::Shortcut(action) => *recording = Some(action),
+                        settings::Field::WallpaperChoose => self.pick_wallpaper(),
                         field => {
                             let change = settings::toggle(&mut self.config, field);
                             self.apply_setting(change);
@@ -5583,6 +5615,20 @@ impl Gui {
         {
             crate::window::set_opacity(window, self.config.opacity);
         }
+        if change == settings::Change::Wallpaper {
+            // The source changed, so the decoded pixels are stale. A failure
+            // here (missing file, unsupported format) leaves the terminal plain
+            // rather than leaving a picture that is no longer configured.
+            self.wallpaper = self
+                .config
+                .wallpaper
+                .source()
+                .and_then(|source| wallpaper::Wallpaper::load(&source))
+                .map(Arc::new);
+            if self.wallpaper.is_none() && self.config.wallpaper.active() {
+                log::line("wallpaper: could not read the configured image");
+            }
+        }
         if change == settings::Change::Shell {
             // Panes already running keep their program; the next one uses it.
             self.host.set_default_shell(self.config.shell.clone());
@@ -5592,6 +5638,33 @@ impl Gui {
             eprintln!("berth-gui: settings: {error}");
         }
         self.request_redraw();
+    }
+
+    /// Browse for a wallpaper with the system's own picker and adopt it.
+    ///
+    /// The dialog is modal, so it must not run while a frame is half-drawn; it
+    /// is opened from the settings overlay, which is a panel over a complete
+    /// frame, and both callers put the overlay back afterwards. A cancel
+    /// changes nothing.
+    fn pick_wallpaper(&mut self) {
+        // The dialog below spins a nested event loop on macOS, so this same
+        // handler can be re-entered before it returns. The flag is cleared as
+        // soon as the dialog closes, before anything can return early, so a
+        // cancel cannot latch it on and wedge the row.
+        if self.picking_wallpaper {
+            return;
+        }
+        self.picking_wallpaper = true;
+        let start = crate::picker::start_directory(&self.config.wallpaper.path);
+        let chosen = crate::picker::pick(start.as_deref());
+        self.picking_wallpaper = false;
+        let Some(chosen) = chosen else {
+            return;
+        };
+        // Replaces the desktop source and raises a zero strength to the visible
+        // default, so picking a file always changes what is drawn.
+        self.config.wallpaper.adopt(&chosen);
+        self.apply_setting(settings::Change::Wallpaper);
     }
 
     /// Open the search panel over every pane of the visible workspace, so a
@@ -6698,6 +6771,7 @@ impl Gui {
                             }
                         }
                         settings::Field::ReinstallHooks => self.reinstall_hooks(),
+                        settings::Field::WallpaperChoose => self.pick_wallpaper(),
                         field => {
                             let change = settings::toggle(&mut self.config, field);
                             self.apply_setting(change);

@@ -354,6 +354,23 @@ pub struct Painter<'a> {
     buffer: &'a mut [u32],
     width: usize,
     height: usize,
+    /// The picture drawn under the terminal background, when one is configured.
+    wallpaper: Option<WallpaperLayer<'a>>,
+}
+
+/// A decoded picture to lay under the terminal background.
+///
+/// The image covers the whole window rather than each pane, so a split shows
+/// one continuous picture clipped by the panes instead of a copy per pane.
+pub struct WallpaperLayer<'a> {
+    /// The window area the picture is scaled to cover.
+    pub window: Rect,
+    pub width: u32,
+    pub height: u32,
+    /// RGBA.
+    pub pixels: &'a [u8],
+    /// How strongly the picture shows through, `0..=255`.
+    pub alpha: u8,
 }
 
 impl<'a> Painter<'a> {
@@ -362,6 +379,74 @@ impl<'a> Painter<'a> {
             buffer,
             width,
             height,
+            wallpaper: None,
+        }
+    }
+
+    /// Set the picture the terminal background composites over.
+    pub fn set_wallpaper(&mut self, wallpaper: Option<WallpaperLayer<'a>>) {
+        self.wallpaper = wallpaper;
+    }
+
+    /// Paint a terminal background: the colour, then the wallpaper over it at
+    /// its own strength. Every place that used to fill `terminal_bg` goes
+    /// through here so the picture is continuous across panes.
+    pub fn terminal(&mut self, rect: Rect, background: u32) {
+        self.fill(rect, background);
+        self.wallpaper(rect);
+    }
+
+    /// Blend the wallpaper into `clip`, scaled to cover the whole window.
+    fn wallpaper(&mut self, clip: Rect) {
+        let Some(layer) = &self.wallpaper else {
+            return;
+        };
+        let (window, alpha) = (layer.window, layer.alpha);
+        let (source_width, source_height) = (layer.width, layer.height);
+        let pixels = layer.pixels;
+        if alpha == 0
+            || source_width == 0
+            || source_height == 0
+            || window.w == 0
+            || window.h == 0
+            || pixels.len() < source_width as usize * source_height as usize * 4
+        {
+            return;
+        }
+        let Some(clip) = clip.intersect(self.bounds()) else {
+            return;
+        };
+        // Cover: the larger of the two ratios, so no edge is left blank.
+        let scale_x = window.w as f64 / f64::from(source_width);
+        let scale_y = window.h as f64 / f64::from(source_height);
+        let scale = scale_x.max(scale_y);
+        let drawn_w = (f64::from(source_width) * scale).round() as isize;
+        let drawn_h = (f64::from(source_height) * scale).round() as isize;
+        let origin_x = window.x as isize + (window.w as isize - drawn_w) / 2;
+        let origin_y = window.y as isize + (window.h as isize - drawn_h) / 2;
+        if drawn_w <= 0 || drawn_h <= 0 {
+            return;
+        }
+        for gy in clip.y..clip.bottom() {
+            let row = (gy as isize - origin_y).max(0) as i64;
+            let sy = (row * i64::from(source_height) / drawn_h as i64)
+                .min(i64::from(source_height) - 1) as usize;
+            for gx in clip.x..clip.right() {
+                let column = (gx as isize - origin_x).max(0) as i64;
+                let sx = (column * i64::from(source_width) / drawn_w as i64)
+                    .min(i64::from(source_width) - 1) as usize;
+                let index = (sy * source_width as usize + sx) * 4;
+                let Some(pixel) = pixels.get(index..index + 4) else {
+                    continue;
+                };
+                // The picture's own alpha is multiplied by the strength, so a
+                // transparent PNG wallpaper still reads correctly.
+                let combined = (u32::from(pixel[3]) * u32::from(alpha) / 255) as u8;
+                if combined == 0 {
+                    continue;
+                }
+                self.blend_pixel(gx, gy, pixel[0], pixel[1], pixel[2], combined);
+            }
         }
     }
 
@@ -839,8 +924,18 @@ impl<'a> Painter<'a> {
                 }
                 let decoration = fg;
                 let blink_off = cell_view.blink && !options.blink_on;
-                self.fill(Rect::new(origin.0, origin.1, cell.width, cell.height), bg);
-                if cell_view.wide {
+                // A cell that wants the terminal's own background was already
+                // painted by the pane fill, so skipping it keeps the wallpaper
+                // continuous instead of stamping the flat colour back on. A
+                // cell with a real colour still paints its own.
+                let needs_fill = !(cell_view.bg.is_none()
+                    && rule_tint.is_none()
+                    && !cell_view.inverse
+                    && bg == options.theme.terminal_bg);
+                if needs_fill {
+                    self.fill(Rect::new(origin.0, origin.1, cell.width, cell.height), bg);
+                }
+                if cell_view.wide && needs_fill {
                     // Fill both halves before the glyph: a wide glyph such as an
                     // emoji extends into the continuation cell, so filling that
                     // cell after the draw cut the right half off.
@@ -1260,7 +1355,7 @@ impl<'a> Painter<'a> {
             );
         }
         if pane.tabs.is_empty() {
-            self.fill(pane.content, theme.terminal_bg);
+            self.terminal(pane.content, theme.terminal_bg);
         }
     }
 
@@ -1279,7 +1374,7 @@ impl<'a> Painter<'a> {
         if pane.gutter.w == 0 || pane.gutter.h == 0 {
             return;
         }
-        self.fill(pane.gutter, theme.terminal_bg);
+        self.terminal(pane.gutter, theme.terminal_bg);
         let first_line = view.scrollback_len.saturating_sub(view.scrollback);
         let width = (pane.gutter.w / 3).max(1) * 2;
         for mark in &view.prompt_marks {
@@ -1685,6 +1780,168 @@ mod tests {
                 ..CellView::default()
             })
             .collect()
+    }
+
+    #[test]
+    fn given_a_wallpaper_then_cells_with_the_default_background_keep_it() {
+        // A 1x1 white wallaper at full strength. A plain space cell must not
+        // stamp the flat background over it: that is the whole feature.
+        let mut font = FontRenderer::new(16.0, &[], crate::font::Options::default());
+        let cell = font.cell();
+        let cells = row(&[" "]);
+        let width = cell.width;
+        let mut buffer = vec![0u32; width * cell.height];
+        let pixels = vec![255u8, 255, 255, 255];
+        let view = ScreenView {
+            cols: 1,
+            rows: 1,
+            cursor_hidden: true,
+            cells,
+            ..ScreenView::default()
+        };
+        let theme = Theme::default();
+        let options = ScreenOptions {
+            theme: &theme,
+            focused: true,
+            cursor_visible: false,
+            selection: None,
+            exited: false,
+            search: &[],
+            search_current: None,
+            rules: &[],
+            hover_link: None,
+            blink_on: true,
+        };
+        let mut painter = Painter::new(&mut buffer, width, cell.height);
+        painter.set_wallpaper(Some(WallpaperLayer {
+            window: Rect::new(0, 0, width * 2, cell.height * 2),
+            width: 1,
+            height: 1,
+            pixels: &pixels,
+            alpha: 255,
+        }));
+        painter.terminal(Rect::new(0, 0, width, cell.height), theme.terminal_bg);
+        painter.screen(
+            &mut font,
+            &view,
+            Rect::new(0, 0, width, cell.height),
+            &options,
+        );
+        // The theme's black background would be 0x000000; the wallpaper lifted
+        // it toward white, so a non-black pixel proves it survived the cell fill.
+        assert!(
+            buffer.iter().any(|pixel| *pixel != 0),
+            "the wallpaper was painted over by the cell background"
+        );
+    }
+
+    #[test]
+    fn given_a_cell_with_its_own_background_then_it_still_paints_over_the_wallpaper() {
+        // A program that sets a background colour must keep it, even with a
+        // wallpaper behind it: only the *terminal* background is see-through.
+        let mut font = FontRenderer::new(16.0, &[], crate::font::Options::default());
+        let cell = font.cell();
+        let cells = vec![CellView {
+            contents: "x".to_string(),
+            bg: Some([0xff, 0x00, 0x00]),
+            ..CellView::default()
+        }];
+        let width = cell.width;
+        let mut buffer = vec![0u32; width * cell.height];
+        let pixels = vec![255u8, 255, 255, 255];
+        let view = ScreenView {
+            cols: 1,
+            rows: 1,
+            cursor_hidden: true,
+            cells,
+            ..ScreenView::default()
+        };
+        let theme = Theme::default();
+        let options = ScreenOptions {
+            theme: &theme,
+            focused: true,
+            cursor_visible: false,
+            selection: None,
+            exited: false,
+            search: &[],
+            search_current: None,
+            rules: &[],
+            hover_link: None,
+            blink_on: true,
+        };
+        let mut painter = Painter::new(&mut buffer, width, cell.height);
+        painter.set_wallpaper(Some(WallpaperLayer {
+            window: Rect::new(0, 0, width * 2, cell.height * 2),
+            width: 1,
+            height: 1,
+            pixels: &pixels,
+            alpha: 255,
+        }));
+        painter.terminal(Rect::new(0, 0, width, cell.height), theme.terminal_bg);
+        painter.screen(
+            &mut font,
+            &view,
+            Rect::new(0, 0, width, cell.height),
+            &options,
+        );
+        // The last pixel of the row is past the glyph, so it is pure cell
+        // background: red, not the wallpaper's white.
+        assert_eq!(buffer[buffer.len() - 1], 0x00ff_0000);
+    }
+
+    #[test]
+    fn given_a_zero_strength_wallpaper_then_the_background_is_untouched() {
+        let mut buffer = vec![0u32; 100];
+        let pixels = vec![255u8, 255, 255, 255];
+        let mut painter = painter(&mut buffer);
+        painter.set_wallpaper(Some(WallpaperLayer {
+            window: Rect::new(0, 0, 10, 10),
+            width: 1,
+            height: 1,
+            pixels: &pixels,
+            alpha: 0,
+        }));
+        painter.terminal(Rect::new(0, 0, 10, 10), 0);
+        assert!(buffer.iter().all(|pixel| *pixel == 0));
+    }
+
+    #[test]
+    fn given_a_wallpaper_then_it_is_scaled_to_cover_the_window() {
+        // A 1x1 red picture at full strength must tint the far corner too,
+        // which is what "cover" means: no blank edge is left.
+        let mut buffer = vec![0u32; 100];
+        let pixels = vec![255u8, 0, 0, 255];
+        let mut painter = painter(&mut buffer);
+        painter.set_wallpaper(Some(WallpaperLayer {
+            window: Rect::new(0, 0, 10, 10),
+            width: 1,
+            height: 1,
+            pixels: &pixels,
+            alpha: 255,
+        }));
+        painter.terminal(Rect::new(0, 0, 10, 10), 0);
+        assert_eq!(buffer[0], 0x00ff_0000);
+        assert_eq!(buffer[buffer.len() - 1], 0x00ff_0000);
+    }
+
+    #[test]
+    fn given_a_wallpaper_then_it_is_clipped_to_the_rect_being_painted() {
+        // The sidebar and tab strips are not terminal, so a pane fill must not
+        // leak the picture outside its own rectangle.
+        let mut buffer = vec![0u32; 100];
+        let pixels = vec![255u8, 255, 255, 255];
+        let mut painter = painter(&mut buffer);
+        painter.set_wallpaper(Some(WallpaperLayer {
+            window: Rect::new(0, 0, 10, 10),
+            width: 1,
+            height: 1,
+            pixels: &pixels,
+            alpha: 255,
+        }));
+        painter.terminal(Rect::new(0, 0, 5, 5), 0);
+        assert_eq!(buffer[0], 0x00ff_ffff);
+        assert_eq!(buffer[9], 0, "the paint leaked past the clip rect");
+        assert_eq!(buffer[90], 0, "the paint leaked past the clip rect");
     }
 
     #[test]

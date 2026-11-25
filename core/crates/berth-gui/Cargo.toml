@@ -26,6 +26,10 @@ accesskit.workspace = true
 accesskit_winit.workspace = true
 ctrlc.workspace = true
 png = "0.17"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+# Native file picker for the wallpaper path. No GTK: the Linux backend talks to
+# the XDG desktop portal, so the window keeps its "no GTK headers" rule.
+rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal", "wayland"] }
 regex.workspace = true
 global-hotkey = "0.10.0"
 
@@ -36,7 +40,10 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "NSMenu",
     "NSMenuItem",
     "NSResponder",
+    "NSScreen",
+    "NSWorkspace",
 ] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "NSString",
+    "NSURL",
 ] }

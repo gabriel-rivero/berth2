@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- **Wallpaper.** `wallpaper` sets an image drawn behind the terminal, and
+  `wallpaperFollowDesktop` uses the desktop's own wallpaper instead — read through
+  `NSWorkspace`, so it tracks whatever the system is set to. `wallpaperOpacity`
+  controls how strongly it shows through, as a fraction like Ghostty's
+  `background-image-opacity`; the default when a source is named is `0.3`. The
+  picture is composited *over* the theme background rather than replacing it, so the
+  palette stays the dominant term and text keeps its contrast, and a cell that sets
+  its own background still paints it. PNG and JPEG decode, and a source larger than
+  6000px is downscaled once at load. Settings gains **Wallpaper** (off / desktop /
+  configured path), **Wallpaper strength** and **Wallpaper image…**, which opens the
+  platform's own picker (`rfd`, built without GTK) and adopts the choice. The
+  portable window only: the AppKit shell keeps leaving its background to Ghostty.
+
 ## 0.19.0 — 2026-11-25
 
 ### Features

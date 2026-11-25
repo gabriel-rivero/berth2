@@ -3,7 +3,9 @@
 //! The panel edits the same document the macOS shell reads, so it writes only
 //! the keys it owns and leaves the rest of the file alone.
 
-use crate::config::{Action, BellMode, Config, MAX_FONT_SIZE, MIN_FONT_SIZE, MIN_OPACITY};
+use crate::config::{
+    Action, BellMode, Config, DEFAULT_WALLPAPER_OPACITY, MAX_FONT_SIZE, MIN_FONT_SIZE, MIN_OPACITY,
+};
 use crate::theme::THEMES;
 use berth_headless::engine::Backend;
 
@@ -20,6 +22,10 @@ pub enum Field {
     FontScale,
     Theme,
     Opacity,
+    Wallpaper,
+    WallpaperOpacity,
+    /// Open the system file picker and adopt the chosen image.
+    WallpaperChoose,
     Bell,
     Shell,
     TerminalBackend,
@@ -52,6 +58,10 @@ pub enum Change {
     Theme,
     /// Window opacity changed; the platform window must be told.
     Opacity,
+    /// The wallpaper source changed; the picture must be decoded again.
+    Wallpaper,
+    /// Only the wallpaper's strength changed; the decoded pixels still apply.
+    WallpaperOpacity,
     /// Layout or bindings changed; only a redraw is needed.
     View,
     /// The shell for new panes changed; the host must be told.
@@ -99,6 +109,21 @@ pub fn rows(config: &Config, recording: Option<Action>, notice: Option<&str>) ->
             field: Field::Opacity,
             label: opacity_label.into(),
             value: format!("{:.0}%", config.opacity * 100.0),
+        },
+        Row {
+            field: Field::Wallpaper,
+            label: "Wallpaper".into(),
+            value: wallpaper_label(config),
+        },
+        Row {
+            field: Field::WallpaperOpacity,
+            label: "Wallpaper strength".into(),
+            value: format!("{}%", config.wallpaper.opacity),
+        },
+        Row {
+            field: Field::WallpaperChoose,
+            label: "Wallpaper image…".into(),
+            value: "press enter to browse".into(),
         },
         Row {
             field: Field::Bell,
@@ -189,6 +214,73 @@ pub fn rows(config: &Config, recording: Option<Action>, notice: Option<&str>) ->
         });
     }
     rows
+}
+
+/// One choice on the wallpaper row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WallpaperChoice {
+    /// No picture.
+    Off,
+    /// The desktop's own wallpaper.
+    Desktop,
+    /// An explicit path from `config.json`.
+    Path(String),
+}
+
+impl WallpaperChoice {
+    fn label(&self) -> String {
+        match self {
+            Self::Off => "off".to_string(),
+            Self::Desktop => "desktop wallpaper".to_string(),
+            Self::Path(path) => std::path::Path::new(path)
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.clone()),
+        }
+    }
+}
+
+/// The wallpaper row's value, so the panel says what it will draw.
+fn wallpaper_label(config: &Config) -> String {
+    if !config.wallpaper.active() {
+        return WallpaperChoice::Off.label();
+    }
+    if config.wallpaper.follow_desktop {
+        return WallpaperChoice::Desktop.label();
+    }
+    WallpaperChoice::Path(config.wallpaper.path.trim().to_string()).label()
+}
+
+/// The wallpaper sources the row cycles through. The desktop option only
+/// exists where the OS can report its picture, so the row does not advertise a
+/// choice that would do nothing. An explicit path from `config.json` stays in
+/// the list, so cycling away from it can come back.
+fn wallpaper_choices(config: &Config) -> Vec<WallpaperChoice> {
+    let mut choices = vec![WallpaperChoice::Off];
+    if cfg!(target_os = "macos") {
+        choices.push(WallpaperChoice::Desktop);
+    }
+    let path = config.wallpaper.path.trim();
+    if !path.is_empty() {
+        choices.push(WallpaperChoice::Path(path.to_string()));
+    }
+    choices
+}
+
+/// Which choice the current config selects.
+fn wallpaper_index(config: &Config) -> i32 {
+    let choices = wallpaper_choices(config);
+    let current = if !config.wallpaper.active() {
+        WallpaperChoice::Off
+    } else if config.wallpaper.follow_desktop {
+        WallpaperChoice::Desktop
+    } else {
+        WallpaperChoice::Path(config.wallpaper.path.trim().to_string())
+    };
+    choices
+        .iter()
+        .position(|choice| *choice == current)
+        .unwrap_or(0) as i32
 }
 
 /// The palette name to show, defaulting the empty and unknown cases to the
@@ -337,6 +429,58 @@ pub fn adjust(config: &mut Config, field: Field, delta: i32) -> Change {
             config.opacity = opacity;
             Change::Opacity
         }
+        Field::Wallpaper => {
+            let choices = wallpaper_choices(config);
+            let index = wallpaper_index(config);
+            let next = (index + delta).rem_euclid(choices.len() as i32) as usize;
+            match &choices[next] {
+                WallpaperChoice::Off => {
+                    if !config.wallpaper.active() {
+                        return Change::None;
+                    }
+                    // Off is "draw nothing", not "forget the source": zeroing
+                    // the strength keeps the chosen picture in the cycle.
+                    config.wallpaper.opacity = 0;
+                    return Change::Wallpaper;
+                }
+                WallpaperChoice::Desktop => {
+                    if config.wallpaper.follow_desktop {
+                        return Change::None;
+                    }
+                    config.wallpaper.follow_desktop = true;
+                }
+                WallpaperChoice::Path(path) => {
+                    if !config.wallpaper.follow_desktop && config.wallpaper.path == *path {
+                        return Change::None;
+                    }
+                    config.wallpaper.follow_desktop = false;
+                    config.wallpaper.path = path.clone();
+                }
+            }
+            // Picking a source with no strength would draw nothing, so give it
+            // the legible default the first time. The check is on the source,
+            // not `active()`: a source at zero strength is still inactive.
+            let has_source = config.wallpaper.follow_desktop || !config.wallpaper.path.is_empty();
+            if has_source && config.wallpaper.opacity == 0 {
+                config.wallpaper.opacity = (DEFAULT_WALLPAPER_OPACITY * 100.0).round() as u8;
+            }
+            Change::Wallpaper
+        }
+        Field::WallpaperOpacity => {
+            // Steps of five percent, clamped to the range the docs promise.
+            let step = delta * 5;
+            let opacity = (i32::from(config.wallpaper.opacity) + step).clamp(0, 100);
+            let opacity = opacity as u8;
+            if opacity == config.wallpaper.opacity {
+                return Change::None;
+            }
+            config.wallpaper.opacity = opacity;
+            if config.wallpaper.active() {
+                Change::WallpaperOpacity
+            } else {
+                Change::Wallpaper
+            }
+        }
         Field::Bell => {
             const MODES: [BellMode; 3] = [BellMode::None, BellMode::Visual, BellMode::Audio];
             let index = MODES
@@ -397,6 +541,7 @@ pub fn adjust(config: &mut Config, field: Field, delta: i32) -> Change {
         | Field::ClaudeBypass
         | Field::CopyOnSelect
         | Field::ReinstallHooks
+        | Field::WallpaperChoose
         | Field::Shortcut(_) => Change::None,
     }
 }
@@ -446,13 +591,144 @@ mod tests {
     use super::*;
 
     #[test]
+    fn given_the_wallpaper_row_when_adjusted_then_it_cycles_the_sources() {
+        let mut config = Config::default();
+        assert_eq!(wallpaper_label(&config), "off");
+        // Off -> the desktop, where the platform can report one.
+        let change = adjust(&mut config, Field::Wallpaper, 1);
+        if cfg!(target_os = "macos") {
+            assert_eq!(change, Change::Wallpaper);
+            assert!(config.wallpaper.follow_desktop);
+            assert!(
+                config.wallpaper.opacity > 0,
+                "picking a source must give it a visible strength"
+            );
+            assert_eq!(wallpaper_label(&config), "desktop wallpaper");
+            // Back to off.
+            assert_eq!(adjust(&mut config, Field::Wallpaper, 1), Change::Wallpaper);
+        }
+        assert!(!config.wallpaper.active());
+        assert_eq!(wallpaper_label(&config), "off");
+    }
+
+    #[test]
+    fn given_the_wallpaper_strength_row_when_adjusted_then_it_steps_and_clamps() {
+        let mut config = Config::default();
+        config.wallpaper.path = "/tmp/w.png".into();
+        config.wallpaper.opacity = 10;
+        assert_eq!(
+            adjust(&mut config, Field::WallpaperOpacity, 1),
+            Change::WallpaperOpacity
+        );
+        assert_eq!(config.wallpaper.opacity, 15);
+        for _ in 0..30 {
+            adjust(&mut config, Field::WallpaperOpacity, -1);
+        }
+        assert_eq!(config.wallpaper.opacity, 0);
+        assert_eq!(
+            adjust(&mut config, Field::WallpaperOpacity, -1),
+            Change::None
+        );
+        // Raising it from zero back to visible re-reads the picture.
+        assert_eq!(
+            adjust(&mut config, Field::WallpaperOpacity, 1),
+            Change::WallpaperOpacity
+        );
+        config.wallpaper.path.clear();
+        assert_eq!(
+            adjust(&mut config, Field::WallpaperOpacity, 1),
+            Change::Wallpaper,
+            "with no source a strength change still needs the loader to look"
+        );
+    }
+
+    #[test]
+    fn given_a_configured_path_then_the_wallpaper_row_shows_its_name() {
+        let config = Config {
+            wallpaper: crate::config::Wallpaper {
+                path: "/Users/x/Pictures/peaks.jpg".into(),
+                follow_desktop: false,
+                opacity: 35,
+            },
+            ..Config::default()
+        };
+        assert_eq!(wallpaper_label(&config), "peaks.jpg");
+    }
+
+    #[test]
+    fn given_a_configured_path_then_cycling_keeps_it_reachable() {
+        // The row must not silently drop the explicit path when it cycles away:
+        // coming back around must land on it again.
+        let mut config = Config {
+            wallpaper: crate::config::Wallpaper {
+                path: "/tmp/peaks.jpg".into(),
+                follow_desktop: false,
+                opacity: 30,
+            },
+            ..Config::default()
+        };
+        let choices = wallpaper_choices(&config);
+        assert!(
+            choices.contains(&WallpaperChoice::Path("/tmp/peaks.jpg".into())),
+            "the configured path must stay in the cycle: {choices:?}"
+        );
+        // Cycle the full length of the list and confirm the path comes back.
+        let mut seen = Vec::new();
+        for _ in 0..choices.len() {
+            adjust(&mut config, Field::Wallpaper, 1);
+            seen.push(wallpaper_label(&config));
+        }
+        assert_eq!(
+            wallpaper_label(&config),
+            "peaks.jpg",
+            "the path was lost after a full cycle"
+        );
+        assert!(seen.iter().any(|label| label == "off"));
+    }
+
+    #[test]
+    fn given_the_wallpaper_rows_then_they_are_ordered_and_labelled() {
+        // The panel is the only way to reach the picker, so the rows' order and
+        // wording are part of the feature, not incidental.
+        let rows = rows(&Config::default(), None, None);
+        let labels: Vec<(&str, &str)> = rows
+            .iter()
+            .filter(|row| {
+                matches!(
+                    row.field,
+                    Field::Wallpaper | Field::WallpaperOpacity | Field::WallpaperChoose
+                )
+            })
+            .map(|row| (row.label.as_str(), row.value.as_str()))
+            .collect();
+        assert_eq!(
+            labels,
+            [
+                ("Wallpaper", "off"),
+                ("Wallpaper strength", "0%"),
+                ("Wallpaper image…", "press enter to browse"),
+            ]
+        );
+    }
+
+    #[test]
     fn given_the_settings_rows_when_built_then_every_action_has_a_row() {
         let config = Config::default();
         let rows = rows(&config, None, None);
-        assert_eq!(rows.len(), 16 + Action::ALL.len());
+        assert_eq!(rows.len(), 19 + Action::ALL.len());
         assert_eq!(rows[0].label, "Font");
         assert_eq!(rows[1].label, "Window font");
         assert_eq!(rows[2].label, "Font size");
+        let wallpaper = rows
+            .iter()
+            .find(|row| row.field == Field::Wallpaper)
+            .expect("the wallpaper row is in the panel");
+        assert_eq!(wallpaper.value, "off");
+        let strength = rows
+            .iter()
+            .find(|row| row.field == Field::WallpaperOpacity)
+            .expect("the strength row is in the panel");
+        assert_eq!(strength.value, "0%");
     }
 
     #[test]

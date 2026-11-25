@@ -14,6 +14,10 @@ pub const DEFAULT_FONT_SIZE: f32 = 14.0;
 pub const MIN_FONT_SIZE: f32 = 8.0;
 pub const MAX_FONT_SIZE: f32 = 72.0;
 pub const MIN_OPACITY: f32 = 0.3;
+/// How strongly a wallpaper shows through the terminal by default. Faded enough
+/// that text keeps its contrast: the theme background stays the dominant term
+/// in the blend, and the picture is what tints it.
+pub const DEFAULT_WALLPAPER_OPACITY: f32 = 0.30;
 pub const MIN_SIDEBAR_WIDTH: f64 = 180.0;
 pub const MAX_SIDEBAR_WIDTH: f64 = 360.0;
 
@@ -391,6 +395,9 @@ pub struct Config {
     pub theme: String,
     /// Window opacity, 0.3..=1.0. One is opaque.
     pub opacity: f32,
+    /// Image drawn behind the terminal: a path, or the desktop's own wallpaper
+    /// when `followDesktop`. Empty means no wallpaper.
+    pub wallpaper: Wallpaper,
     /// What a bell does. The default flashes the pane border.
     pub bell: BellMode,
     pub compact_sidebar: bool,
@@ -448,6 +455,7 @@ impl Default for Config {
             font_metrics: HashMap::new(),
             theme: String::new(),
             opacity: 1.0,
+            wallpaper: Wallpaper::default(),
             bell: BellMode::default(),
             compact_sidebar: false,
             close_exited_panes: true,
@@ -468,6 +476,58 @@ impl Default for Config {
             output_rules: Vec::new(),
             session_log: false,
             scrollback_restore: false,
+        }
+    }
+}
+
+/// How strongly the wallpaper shows through, and where it comes from.
+///
+/// The image is drawn under the terminal background rather than replacing it:
+/// the background keeps its own colour and the wallpaper is laid over it at
+/// `opacity`, so text sits on a dimmed version of the picture. That is what
+/// keeps glyph contrast when the picture is bright.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Wallpaper {
+    /// Explicit image path. Ignored when `follow_desktop` is set.
+    pub path: String,
+    /// Use the desktop's wallpaper (macOS) instead of a path.
+    pub follow_desktop: bool,
+    /// Strength as a percentage, 0..=100. Zero means off.
+    pub opacity: u8,
+}
+
+impl Wallpaper {
+    /// Whether a picture should be drawn at all.
+    pub fn active(&self) -> bool {
+        self.opacity > 0 && (self.follow_desktop || !self.path.trim().is_empty())
+    }
+
+    /// The blend strength as a unit alpha, `0.0..=1.0`.
+    pub fn alpha(&self) -> u8 {
+        ((u32::from(self.opacity.min(100)) * 255) / 100) as u8
+    }
+
+    /// The source identity the loader caches against: a change here means the
+    /// pixels must be re-read.
+    pub fn source(&self) -> Option<String> {
+        if !self.active() {
+            return None;
+        }
+        if self.follow_desktop {
+            Some("desktop".to_string())
+        } else {
+            Some(self.path.trim().to_string())
+        }
+    }
+
+    /// Adopt a file the picker returned. Choosing an image replaces the desktop
+    /// source, and a source at zero strength is raised to the visible default:
+    /// otherwise picking a file would look like the picker did nothing.
+    pub fn adopt(&mut self, path: &std::path::Path) {
+        self.follow_desktop = false;
+        self.path = path.to_string_lossy().into_owned();
+        if self.opacity == 0 {
+            self.opacity = (DEFAULT_WALLPAPER_OPACITY * 100.0).round() as u8;
         }
     }
 }
@@ -615,6 +675,9 @@ struct FileConfig {
     font_metrics: Option<HashMap<String, FaceMetrics>>,
     theme: Option<String>,
     opacity: Option<f32>,
+    wallpaper: Option<String>,
+    wallpaper_follow_desktop: Option<bool>,
+    wallpaper_opacity: Option<f32>,
     bell: Option<String>,
     compact_sidebar: Option<bool>,
     close_exited_panes: Option<bool>,
@@ -758,6 +821,31 @@ impl Config {
                 .filter(|value| value.is_finite())
                 .map(|value| value.clamp(MIN_OPACITY, 1.0))
                 .unwrap_or(defaults.opacity),
+            wallpaper: {
+                let path = file
+                    .wallpaper
+                    .map(|path| path.trim().to_string())
+                    .unwrap_or(defaults.wallpaper.path);
+                let follow_desktop = file
+                    .wallpaper_follow_desktop
+                    .unwrap_or(defaults.wallpaper.follow_desktop);
+                // The file takes a fraction, like Ghostty's
+                // `background-image-opacity`; the model keeps a percentage.
+                let opacity = match file.wallpaper_opacity {
+                    Some(value) => (value.clamp(0.0, 1.0) * 100.0).round() as u8,
+                    // Naming a wallpaper without a strength means "show it",
+                    // not "show it at the invisible default".
+                    None if follow_desktop || !path.is_empty() => {
+                        (DEFAULT_WALLPAPER_OPACITY * 100.0).round() as u8
+                    }
+                    None => defaults.wallpaper.opacity,
+                };
+                Wallpaper {
+                    path,
+                    follow_desktop,
+                    opacity,
+                }
+            },
             bell: file
                 .bell
                 .as_deref()
@@ -933,6 +1021,22 @@ impl Config {
             object.remove("opacity");
         }
         object.insert("bell".into(), serde_json::json!(self.bell.name()));
+        // Off is written explicitly so a wallpaper cleared in the panel does
+        // not come back on the next launch from a stale document.
+        if self.wallpaper.path.is_empty() {
+            object.remove("wallpaper");
+        } else {
+            object.insert("wallpaper".into(), serde_json::json!(self.wallpaper.path));
+        }
+        if self.wallpaper.follow_desktop {
+            object.insert("wallpaperFollowDesktop".into(), serde_json::json!(true));
+        } else {
+            object.remove("wallpaperFollowDesktop");
+        }
+        object.insert(
+            "wallpaperOpacity".into(),
+            serde_json::json!(f64::from(self.wallpaper.opacity) / 100.0),
+        );
         if self.font_family.is_empty() {
             // Picking the default must clear a family a previous save wrote.
             object.remove("fontFamily");
@@ -1627,6 +1731,106 @@ mod tests {
         );
         let _ = std::fs::remove_file(&path);
     }
+    #[test]
+    fn given_a_wallpaper_path_then_it_is_active_at_a_legible_strength() {
+        let config = Config::parse(r#"{"wallpaper": "/tmp/w.png"}"#).unwrap();
+        assert_eq!(config.wallpaper.path, "/tmp/w.png");
+        assert!(!config.wallpaper.follow_desktop);
+        assert!(config.wallpaper.active());
+        assert_eq!(
+            config.wallpaper.opacity,
+            (DEFAULT_WALLPAPER_OPACITY * 100.0).round() as u8,
+            "naming a wallpaper without a strength must still show it"
+        );
+    }
+
+    #[test]
+    fn given_no_wallpaper_key_then_nothing_is_drawn() {
+        let config = Config::default();
+        assert!(!config.wallpaper.active());
+        assert_eq!(config.wallpaper.source(), None);
+    }
+
+    #[test]
+    fn given_an_explicit_strength_then_it_is_kept_as_a_percentage() {
+        let config =
+            Config::parse(r#"{"wallpaper": "/tmp/w.png", "wallpaperOpacity": 0.55}"#).unwrap();
+        assert_eq!(config.wallpaper.opacity, 55);
+        assert_eq!(config.wallpaper.alpha(), 140, "0.55 as a unit alpha");
+
+        let clamped =
+            Config::parse(r#"{"wallpaper": "/tmp/w.png", "wallpaperOpacity": 9.0}"#).unwrap();
+        assert_eq!(clamped.wallpaper.opacity, 100);
+    }
+
+    #[test]
+    fn given_follow_desktop_then_the_source_is_the_desktop() {
+        let config = Config::parse(r#"{"wallpaperFollowDesktop": true}"#).unwrap();
+        assert!(config.wallpaper.follow_desktop);
+        assert!(config.wallpaper.active());
+        assert_eq!(config.wallpaper.source().as_deref(), Some("desktop"));
+    }
+
+    #[test]
+    fn given_a_zero_strength_then_the_wallpaper_is_off() {
+        let config =
+            Config::parse(r#"{"wallpaper": "/tmp/w.png", "wallpaperOpacity": 0.0}"#).unwrap();
+        assert!(!config.wallpaper.active());
+        assert_eq!(config.wallpaper.source(), None);
+    }
+
+    #[test]
+    fn given_a_wallpaper_when_saved_then_it_round_trips() {
+        let path = temp_path("wallpaper");
+        let mut config = Config::parse(r#"{"wallpaper": "/tmp/w.png"}"#).unwrap();
+        config.wallpaper.opacity = 40;
+        config.save_to(&path).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved["wallpaper"], "/tmp/w.png");
+        assert!((saved["wallpaperOpacity"].as_f64().expect("fraction") - 0.40).abs() < 1e-6);
+
+        // Turning it off must clear the key rather than leave a stale path.
+        config.wallpaper = crate::config::Wallpaper::default();
+        config.save_to(&path).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(
+            saved.get("wallpaper").is_none(),
+            "off must not write a path"
+        );
+        assert!(saved.get("wallpaperFollowDesktop").is_none());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn given_a_picked_file_then_it_replaces_the_desktop_source_and_shows() {
+        let mut wallpaper = crate::config::Wallpaper {
+            follow_desktop: true,
+            path: String::new(),
+            opacity: 0,
+        };
+        wallpaper.adopt(std::path::Path::new("/tmp/chosen.jpg"));
+        assert_eq!(wallpaper.path, "/tmp/chosen.jpg");
+        assert!(
+            !wallpaper.follow_desktop,
+            "an explicit file must replace the desktop source"
+        );
+        assert!(wallpaper.active(), "picking a file must make it visible");
+        assert!(wallpaper.opacity > 0);
+    }
+
+    #[test]
+    fn given_a_picked_file_when_a_strength_is_set_then_it_is_kept() {
+        let mut wallpaper = crate::config::Wallpaper {
+            follow_desktop: false,
+            path: String::new(),
+            opacity: 70,
+        };
+        wallpaper.adopt(std::path::Path::new("/tmp/chosen.png"));
+        assert_eq!(wallpaper.opacity, 70, "an explicit strength must survive");
+    }
+
     #[test]
     fn given_profiles_in_config_then_they_parse_into_launches() {
         let config = Config::parse(

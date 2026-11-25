@@ -34,6 +34,16 @@ app itself has the gaps listed in
   the window on macOS. The terminal's 16-colour ANSI table is still fixed, and the
   portable window cannot blur what is behind it: its software renderer writes opaque
   pixels, so `backgroundBlur` applies only to the AppKit shell.
+- **Wallpaper is composited, not transparent.** `wallpaper` / `wallpaperFollowDesktop`
+  draw a picture behind the terminal in the portable window by blending it over the
+  theme background; the AppKit shell leaves this to Ghostty's `background-image`. The
+  picture covers the whole window, so a split shows one continuous image instead of a
+  copy per pane, and chrome (sidebar, tab strips, menus) stays solid. Settings →
+  **Wallpaper image…** opens the platform picker, so no config editing is needed.
+  Following the *desktop's* wallpaper is macOS-only (`NSWorkspace`); Linux and Windows
+  have no portable API for it, so there the explicit path or the picker is the way in.
+  Blend strength is the only tuning: there is no per-pane image, fit mode, position or
+  repeat key yet.
 - **Text effects stop short of per-cell fonts.** Strikethrough, underline colour, single,
   double, curly, dotted and dashed underlines, and blink are in. There is no per-cell
   font change. Hyperlinks open only http(s), mailto, ftp(s) and local paths; other

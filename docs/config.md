@@ -31,6 +31,9 @@ socket mode is read at launch.
   "fontMetrics": {"MesloLGS NF": {"width": 9, "height": 20}},
   "theme": "berth-dark",
   "opacity": 1.0,
+  "wallpaperFollowDesktop": false,
+  "wallpaper": "/Users/me/Pictures/peaks.jpg",
+  "wallpaperOpacity": 0.3,
   "backgroundBlur": 0,
   "bell": "visual",
   "compactSidebar": false,
@@ -115,6 +118,21 @@ style are shaped as one string, so a face with `calt`/`liga` draws them.
   when it is set.
   The portable renderer writes opaque pixels, so it cannot show what is behind the
   window and ignores the key.
+- `wallpaper` is an image path drawn behind the terminal. `wallpaperFollowDesktop`
+  (`true`/`false`) uses the desktop's own wallpaper instead — on macOS that is read
+  from `NSWorkspace`, so it follows whatever the system is set to, including a
+  rotation. PNG and JPEG both decode. Only the portable window draws it; the AppKit
+  shell ignores these keys. Settings → **Wallpaper** cycles off / desktop / the
+  configured path, and **Wallpaper image…** opens the system file picker
+  (`NSOpenPanel`, the XDG desktop portal, or `IFileDialog`) and adopts the choice.
+  The picker offers only what the decoder can read; picking a file always turns the
+  wallpaper on, so the result is visible immediately.
+- `wallpaperOpacity` is how strongly the picture shows through, `0.0…1.0` (a
+  fraction, like Ghostty's `background-image-opacity`); `0` is off. The default when
+  a source is named is `0.3`. The picture is composited *over* the theme background
+  rather than replacing it, so the theme colour stays the dominant term and text
+  keeps its contrast; a cell that sets its own background still paints it. Settings
+  → **Wallpaper strength** steps it 5% at a time.
 - `zoomIn`, `zoomOut` and `zoomReset` are ordinary shortcuts: they step the font
   size by one point, and reset returns to the configured `fontSize`. Zoom lasts for
   the session and writes nothing, so a relaunch starts at `fontSize`. The defaults
