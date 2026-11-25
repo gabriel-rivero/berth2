@@ -41,6 +41,7 @@ mod config;
 mod console;
 mod copymode;
 mod desktop;
+mod drop;
 mod font;
 mod git;
 mod keys;
@@ -510,6 +511,7 @@ fn main() {
             (false, _) => session_log::SessionLog::disabled(),
         },
         logged: HashMap::new(),
+        dropped: Vec::new(),
     };
 
     if let Err(error) = event_loop.run_app(&mut app) {
@@ -746,6 +748,9 @@ enum Drag {
         start_x: f64,
         start_width: f64,
     },
+    /// A file is hovering over the window. winit reports each file
+    /// separately, so this only marks the drop target for the frame.
+    FileDrop,
     /// A tab being dragged along its strip.
     Tab {
         surface_id: String,
@@ -892,6 +897,8 @@ struct Gui {
     output_rules: output_rules::Rules,
     /// Per-pane session logs, when `sessionLog` is on.
     session_log: session_log::SessionLog,
+    /// Paths dropped since the last frame, typed together as one command line.
+    dropped: Vec<String>,
     /// How much of each pane has been written to its log, so output already
     /// logged is not written twice.
     logged: HashMap<String, usize>,
@@ -1102,6 +1109,22 @@ impl ApplicationHandler<UserEvent> for Gui {
                 self.request_redraw();
             }
             WindowEvent::MouseWheel { delta, .. } => self.wheel(delta),
+            // A drop types the paths into the pane under the pointer, the way
+            // a user would: there is no way to hand a file to the program.
+            WindowEvent::HoveredFile(_) => {
+                self.drag = Drag::FileDrop;
+                self.request_redraw();
+            }
+            WindowEvent::HoveredFileCancelled => {
+                if matches!(self.drag, Drag::FileDrop) {
+                    self.drag = Drag::None;
+                }
+                self.request_redraw();
+            }
+            WindowEvent::DroppedFile(path) => {
+                self.drag = Drag::None;
+                self.queue_drop(path);
+            }
             WindowEvent::KeyboardInput { event, .. } => match event.state {
                 ElementState::Pressed => self.key(event),
                 ElementState::Released => self.key_release(event),
@@ -2150,6 +2173,9 @@ impl Gui {
         };
         self.poll_meta();
         self.poll_exits();
+        // Typed after the meta poll so a drop is not lost to a state refresh,
+        // and before the frame so the text lands with this redraw.
+        self.flush_drops();
         let PhysicalSize { width, height } = window.inner_size();
         let (width, height) = (width as usize, height as usize);
         if width == 0 || height == 0 {
@@ -2292,6 +2318,17 @@ impl Gui {
             }
             let blink_on = self.blink_on();
             let now = Instant::now();
+            let drop_target = if matches!(self.drag, Drag::FileDrop) {
+                let point = (
+                    self.pointer.0.max(0.0) as usize,
+                    self.pointer.1.max(0.0) as usize,
+                );
+                ui::pane_at(&panes, point.0, point.1)
+                    .and_then(|pane| pane.surface.clone())
+                    .or_else(|| self.active_surface())
+            } else {
+                None
+            };
             for pane in &panes {
                 let border = if pane.focused {
                     theme.pane_border_focused
@@ -2301,6 +2338,13 @@ impl Gui {
                 painter.stroke(pane.rect, border);
                 if pane.attention_flash {
                     painter.stroke(pane.rect, theme.attention_input);
+                }
+                // Show where a hovering drop would land: the whole window is a
+                // target, but the path is typed into one pane.
+                if matches!(self.drag, Drag::FileDrop)
+                    && pane.surface.as_deref() == drop_target.as_deref()
+                {
+                    painter.stroke(pane.rect, theme.accent);
                 }
                 painter.fill(pane.content, theme.terminal_bg);
                 let font = self.chrome_font();
@@ -2952,6 +2996,11 @@ impl Gui {
     }
 
     fn mouse_pressed(&mut self, button: MouseButton) {
+        // A drag can end without `HoveredFileCancelled` (the platform does not
+        // guarantee it), and a stuck hover would swallow every later drag.
+        if matches!(self.drag, Drag::FileDrop) {
+            self.drag = Drag::None;
+        }
         let point = (
             self.pointer.0.max(0.0) as usize,
             self.pointer.1.max(0.0) as usize,
@@ -3429,6 +3478,9 @@ impl Gui {
             self.pointer.1.max(0.0) as usize,
         );
         match &self.drag {
+            // A hovering file is a drop target, not a drag gesture: the cursor
+            // moves but nothing follows the pointer.
+            Drag::FileDrop => {}
             Drag::None => {
                 if self.selection.values().any(|selection| selection.dragging) {
                     let nav = self.nav();
@@ -3495,6 +3547,105 @@ impl Gui {
                 self.request_redraw();
             }
         }
+    }
+
+    /// Collect a dropped path. winit reports one event per file, so the batch
+    /// is drained on the next tick: one command line, one focus change, one
+    /// redraw, instead of a dispatch per file.
+    fn queue_drop(&mut self, path: std::path::PathBuf) {
+        self.dropped.push(path.to_string_lossy().into_owned());
+        self.request_redraw();
+    }
+
+    /// Type the queued paths into the pane the drop landed on, quoted for the
+    /// shell that will read them.
+    fn flush_drops(&mut self) {
+        if self.dropped.is_empty() {
+            return;
+        }
+        let paths = std::mem::take(&mut self.dropped);
+        // A drop is text input, so it obeys the same modal gates as a key: an
+        // overlay or copy mode is waiting for a decision, and typing into the
+        // shell behind it (or resetting scroll under copy mode's absolute
+        // cursor) would be wrong.
+        if self.overlay.is_some() || self.copy_mode.is_some() || self.sidebar_filter_active {
+            return;
+        }
+        let point = (
+            self.pointer.0.max(0.0) as usize,
+            self.pointer.1.max(0.0) as usize,
+        );
+        let surface_id = self.pane_under(point).or_else(|| self.active_surface());
+        let Some(surface_id) = surface_id else {
+            return;
+        };
+        // The shell that will read the text decides the quoting; a WSL pane on
+        // Windows wants POSIX quoting, so the program is asked, not the host.
+        let program = lock(&self.state)
+            .surface(&surface_id)
+            .and_then(|surface| surface.argv.first().cloned())
+            .unwrap_or_default();
+        let syntax = drop::Syntax::for_program(&program, cfg!(windows));
+        let text = drop::drop_text(&paths, syntax);
+        if text.is_empty() {
+            // Every path was untypable (a control character in the name).
+            log::line(&format!("drop: refused {} unsafe path(s)", paths.len()));
+            return;
+        }
+        // A full-screen program has no line editor: in vim normal mode a
+        // quoted path is a sequence of commands, so typing it corrupts the
+        // buffer. Refuse rather than guess.
+        if self
+            .host
+            .screen_view(&surface_id)
+            .map(|view| view.alternate_screen)
+            .unwrap_or(false)
+        {
+            log::line(&format!(
+                "drop: {surface_id} is running a full-screen program"
+            ));
+            return;
+        }
+        // A bracketed paste makes the line editor insert the bytes literally,
+        // which is the only thing that survives a path containing a character
+        // the editor would otherwise act on.
+        let bracketed = self
+            .host
+            .screen_view(&surface_id)
+            .map(|view| view.bracketed_paste)
+            .unwrap_or(false);
+        let payload = if bracketed {
+            format!("\x1b[200~{text}\x1b[201~")
+        } else {
+            text
+        };
+        if let Err(error) = self.host.send_text(&surface_id, &payload) {
+            eprintln!("berth-gui: drop: {error}");
+            return;
+        }
+        if self.active_surface().as_deref() != Some(surface_id.as_str()) {
+            self.activate(&surface_id);
+        }
+        self.reset_scroll(&surface_id);
+        self.request_redraw();
+    }
+
+    /// The surface of the pane containing `point`, if any.
+    fn pane_under(&mut self, point: (usize, usize)) -> Option<String> {
+        let nav = self.nav();
+        let panes = {
+            let state = lock(&self.state);
+            ui::build_panes(
+                &state,
+                nav.area,
+                nav.cell.height,
+                nav.tab_height,
+                None,
+                self.pane_options(),
+            )
+            .0
+        };
+        ui::pane_at(&panes, point.0, point.1)?.surface.clone()
     }
 
     fn wheel(&mut self, delta: MouseScrollDelta) {

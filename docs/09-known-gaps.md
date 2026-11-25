@@ -61,7 +61,10 @@ app itself has the gaps listed in
   There is one placement, not one dropdown per display. On a pure-Wayland session the
   OS-wide chord is silently unavailable (the backend is X11-only) and the menu or
   `quickTerminal` chord is the only way in.
-- **No file drops.** Tab, workspace and divider drags are internal; a file or folder
+- **File drops are portable-only.** Dropping a file on a pane types its quoted path, with
+  the quoting chosen per shell; the AppKit shell does not accept a dropped file yet. The
+  target pane comes from the last pointer position, which winit does not update during a
+  native drag, so releasing over a second pane can type into the first. Tab, workspace and divider drags are internal; a file or folder
   dropped on a pane does nothing.
 - **Right-to-left text is shaped in terminal panes only.** Sidebar rows, tab
   labels and panel text still draw one character at a time, so an RTL workspace

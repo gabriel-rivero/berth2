@@ -72,6 +72,15 @@
   would push the next one down a row and leave a gap. A full-screen program's screen is
   not saved, and the copy is consumed by the replay so `clear` or a restart cannot bring
   it back. Off by default.
+- **File drops.** Dropping a file or folder on a pane types its path, quoted for the
+  shell that will read it — POSIX single quotes, PowerShell's literal form, or `cmd`
+  double quotes, chosen from the pane's program so a WSL pane on Windows gets POSIX.
+  Several files become one command line, and the target pane is outlined while a file
+  hovers. Shell quoting alone is not enough, because the text reaches the line editor
+  before any shell: a filename containing `^U`, `DEL` or `ESC [ A` can erase the opening
+  quote or recall a command, so those paths are refused, the text is wrapped in a
+  bracketed paste where the program asked for one, and a drop is refused into a
+  full-screen program, where a path is a sequence of editor commands.
 - **Find in the AppKit shell.** `Cmd+F` opens a find bar over the focused terminal,
   backed by Ghostty's own incremental search: it shows the current and total match,
   `Enter` steps forward, `Shift+Enter` back, and `Esc` closes it and returns focus to

@@ -197,6 +197,9 @@ Goal: the prompt becomes a place in the buffer, not a string in a stream.
   replayed with CRLF per line and skipped for alternate-screen programs; the saved copy
   is consumed by the replay.
 - **File drops**: dropping files and folders on a pane types their quoted paths.
+  **Landed in 0.17.0** for the portable window, with per-shell quoting, batching and
+  bracketed paste; paths with control characters and drops into full-screen programs are
+  refused rather than typed wrong.
 - **Palette depth**: workspace, tab and group commands, and a palette that indexes the
   new actions.
 
@@ -377,6 +380,9 @@ The 0.17 items that shipped partially, recorded so they are decisions and not ov
 | Paste history is portable-only; the AppKit shell ignores the key and `Cmd+Shift+V` pastes through Ghostty | 1.0 AppKit parity |
 | Profiles and commands are offered in the portable palette only; the AppKit palette does not index them | 1.0 AppKit parity |
 | Recent-choice ranking for profiles is implemented in the core but no shell records picks into it | 0.18 |
+| File drops are portable-only; the AppKit shell does not accept a dropped file yet | 1.0 AppKit parity |
+| A drop uses the last pointer position, which winit freezes during a native drag, so a multi-pane release can target the wrong pane | 0.18 |
+| `cmd` cannot escape `"` or `%` inside a path, so such a path is emitted without the quote and `%` is left unexpanded | 0.18 |
 | Scrollback restore is portable-only and captured at clean exit, so a crash restores the previous screen or none | 1.0 AppKit parity |
 | Output rules and session logging are portable-only; the AppKit shell reads neither key | 1.0 AppKit parity |
 | Output rules tint a row but cannot match across a wrapped line, and cannot rewrite text (no capture-group substitution) | 0.18 |

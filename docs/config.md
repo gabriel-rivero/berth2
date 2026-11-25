@@ -240,6 +240,21 @@ default: unlike the clipboard, a log outlives the session, and session output
 can contain a token. One file rotates to `.log.1` at 8 MiB, and logs are closed
 when their pane closes.
 
+## File drops
+
+Dropping a file or folder on a pane types its path, quoted for the shell that will
+read it: POSIX single quotes for `sh`/`bash`/`zsh`/`fish` (and a WSL pane on
+Windows), PowerShell's single-quoted literal form for `pwsh`, and double quotes
+for `cmd`. The quoting is chosen from the pane's program rather than the host OS.
+Several files dropped at once become one space-separated command line with a
+trailing space, and the pane under the pointer is highlighted while a file hovers.
+
+Two things are refused rather than typed wrong: a path containing a control
+character (the line editor acts on those before the shell sees the quotes, so
+`^U` would erase the opening quote), and a drop into a full-screen program (in
+vim normal mode a path is a sequence of commands). When the program enabled
+bracketed paste, the text is wrapped so the line editor inserts it literally.
+
 ## Scrollback restore
 
 `scrollbackRestore` keeps each pane's last visible screen in the session file and
