@@ -409,6 +409,10 @@ pub struct Surface {
     pub bell_count: u32,
     #[serde(default)]
     pub agent_id: Option<String>,
+    /// The last screen as plain text, kept when scrollback restore is on so a
+    /// relaunch can replay it. Capped and opt-in; empty otherwise.
+    #[serde(default)]
+    pub restore_text: Option<String>,
     /// The command this surface was launched with, replayed by
     /// `surface.restart`/`surface.duplicate` and by restore.
     #[serde(default)]

@@ -264,6 +264,7 @@ fn given_a_default_shell_when_a_plain_terminal_spawns_then_it_runs_that_program(
         env: vec![("BERTH_SURFACE_ID".into(), surface_id.clone())],
         cols: 80,
         rows: 24,
+        restore_text: None,
     })
     .expect("spawn with the configured shell");
 
@@ -303,6 +304,7 @@ fn given_synchronized_output_from_a_pty_then_the_screen_view_reports_it() {
         env: vec![("BERTH_SURFACE_ID".into(), surface_id.clone())],
         cols: 80,
         rows: 24,
+        restore_text: None,
     })
     .expect("spawn a writer of DECSET 2026");
 
@@ -341,6 +343,7 @@ fn given_kitty_flags_when_a_key_is_sent_then_the_csi_u_form_reaches_the_pty() {
         env: vec![("BERTH_SURFACE_ID".into(), surface_id.clone())],
         cols: 80,
         rows: 24,
+        restore_text: None,
     })
     .expect("spawn a program that enables the kitty flags");
 
@@ -396,6 +399,7 @@ fn given_a_kitty_keyboard_query_then_the_flags_are_answered_on_the_pty() {
         env: vec![("BERTH_SURFACE_ID".into(), surface_id.clone())],
         cols: 80,
         rows: 24,
+        restore_text: None,
     })
     .expect("spawn a program that queries the keyboard protocol");
 
@@ -437,6 +441,7 @@ fn given_styled_text_and_a_hyperlink_then_the_screen_view_carries_them() {
         env: vec![("BERTH_SURFACE_ID".into(), surface_id.clone())],
         cols: 80,
         rows: 24,
+        restore_text: None,
     })
     .expect("spawn a writer of styled text");
 
@@ -490,6 +495,7 @@ fn given_osc_133_prompt_marks_then_the_screen_view_reports_them() {
         env: vec![("BERTH_SURFACE_ID".into(), surface_id.clone())],
         cols: 80,
         rows: 24,
+        restore_text: None,
     })
     .expect("spawn a program that marks its prompt");
 
@@ -521,6 +527,58 @@ fn given_osc_133_prompt_marks_then_the_screen_view_reports_them() {
     }
 }
 
+/// A restored pane replays its saved screen before the program writes, and each
+/// restored line starts at the margin.
+#[cfg(unix)]
+#[test]
+fn given_a_restore_text_then_the_screen_shows_it_before_the_program_runs() {
+    use berth_core::SpawnRequest;
+
+    let host = PtyHost::new();
+    let surface_id = format!("surf-restore-text-{}", std::process::id());
+    host.spawn(SpawnRequest {
+        cwd: None,
+        // A program that prints nothing, so only the replay can be on screen.
+        argv: vec!["/bin/sh".into(), "-c".into(), "sleep 2".into()],
+        env: vec![("BERTH_SURFACE_ID".into(), surface_id.clone())],
+        // Narrow and full-width on purpose: a bare `\n` after a line that
+        // fills the width wraps to the next row and leaves a blank one, which
+        // a short first line would not catch.
+        cols: 20,
+        rows: 8,
+        restore_text: Some(format!("{}\r\nsecond\r\n", "x".repeat(20))),
+    })
+    .expect("spawn with a restore text");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let view = host.screen_view(&surface_id).expect("screen view");
+        let row = |index: usize| -> String {
+            let start = index * usize::from(view.cols);
+            view.cells[start..start + usize::from(view.cols)]
+                .iter()
+                .map(|cell| cell.contents.as_str())
+                .collect()
+        };
+        if row(0).starts_with("xxx") {
+            // A bare `\n` after a full-width line advances two rows, so the
+            // restored second line would land on row 2 with row 1 blank.
+            assert!(
+                row(1).starts_with("second"),
+                "the second restored line landed on the wrong row: {:?}",
+                row(1)
+            );
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the restore text never reached the screen: {:?}",
+            row(0)
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 /// DECSCUSR, CSI ?1004 and OSC 52 read requests must survive the PTY reader.
 #[cfg(unix)]
 #[test]
@@ -540,6 +598,7 @@ fn given_cursor_focus_and_clipboard_requests_then_the_screen_view_reports_them()
         env: vec![("BERTH_SURFACE_ID".into(), surface_id.clone())],
         cols: 80,
         rows: 24,
+        restore_text: None,
     })
     .expect("spawn a writer of cursor and focus modes");
 
@@ -582,6 +641,7 @@ fn given_blinking_text_then_the_screen_view_marks_the_cell() {
         env: vec![("BERTH_SURFACE_ID".into(), surface_id.clone())],
         cols: 80,
         rows: 24,
+        restore_text: None,
     })
     .expect("spawn a writer of SGR 5");
 
@@ -619,6 +679,7 @@ fn given_wrapped_output_when_the_surface_narrows_then_no_character_is_lost() {
         env: vec![("BERTH_SURFACE_ID".into(), surface_id.clone())],
         cols: 80,
         rows: 24,
+        restore_text: None,
     })
     .expect("spawn a writer of a long line");
 

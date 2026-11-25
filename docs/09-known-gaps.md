@@ -145,7 +145,10 @@ app itself has the gaps listed in
 
 ### Session and lifecycle
 
-- **No scrollback restore.** A relaunch respawns each terminal from its saved cwd and
+- **Scrollback restore is opt-in and clean-exit only.** `scrollbackRestore` saves each
+  pane's screen (capped at 64 KiB) and replays it; the capture runs on a clean exit, so a
+  crash restores the previous screen or none. The AppKit shell does not read the key.
+- **A relaunch respawns each terminal from its saved cwd and
   argv; the buffer it had on screen is gone.
 - **Autosave is debounced.** A change is written 500 ms after the last event, and
   the same snapshot is appended to `journal.ndjson` (five kept). A crash inside

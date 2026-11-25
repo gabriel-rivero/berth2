@@ -285,6 +285,7 @@ fn handle(
                             env: launch.env_pairs(),
                             cols: 80,
                             rows: 24,
+                            restore_text: None,
                         },
                         ops,
                         p.focus.unwrap_or(true),
@@ -297,6 +298,14 @@ fn handle(
                     format!("unknown launch kind {other:?}: expected tab or workspace"),
                 )),
             }
+        }
+        // A shell reads back a pane's screen text and hands it here before a
+        // session save, so a relaunch can replay it. Off by default: the shell
+        // only calls this when `scrollbackRestore` is on.
+        "surface.remember_screen" => {
+            let p: RememberScreen = params(raw)?;
+            crate::store::remember_screen(state, &p.surface_id, &p.text)?;
+            Ok(json!({}))
         }
         // Save the selected workspace's tree under a name, and open it again.
         "layout.save" => {
@@ -641,6 +650,7 @@ fn handle(
                     env: p.env.unwrap_or_default(),
                     cols: 80,
                     rows: 24,
+                    restore_text: None,
                 },
                 ops,
                 p.focus.unwrap_or(true),
@@ -681,6 +691,7 @@ fn handle(
                     env: vec![],
                     cols: 80,
                     rows: 24,
+                    restore_text: None,
                 },
                 p.focus.unwrap_or(true),
                 ops,
@@ -845,6 +856,7 @@ fn handle(
                     env,
                     cols: surface.cols.max(80),
                     rows: surface.rows.max(24),
+                    restore_text: None,
                 },
                 ops,
                 p.focus.unwrap_or(false),
@@ -1022,6 +1034,7 @@ fn handle(
                     env: vec![],
                     cols: 80,
                     rows: 24,
+                    restore_text: None,
                 },
                 ops,
                 true,
@@ -1434,6 +1447,7 @@ fn respawn_surface(
             env,
             cols: surface.cols.max(80),
             rows: surface.rows.max(24),
+            restore_text: None,
         })
         .map_err(|e| CoreError::new(e.code, format!("restart failed: {}", e.message)))?;
     if let Some(s) = state.surface_mut(&surface.id) {
@@ -1588,6 +1602,11 @@ struct SurfaceList {
     workspace_id: Option<String>,
     #[serde(default)]
     pane_id: Option<String>,
+}
+#[derive(Debug, Deserialize)]
+struct RememberScreen {
+    surface_id: String,
+    text: String,
 }
 #[derive(Debug, Deserialize)]
 struct LaunchOpen {
@@ -1815,6 +1834,7 @@ pub const METHODS: &[&str] = &[
     "window.select",
     "window.update",
     "window.close",
+    "surface.remember_screen",
     "launch.configure",
     "launch.list",
     "launch.open",
@@ -2158,6 +2178,41 @@ mod tests {
             commands: Vec::new(),
         };
         assert!(set.validate().is_err());
+    }
+
+    #[test]
+    fn given_a_remembered_screen_then_a_restart_does_not_replay_it() {
+        let mut st = AppState::default();
+        call(&mut st, "workspace.create", json!({"name": "shell"}));
+        let surface_id = first_surface(&mut st);
+        crate::store::remember_screen(&mut st, &surface_id, "stale screen")
+            .expect("a known surface");
+
+        // A restart is a clean slate: it must not flash the previous screen.
+        st.surface_mut(&surface_id).unwrap().restore_text = None;
+        call(
+            &mut st,
+            "surface.restart",
+            json!({"surface_id": surface_id}),
+        );
+        assert!(
+            st.surface(&surface_id).unwrap().restore_text.is_none(),
+            "a restart kept the old screen"
+        );
+    }
+
+    #[test]
+    fn given_an_unknown_surface_then_remembering_a_screen_is_not_found() {
+        let mut st = AppState::default();
+        let r = dispatch(
+            &mut st,
+            &NullOps,
+            &req(
+                "surface.remember_screen",
+                json!({"surface_id": "srf_nope", "text": "x"}),
+            ),
+        );
+        assert!(!r.ok);
     }
 
     #[test]

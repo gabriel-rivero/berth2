@@ -137,6 +137,9 @@ pub struct ScreenView {
     pub is_focus_reporting_enabled: bool,
     /// OSC 133/633 prompt marks in the visible window, oldest line first.
     pub prompt_marks: Vec<prompt::PromptMark>,
+    /// Whether a full-screen program (an editor, a pager) owns the screen. Its
+    /// contents are stale the moment it starts, so they are not restored.
+    pub alternate_screen: bool,
 }
 
 /// How much pointer traffic the program wants. Mirrors `vt100`.
@@ -748,6 +751,7 @@ impl PtyHost {
             kitty_keyboard_flags,
             cursor_style,
             is_focus_reporting_enabled: focus,
+            alternate_screen: engine.alternate_screen(),
             prompt_marks: {
                 let marks = lock(&surface.prompts);
                 marks.visible(
@@ -1011,6 +1015,12 @@ impl SurfaceOps for PtyHost {
             Arc::clone(&meta),
             Arc::clone(&images),
         )));
+        // Replay a restored screen before the program writes anything, so the
+        // pane shows what it was left on and the shell's first prompt pushes it
+        // up into scrollback. The text is plain, so no escapes are involved.
+        if let Some(text) = req.restore_text.as_deref().filter(|t| !t.is_empty()) {
+            lock(&screen).process(text.as_bytes());
+        }
         let alive = Arc::new(AtomicBool::new(true));
 
         spawn_reader(

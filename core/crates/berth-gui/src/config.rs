@@ -427,6 +427,9 @@ pub struct Config {
     pub output_rules: Vec<OutputRule>,
     /// Write each pane's output to a file under the log directory.
     pub session_log: bool,
+    /// Keep each pane's last screen in the session file and replay it on
+    /// restore. Off by default: the text is a copy of program output.
+    pub scrollback_restore: bool,
 }
 
 impl Default for Config {
@@ -460,6 +463,7 @@ impl Default for Config {
             launches: berth_core::launch::Launches::default(),
             output_rules: Vec::new(),
             session_log: false,
+            scrollback_restore: false,
         }
     }
 }
@@ -624,6 +628,7 @@ struct FileConfig {
     /// Named launch presets and one-shot commands.
     output_rules: Option<Vec<OutputRule>>,
     session_log: Option<bool>,
+    scrollback_restore: Option<bool>,
     profiles: Option<Vec<berth_core::launch::Launch>>,
     commands: Option<Vec<berth_core::launch::Launch>>,
     quick_hotkey: Option<String>,
@@ -782,6 +787,9 @@ impl Config {
             launches: launches_from(file.profiles, file.commands),
             output_rules: file.output_rules.unwrap_or_default(),
             session_log: file.session_log.unwrap_or(defaults.session_log),
+            scrollback_restore: file
+                .scrollback_restore
+                .unwrap_or(defaults.scrollback_restore),
             quick: crate::quick::Options::from_config(
                 file.quick_hotkey.as_deref(),
                 file.quick_placement.as_deref(),

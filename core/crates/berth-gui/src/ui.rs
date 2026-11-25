@@ -913,6 +913,7 @@ mod tests {
             agent_id: None,
             argv: Vec::new(),
             env: Vec::new(),
+            restore_text: None,
             created_ms: 0,
         }
     }

@@ -784,6 +784,7 @@ impl AppState {
             env,
             cols: 80,
             rows: 24,
+            restore_text: None,
         };
         req.env
             .push(("BERTH_SURFACE_ID".into(), surface_id.clone()));
@@ -822,6 +823,7 @@ impl AppState {
             agent_id: None,
             argv: launch_argv,
             env: launch_env,
+            restore_text: None,
             created_ms: time::now_ms(),
         };
 

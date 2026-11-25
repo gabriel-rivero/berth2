@@ -86,6 +86,11 @@ Event:
 
 `Window` is `{id, name, created_ms, bounds?, monitor?, sidebar_width?, active_workspace?, active_surface?, broadcast, kind}`. `kind` is `main` (an ordinary window with a sidebar) or `quick` (the dropdown, which never appears in the session file). `bounds` is `{x, y, width, height, maximized, scale}`. `Workspace.window_id` names the window that shows it; `AppState.selected_window` names the focused one. The top-level `selected_workspace`/`selected_surface` mirror the selected window so older clients keep working.
 
+### surface (screen capture)
+| method | params | result |
+| --- | --- | --- |
+| `surface.remember_screen` | `{surface_id, text}` | `{}` — stores the pane's visible screen for the next launch, capped at 64 KiB and replayed with CRLF per line. The saved copy is consumed by the replay. Off unless the shell decides to capture (`scrollbackRestore`). |
+
 ### launch and layout
 | method | params | result |
 | --- | --- | --- |

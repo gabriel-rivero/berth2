@@ -240,6 +240,22 @@ default: unlike the clipboard, a log outlives the session, and session output
 can contain a token. One file rotates to `.log.1` at 8 MiB, and logs are closed
 when their pane closes.
 
+## Scrollback restore
+
+`scrollbackRestore` keeps each pane's last visible screen in the session file and
+replays it into the pane on the next launch, so a relaunch shows the screen you
+left instead of only the cwd. It is off by default: the saved text is a copy of
+program output, which can contain a token.
+
+The text is capped at 64 KiB per pane, plain (no colours or attributes), and
+replayed with a carriage return per line so the screen does not staircase. A
+full-screen program's screen (an editor, a pager) is not saved, because it
+redraws on start and a replay would flash over it. The saved copy is consumed by
+the replay, so `clear`, a restart, or a crash cannot bring an old screen back.
+
+The portable window captures screens on a clean exit (quit, Ctrl-C, SIGTERM);
+the AppKit shell does not read this key yet.
+
 ## Profiles and commands
 
 `profiles` and `commands` are named launches. A profile is offered when a tab or

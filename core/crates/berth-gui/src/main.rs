@@ -6130,10 +6130,47 @@ impl Gui {
         }
     }
 
+    /// Hand each pane's visible text to the core so the next launch can replay
+    /// it. Only when `scrollbackRestore` is on: the text is a copy of program
+    /// output, and most sessions do not want one on disk.
+    fn capture_screens(&mut self) {
+        if !self.config.scrollback_restore {
+            return;
+        }
+        let surfaces: Vec<String> = lock(&self.state)
+            .surfaces
+            .iter()
+            .filter(|(_, surface)| surface.pid.is_some())
+            .map(|(id, _)| id.clone())
+            .collect();
+        for surface_id in surfaces {
+            let Ok(view) = self.host.screen_view(&surface_id) else {
+                continue;
+            };
+            // A full-screen program's screen is stale the moment it starts, so
+            // replaying it would flash over the real one. The same check the
+            // engine does for reflow.
+            if !berth_core::scrollback::should_replay(view.alternate_screen) {
+                continue;
+            }
+            // `read_text` honours per-row wrap and is the same text the CLI
+            // reads, so a restored wide line can be re-wrapped by the engine
+            // instead of coming back as two independent short lines.
+            let Ok(readback) = self.host.read_text(&surface_id, ReadScope::Screen, 1 << 20) else {
+                continue;
+            };
+            let params = serde_json::json!({"surface_id": surface_id, "text": readback.text});
+            if let Err(error) = self.dispatch("surface.remember_screen", params) {
+                log::line(&format!("remember_screen {surface_id}: {error}"));
+            }
+        }
+    }
+
     /// Save the session and drop the journal, so a clean exit never looks like
     /// a crash.
     fn save_and_close(&mut self) {
         self.session_log.close_all();
+        self.capture_screens();
         self.persist_window_state();
         if let Err(error) = save_session(&self.state) {
             eprintln!("berth-gui: session.save: {error}");

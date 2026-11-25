@@ -23,6 +23,7 @@ pub mod protocol;
 pub mod providers;
 pub mod router;
 pub mod schema;
+pub mod scrollback;
 pub mod shell;
 pub mod state;
 pub mod store;
@@ -84,6 +85,9 @@ pub struct SpawnRequest {
     pub env: Vec<(String, String)>,
     pub cols: u16,
     pub rows: u16,
+    /// Plain text to write into the new terminal before the program starts, so
+    /// a restored pane shows the screen it was left on. Empty for a fresh pane.
+    pub restore_text: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]

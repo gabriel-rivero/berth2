@@ -347,6 +347,23 @@ impl Default for Snapshot {
     }
 }
 
+/// Keep the visible screen of a surface for the next launch. A shell reads the
+/// text from its terminal and hands it here; the core only trims and caps it,
+/// so both shells persist the same shape.
+pub fn remember_screen(
+    state: &mut AppState,
+    surface_id: &str,
+    screen: &str,
+) -> Result<(), CoreError> {
+    let text = crate::scrollback::capture(screen, crate::scrollback::MAX_BYTES);
+    let surface = state
+        .surfaces
+        .get_mut(surface_id)
+        .ok_or_else(|| CoreError::not_found(format!("no surface {surface_id}")))?;
+    surface.restore_text = (!text.is_empty()).then_some(text);
+    Ok(())
+}
+
 /// Rebuild a session with the default resume policy: replay saved launch
 /// flags, no extra provider arguments.
 pub fn restore(
@@ -357,8 +374,9 @@ pub fn restore(
     restore_with(state, snapshot, ops, true, &|_| Vec::new())
 }
 
-/// Rebuild a session. Terminals are respawned (scrollback is not restored);
-/// agents are re-registered with their resume payload so the shell can offer
+/// Rebuild a session. Terminals are respawned; a pane whose screen was saved
+/// with `remember_screen` replays it. Agents are re-registered with their
+/// resume payload so the shell can offer
 /// or perform a resume. `keep_launch_flags` replays the saved command's extra
 /// flags, and `extra_args` supplies shell policy such as Claude's bypass mode.
 pub fn restore_with(
@@ -489,9 +507,16 @@ pub fn restore_with(
                 env,
                 cols: surface.cols.max(80),
                 rows: surface.rows.max(24),
+                // Replay the saved screen so the pane comes back as it was
+                // left; the shell's first prompt pushes it into scrollback.
+                restore_text: surface.restore_text.clone(),
             };
             match ops.spawn(spawn_req) {
                 Ok(spawned) => {
+                    // Consume the saved screen: it has been replayed, and a
+                    // stale copy would be replayed again after `clear`, a
+                    // restart, or a crash.
+                    surface.restore_text = None;
                     surface.pid = if spawned.pid == 0 {
                         None
                     } else {
@@ -635,6 +660,58 @@ mod tests {
     use crate::NullOps;
     use serde_json::json;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn given_a_remembered_screen_then_it_survives_into_the_spawn_request() {
+        let ops = RecordingOps::default();
+        let mut state = AppState::default();
+        let ws = state
+            .create_workspace_in(None, Some("shell"), None, None, &ops)
+            .expect("a workspace");
+        let surface_id = ws.active_surface.clone().expect("a surface");
+
+        // A screen with a blank tail: the capture drops it and keeps a final
+        // newline so the shell's prompt lands below the restored text.
+        crate::store::remember_screen(&mut state, &surface_id, "one\ntwo\n\n\n")
+            .expect("a known surface");
+        assert_eq!(
+            state.surface(&surface_id).unwrap().restore_text.as_deref(),
+            Some("one\r\ntwo\r\n")
+        );
+
+        let snapshot = state.snapshot();
+        let mut fresh = AppState::default();
+        let restore_ops = RecordingOps::default();
+        restore_with(&mut fresh, snapshot, &restore_ops, true, &|_| Vec::new()).expect("restore");
+        let spawns = restore_ops.spawns.lock().unwrap();
+        let request = spawns
+            .iter()
+            .find(|req| {
+                req.env
+                    .iter()
+                    .any(|(key, value)| key == "BERTH_SURFACE_ID" && value == &surface_id)
+            })
+            .expect("the restored surface spawned");
+        assert_eq!(request.restore_text.as_deref(), Some("one\r\ntwo\r\n"));
+        // The screen was replayed, so the saved copy is dropped: keeping it
+        // would replay a stale screen after `clear` or a crash.
+        assert!(
+            fresh.surface(&surface_id).unwrap().restore_text.is_none(),
+            "the restore text was not consumed"
+        );
+    }
+
+    #[test]
+    fn given_a_blank_screen_then_nothing_is_remembered() {
+        let ops = RecordingOps::default();
+        let mut state = AppState::default();
+        let ws = state
+            .create_workspace_in(None, Some("shell"), None, None, &ops)
+            .expect("a workspace");
+        let surface_id = ws.active_surface.unwrap();
+        crate::store::remember_screen(&mut state, &surface_id, "   \n\n").expect("a known surface");
+        assert!(state.surface(&surface_id).unwrap().restore_text.is_none());
+    }
 
     #[test]
     fn given_a_quick_window_then_the_snapshot_leaves_it_out() {

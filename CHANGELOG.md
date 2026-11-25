@@ -65,6 +65,13 @@
   whose pattern does not compile is reported at startup and skipped. `sessionLog` writes
   each pane's output to `sessions/<id>.log`, appended as it arrives, rotating once at
   8 MiB; it is off by default because a log outlives the session.
+- **Scrollback restore.** `scrollbackRestore` keeps each pane's visible screen in the
+  session file and replays it on the next launch, so a relaunch shows the screen you
+  left rather than only the cwd. The text is capped at 64 KiB per pane, plain, and
+  replayed with a carriage return per line — a bare line feed after a full-width line
+  would push the next one down a row and leave a gap. A full-screen program's screen is
+  not saved, and the copy is consumed by the replay so `clear` or a restart cannot bring
+  it back. Off by default.
 - **Find in the AppKit shell.** `Cmd+F` opens a find bar over the focused terminal,
   backed by Ghostty's own incremental search: it shows the current and total match,
   `Enter` steps forward, `Shift+Enter` back, and `Esc` closes it and returns focus to

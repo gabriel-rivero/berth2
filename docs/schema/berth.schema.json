@@ -236,6 +236,7 @@
     "window.select",
     "window.update",
     "window.close",
+    "surface.remember_screen",
     "launch.configure",
     "launch.list",
     "launch.open",
@@ -817,6 +818,14 @@
             "format": "float",
             "type": [
               "number",
+              "null"
+            ]
+          },
+          "restore_text": {
+            "default": null,
+            "description": "The last screen as plain text, kept when scrollback restore is on so a relaunch can replay it. Capped and opt-in; empty otherwise.",
+            "type": [
+              "string",
               "null"
             ]
           },
