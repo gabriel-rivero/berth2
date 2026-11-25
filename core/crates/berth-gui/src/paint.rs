@@ -798,6 +798,7 @@ impl<'a> Painter<'a> {
                     continue;
                 }
                 let origin = (area.x + col * cell.width, area.y + row * cell.height);
+                let rule_tint = options.rules.get(row).copied().flatten();
                 let on_cursor = cursor_visible && view.cursor == (row as u16, col as u16);
                 let selected = options.selection.is_some_and(|selection| {
                     selection.contains(crate::ui::Cell {
@@ -807,6 +808,16 @@ impl<'a> Painter<'a> {
                 });
                 let mut fg = cell_view.fg.map(rgb).unwrap_or(options.theme.terminal_fg);
                 let mut bg = cell_view.bg.map(rgb).unwrap_or(options.theme.terminal_bg);
+                // An output rule overrides the program's own colours for the
+                // whole row: that is the point of a highlight rule.
+                if let Some(tint) = rule_tint {
+                    if let Some(rule_fg) = tint.fg {
+                        fg = rule_fg;
+                    }
+                    if let Some(rule_bg) = tint.bg {
+                        bg = rule_bg;
+                    }
+                }
                 if cell_view.dim {
                     fg = options.theme.inactive(fg);
                 }
@@ -881,7 +892,7 @@ impl<'a> Painter<'a> {
                     }
                 }
                 let style = TextStyle {
-                    bold: cell_view.bold,
+                    bold: cell_view.bold || rule_tint.is_some_and(|tint| tint.bold),
                     italic: cell_view.italic,
                 };
                 let in_run = runs.iter().any(|run| col >= run.start && col < run.end);
@@ -1390,6 +1401,9 @@ pub struct ScreenOptions<'a> {
     pub search: &'a [Span],
     /// The hit the panel is on, tinted stronger than the rest.
     pub search_current: Option<Span>,
+    /// Per visible row, the tint an output rule gave it: foreground,
+    /// background and bold.
+    pub rules: &'a [Option<crate::output_rules::Tint>],
     /// The URL under the pointer, so every cell of it underlines on hover.
     pub hover_link: Option<&'a str>,
     /// The text blink phase: false hides blinking cells for this frame.
@@ -1752,6 +1766,7 @@ mod tests {
             exited: false,
             search: spans,
             search_current: current,
+            rules: &[],
             hover_link: None,
             blink_on: true,
         };
@@ -1763,6 +1778,55 @@ mod tests {
             &options,
         );
         buffer
+    }
+
+    #[test]
+    fn given_a_row_rule_then_the_row_paints_in_its_colours() {
+        let mut font = FontRenderer::new(16.0, &[], crate::font::Options::default());
+        let cell = font.cell();
+        let cells = row(&["a", "b"]);
+        let cols = cells.len();
+        let mut buffer = vec![0u32; cell.width * cols * cell.height];
+        let view = ScreenView {
+            cols: u16::try_from(cols).expect("a short row"),
+            rows: 1,
+            cursor_hidden: true,
+            cells,
+            ..ScreenView::default()
+        };
+        let theme = Theme::default();
+        let tints = vec![Some(crate::output_rules::Tint {
+            fg: None,
+            bg: Some(0x00ff_0000),
+            bold: false,
+        })];
+        let options = ScreenOptions {
+            theme: &theme,
+            focused: true,
+            cursor_visible: false,
+            selection: None,
+            exited: false,
+            search: &[],
+            search_current: None,
+            rules: &tints,
+            hover_link: None,
+            blink_on: true,
+        };
+        let mut painter = Painter::new(&mut buffer, cell.width * cols, cell.height);
+        painter.screen(
+            &mut font,
+            &view,
+            Rect::new(0, 0, cell.width * cols, cell.height),
+            &options,
+        );
+        // The rule's background replaces the terminal's across the row; the
+        // glyphs still paint on top, so the check is the row's last pixel,
+        // which is past the two glyphs and is pure background.
+        assert_eq!(
+            buffer[buffer.len() - 1],
+            0x00ff_0000,
+            "the row was not filled with the rule background"
+        );
     }
 
     #[test]
@@ -1805,6 +1869,7 @@ mod tests {
             exited: false,
             search: &[],
             search_current: None,
+            rules: &[],
             hover_link: None,
             blink_on: false,
         };

@@ -48,11 +48,13 @@ mod layout;
 mod links;
 mod log;
 mod mouse;
+mod output_rules;
 mod paint;
 mod panel;
 mod paste_history;
 mod quick;
 mod search;
+mod session_log;
 mod settings;
 mod shells;
 mod sync_output;
@@ -266,6 +268,12 @@ fn main() {
     if let Some(warning) = warning {
         eprintln!("berth-gui: config skipped: {warning}");
     }
+    let rules = output_rules::Rules::from_specs(&config.output_rules);
+    for rejected in &rules.rejected {
+        log::line(&format!("output rule ignored: {rejected}"));
+        eprintln!("berth-gui: output rule ignored: {rejected}");
+    }
+    let session_log = config.session_log;
     log::init();
     // Read the system font database while the window and shells are being set
     // up; the first frame blocks on it otherwise.
@@ -491,6 +499,17 @@ fn main() {
         paste_history: paste_history::PasteHistory::new(),
         _hotkey: hotkey,
         quick_pending: None,
+        output_rules: rules,
+        session_log: match (session_log, paths::log_dir()) {
+            (true, Some(dir)) => session_log::SessionLog::new(dir.join("sessions")),
+            // Nothing to log to: say so rather than pretending it is on.
+            (true, None) => {
+                eprintln!("berth-gui: sessionLog is on but there is no log directory");
+                session_log::SessionLog::disabled()
+            }
+            (false, _) => session_log::SessionLog::disabled(),
+        },
+        logged: HashMap::new(),
     };
 
     if let Err(error) = event_loop.run_app(&mut app) {
@@ -869,6 +888,13 @@ struct Gui {
     _hotkey: Option<global_hotkey::GlobalHotKeyManager>,
     /// The quick window the hotkey asked for, until its native window exists.
     quick_pending: Option<String>,
+    /// Regexes that tint the rows they match.
+    output_rules: output_rules::Rules,
+    /// Per-pane session logs, when `sessionLog` is on.
+    session_log: session_log::SessionLog,
+    /// How much of each pane has been written to its log, so output already
+    /// logged is not written twice.
+    logged: HashMap<String, usize>,
 }
 
 /// Last branch read for a cwd, with the time it was read. A cwd change or a
@@ -1924,6 +1950,15 @@ impl Gui {
     fn poll_meta(&mut self) {
         let surfaces: Vec<String> = lock(&self.state).surfaces.keys().cloned().collect();
         self.prompt_surfaces.retain(|id| surfaces.contains(id));
+        // Drain each pane's raw output into its log. This runs in the poll the
+        // window already does, so logging costs no extra thread or timer.
+        if self.session_log.is_enabled() {
+            for surface_id in &surfaces {
+                if let Ok(text) = self.host.take_output(surface_id) {
+                    self.session_log.append(surface_id, &text);
+                }
+            }
+        }
         for surface_id in surfaces {
             // Whether the program emits prompt marks decides the layout, so it
             // is checked here rather than every frame of the paint loop. The
@@ -2315,6 +2350,22 @@ impl Gui {
                 // Every hit in this pane tints; the one the panel is on tints
                 // in the accent so it reads as the current result.
                 let (search_hits, search_current) = self.search_marks_for(surface_id);
+                // Rule tints are computed from the visible rows' text, which
+                // the view already carries, so a rule applies to scrollback as
+                // well as to new output without a second copy of the line.
+                let rule_rows: Vec<String> = (0..usize::from(screen.rows))
+                    .map(|row| {
+                        let start = row * usize::from(screen.cols);
+                        screen
+                            .cells
+                            .iter()
+                            .skip(start)
+                            .take(usize::from(screen.cols))
+                            .map(|cell| cell.contents.as_str())
+                            .collect::<String>()
+                    })
+                    .collect();
+                let rule_tints = self.output_rules.row_tints(&rule_rows);
                 let pointer = (
                     self.pointer.0.max(0.0) as usize,
                     self.pointer.1.max(0.0) as usize,
@@ -2339,6 +2390,7 @@ impl Gui {
                     exited,
                     search: &search_hits,
                     search_current,
+                    rules: &rule_tints,
                     hover_link,
                     // Blinking text stays solid while the window is unfocused,
                     // since no timer runs to flip the phase.
@@ -3571,6 +3623,8 @@ impl Gui {
                 self.exit_announced.remove(surface_id);
                 self.frames.remove(surface_id);
                 self.prompt_surfaces.remove(surface_id);
+                self.session_log.close(surface_id);
+                self.logged.remove(surface_id);
                 // A copy-mode session on this surface would otherwise keep
                 // capturing keys for a pane that no longer exists.
                 if self
@@ -6079,6 +6133,7 @@ impl Gui {
     /// Save the session and drop the journal, so a clean exit never looks like
     /// a crash.
     fn save_and_close(&mut self) {
+        self.session_log.close_all();
         self.persist_window_state();
         if let Err(error) = save_session(&self.state) {
             eprintln!("berth-gui: session.save: {error}");

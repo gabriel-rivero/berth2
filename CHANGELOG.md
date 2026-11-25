@@ -59,6 +59,12 @@
   captures the selected workspace's tree with each pane's cwd and command, and
   `layout.open NAME` restores it with fresh pane ids, from the CLI or the palette. The
   palette is now heterogeneous, indexing launches and layouts beside the chord table.
+- **Output rules and session logging.** `outputRules` tints the rows whose text
+  matches a regex (`fg`, `bg`, `bold`), matched against the visible row at paint time so
+  it covers scrollback too, with the first rule winning. A rule that styles nothing or
+  whose pattern does not compile is reported at startup and skipped. `sessionLog` writes
+  each pane's output to `sessions/<id>.log`, appended as it arrives, rotating once at
+  8 MiB; it is off by default because a log outlives the session.
 - **Find in the AppKit shell.** `Cmd+F` opens a find bar over the focused terminal,
   backed by Ghostty's own incremental search: it shows the current and total match,
   `Enter` steps forward, `Shift+Enter` back, and `Esc` closes it and returns focus to

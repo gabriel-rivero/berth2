@@ -34,6 +34,10 @@ use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtyPair, PtySize, nat
 /// render a window into it later.
 pub const DEFAULT_SCROLLBACK: usize = 10_000;
 
+/// How much unread raw output one surface keeps for a subscriber. A shell
+/// drains it every frame; this only bounds a shell that stops draining.
+const MAX_OUTPUT_TAP: usize = 1 << 20;
+
 /// One rendered character cell, with just enough styling for a GUI.
 #[derive(Debug, Clone, Default)]
 pub struct CellView {
@@ -551,6 +555,8 @@ struct Surface {
     kitty: Arc<Mutex<HashMap<u32, KittyImage>>>,
     style: Arc<Mutex<StyleState>>,
     prompts: Arc<Mutex<prompt::PromptMarks>>,
+    /// Buffered output text while a shell has subscribed to it.
+    output: Arc<Mutex<Vec<u8>>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     pid: u32,
     tty: String,
@@ -879,6 +885,19 @@ impl PtyHost {
         Ok(lock(&surface.prompts).prompt_lines())
     }
 
+    /// Drain the raw output text that has accumulated since the last call.
+    /// Empty when nothing has arrived, which is the common case: a shell only
+    /// calls this when it is logging.
+    pub fn take_output(&self, surface_id: &str) -> Result<String, CoreError> {
+        let surface = self.surface(surface_id)?;
+        let mut output = lock(&surface.output);
+        if output.is_empty() {
+            return Ok(String::new());
+        }
+        let bytes = std::mem::take(&mut *output);
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    }
+
     /// Whether this surface has any prompt mark at all. Cheap enough for a
     /// window to poll every tick to decide whether to show the gutter.
     pub fn has_prompt_marks(&self, surface_id: &str) -> Result<bool, CoreError> {
@@ -982,6 +1001,7 @@ impl SurfaceOps for PtyHost {
         let kitty = Arc::new(Mutex::new(HashMap::new()));
         let style = Arc::new(Mutex::new(StyleState::default()));
         let prompts = Arc::new(Mutex::new(prompt::PromptMarks::default()));
+        let output = Arc::new(Mutex::new(Vec::new()));
         let screen = Arc::new(Mutex::new(engine::create(
             self.backend,
             rows,
@@ -1004,6 +1024,7 @@ impl SurfaceOps for PtyHost {
                 kitty: Arc::clone(&kitty),
                 style: Arc::clone(&style),
                 prompts: Arc::clone(&prompts),
+                output: Some(Arc::clone(&output)),
                 graphics: self.graphics,
                 scrollback: self.scrollback,
                 backend: self.backend,
@@ -1021,6 +1042,7 @@ impl SurfaceOps for PtyHost {
             kitty,
             style,
             prompts,
+            output,
             killer: Mutex::new(killer),
             pid,
             tty: tty.clone(),
@@ -1226,6 +1248,9 @@ struct ReaderShare {
     kitty: Arc<Mutex<HashMap<u32, KittyImage>>>,
     style: Arc<Mutex<StyleState>>,
     prompts: Arc<Mutex<prompt::PromptMarks>>,
+    /// Text fed to the engine, for a shell that wants to log it. `None` when
+    /// nothing is subscribed, so the common path copies nothing.
+    output: Option<Arc<Mutex<Vec<u8>>>>,
     graphics: bool,
     scrollback: usize,
     backend: Backend,
@@ -1762,6 +1787,7 @@ mod meta_tests {
                 kitty: Arc::clone(&self.kitty),
                 style: Arc::clone(&self.style),
                 prompts: Arc::clone(&self.prompts),
+                output: None,
                 graphics: true,
                 scrollback: DEFAULT_SCROLLBACK,
                 backend: Backend::Builtin,
@@ -2597,6 +2623,18 @@ fn flush_normal(share: &ReaderShare, normal: &mut Vec<u8>, record_styles: bool, 
         };
         (GridSnapshot::from_engine(engine.as_ref()), text_start)
     });
+    if let Some(output) = &share.output {
+        // Only the bytes the engine is about to consume, so the log is the
+        // program's text and not a re-render of the grid.
+        let mut tap = lock(output);
+        tap.extend_from_slice(normal);
+        // Bound the buffer: a shell that never drains it must not grow without
+        // limit. A drain happens every frame, so this is generous.
+        if tap.len() > MAX_OUTPUT_TAP {
+            let cut = tap.len() - MAX_OUTPUT_TAP;
+            tap.drain(..cut);
+        }
+    }
     lock(&share.screen).process(normal);
     if let Some((before, text_start)) = before {
         let after = {

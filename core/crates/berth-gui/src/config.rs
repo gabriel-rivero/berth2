@@ -423,6 +423,10 @@ pub struct Config {
     pub quick: crate::quick::Options,
     /// Launch profiles and custom commands from `config.json`.
     pub launches: berth_core::launch::Launches,
+    /// Regexes that tint the rows they match.
+    pub output_rules: Vec<OutputRule>,
+    /// Write each pane's output to a file under the log directory.
+    pub session_log: bool,
 }
 
 impl Default for Config {
@@ -454,6 +458,8 @@ impl Default for Config {
             shortcuts: Shortcuts::build(&HashMap::new()),
             quick: crate::quick::Options::default(),
             launches: berth_core::launch::Launches::default(),
+            output_rules: Vec::new(),
+            session_log: false,
         }
     }
 }
@@ -616,11 +622,27 @@ struct FileConfig {
     socket: Option<String>,
     shortcuts: HashMap<String, String>,
     /// Named launch presets and one-shot commands.
+    output_rules: Option<Vec<OutputRule>>,
+    session_log: Option<bool>,
     profiles: Option<Vec<berth_core::launch::Launch>>,
     commands: Option<Vec<berth_core::launch::Launch>>,
     quick_hotkey: Option<String>,
     quick_placement: Option<String>,
     quick_height: Option<f64>,
+}
+
+/// One `outputRules` entry, as written in `config.json`.
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+pub struct OutputRule {
+    #[serde(default)]
+    pub name: String,
+    pub pattern: String,
+    #[serde(default)]
+    pub fg: Option<String>,
+    #[serde(default)]
+    pub bg: Option<String>,
+    #[serde(default)]
+    pub bold: bool,
 }
 
 /// Build the launch set, dropping it when it is malformed. A duplicate or
@@ -758,6 +780,8 @@ impl Config {
             socket: file.socket,
             shortcuts: Shortcuts::build(&file.shortcuts),
             launches: launches_from(file.profiles, file.commands),
+            output_rules: file.output_rules.unwrap_or_default(),
+            session_log: file.session_log.unwrap_or(defaults.session_log),
             quick: crate::quick::Options::from_config(
                 file.quick_hotkey.as_deref(),
                 file.quick_placement.as_deref(),

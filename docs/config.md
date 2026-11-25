@@ -211,6 +211,35 @@ the launch or resume command. A change applies to panes created afterwards,
 including restored workspaces whose shell was not recorded; panes already
 running keep their program. The macOS app does not read this key yet.
 
+## Output rules
+
+`outputRules` tints the rows whose text matches a regex, the way ConEmu's
+Highlight and iTerm2's Triggers do. Rules match a whole visible row at paint
+time, so they apply to scrollback as well as to new output, and the first rule
+in the file wins.
+
+```json
+{
+  "outputRules": [
+    { "pattern": "\berror\b", "fg": "#ff5555", "bold": true },
+    { "name": "warn", "pattern": "warning", "bg": "#3a2a00" }
+  ]
+}
+```
+
+`fg` and `bg` are `#rrggbb` (the `#` is optional); `bold` thickens the glyphs.
+A rule that sets none of the three, or whose pattern does not compile, is
+reported at startup and skipped rather than silently doing nothing. A rule
+cannot change a glyph or its size, so a highlight cannot break the cell grid.
+
+## Session log
+
+`sessionLog` writes each pane's output to a file under the log directory
+(`sessions/<surface id>.log`), appended as the pane produces it. It is off by
+default: unlike the clipboard, a log outlives the session, and session output
+can contain a token. One file rotates to `.log.1` at 8 MiB, and logs are closed
+when their pane closes.
+
 ## Profiles and commands
 
 `profiles` and `commands` are named launches. A profile is offered when a tab or
