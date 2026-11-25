@@ -211,6 +211,44 @@ the launch or resume command. A change applies to panes created afterwards,
 including restored workspaces whose shell was not recorded; panes already
 running keep their program. The macOS app does not read this key yet.
 
+## Profiles and commands
+
+`profiles` and `commands` are named launches. A profile is offered when a tab or
+workspace starts; a command is something you run on purpose. Both take the same
+fields, so one shape covers everything from a plain shell to a `wsl.exe` preset:
+
+```json
+{
+  "profiles": [
+    { "name": "wsl", "command": ["wsl.exe", "-e"], "args": ["bash", "-l"],
+      "label": "Ubuntu", "cwd": "/home/me", "env": { "TERM": "xterm-256color" } }
+  ],
+  "commands": [
+    { "name": "serve", "command": ["make", "serve"], "cwd": "./app" }
+  ]
+}
+```
+
+`command` is either a bare program path (so a Windows path with spaces needs no
+quoting) or a list of program plus fixed arguments; `args` appends more, `env`
+is added to the child's environment, and `cwd` is where it starts. `shell` wraps
+the whole thing in another program, which is how `wsl.exe -e bash -lc …` is
+spelled. `label` names the tab, defaulting to `name`. Two launches may not share
+a name.
+
+They are reachable from three places, all resolving the same core definition:
+the command palette (`Launch <name>`, `<name> Workspace`, `Command <name>`),
+`berth new --profile NAME` / `berth new-tab --profile NAME`, and `berth profiles`
+to list them.
+
+## Layouts
+
+`layout.save NAME` captures the selected workspace's split tree with each pane's
+cwd and command; `layout.open NAME` restores it as a new workspace with fresh
+pane ids. The palette offers `Save Layout <workspace name>` and `Layout <name>`.
+Layouts live in memory for the session, like the paste history: they are not
+written to disk yet.
+
 ## Quick terminal
 
 `quickHotkey` is a global chord that opens a dropdown terminal over whatever

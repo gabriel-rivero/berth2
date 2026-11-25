@@ -245,6 +245,11 @@ final class AppConfig {
         load(from: Self.url)
     }
 
+    /// The `profiles` and `commands` sections, kept as the JSON they were
+    /// written as. The core parses them, so both shells agree on the shape and
+    /// a field this shell does not read still reaches the CLI.
+    private(set) var launches: [String: Any] = [:]
+
     func load(from url: URL) {
         guard let data = try? Data(contentsOf: url),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -272,6 +277,11 @@ final class AppConfig {
         }
         if let value = object["socket"] as? String, let mode = SocketMode(rawValue: value) {
             socketMode = mode
+        }
+        for key in ["profiles", "commands"] {
+            if let section = object[key] as? [Any] {
+                launches[key] = section
+            }
         }
     }
 

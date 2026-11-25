@@ -880,9 +880,13 @@ usage:
   berth swap-pane PANE_ID TARGET_PANE_ID
   berth move-pane PANE_ID --to TARGET_PANE_ID [--before]
   berth agents [--state S]
-  berth new [--name N] [--cwd DIR]
+  berth new [--name N] [--cwd DIR] [--profile P]
+  berth profiles                configured launch profiles and commands
+  berth layout [list]           saved layouts
+  berth layout save NAME        save the selected workspace's tree
+  berth layout open NAME        open a saved layout as a workspace
   berth close-workspace [WORKSPACE_ID]
-  berth new-tab [--pane PANE_ID] [--cwd DIR]
+  berth new-tab [--pane PANE_ID] [--cwd DIR] [--profile P]
   berth split SURFACE_ID [--direction right|left|up|down]
   berth rename-workspace WORKSPACE_ID NAME
   berth select-workspace WORKSPACE_ID
@@ -999,6 +1003,17 @@ fn run() -> Result<(), String> {
             if let Some(d) = arg_after(rest, "--cwd") {
                 params["cwd"] = json!(d);
             }
+            if let Some(profile) = arg_after(rest, "--profile") {
+                // `--name` names the workspace; without it the profile's name
+                // is the default, which the core already applies.
+                let mut launch = json!({"name": profile, "kind": "workspace"});
+                if let Some(cwd) = params.get("cwd") {
+                    launch["cwd"] = cwd.clone();
+                }
+                let v = c.call("launch.open", launch)?;
+                println!("{}", v["workspace_id"].as_str().unwrap_or(""));
+                return Ok(());
+            }
             let v = c.call("workspace.create", params)?;
             let id = v["workspace"]["id"]
                 .as_str()
@@ -1089,6 +1104,17 @@ fn run() -> Result<(), String> {
             }
             if let Some(cwd) = arg_after(rest, "--cwd") {
                 params["cwd"] = json!(cwd);
+            }
+            if let Some(profile) = arg_after(rest, "--profile") {
+                let mut launch = json!({"name": profile, "kind": "tab"});
+                for key in ["pane_id", "cwd"] {
+                    if let Some(value) = params.get(key) {
+                        launch[key] = value.clone();
+                    }
+                }
+                let v = c.call("launch.open", launch)?;
+                println!("{}", v["surface_id"].as_str().unwrap_or(""));
+                return Ok(());
             }
             let v = c.call("surface.create", params)?;
             let id = v["surface_id"]
@@ -1288,6 +1314,47 @@ fn run() -> Result<(), String> {
                 params["window_id"] = json!(window);
             }
             c.call("surface.move", params)?;
+        }
+
+        "profiles" => {
+            let v = c.call("launch.list", json!({}))?;
+            for key in ["profiles", "commands"] {
+                for launch in v[key].as_array().into_iter().flatten() {
+                    println!(
+                        "{}\t{}\t{}",
+                        launch["name"].as_str().unwrap_or("?"),
+                        launch["label"].as_str().unwrap_or(""),
+                        launch["argv"]
+                            .as_array()
+                            .map(|argv| argv
+                                .iter()
+                                .filter_map(|a| a.as_str())
+                                .collect::<Vec<_>>()
+                                .join(" "))
+                            .unwrap_or_default()
+                    );
+                }
+            }
+        }
+        "layout" => {
+            let pos = positional(rest);
+            match pos.first().map(String::as_str).unwrap_or("list") {
+                "save" => {
+                    let name = pos.get(1).ok_or("layout save: missing NAME")?;
+                    c.call("layout.save", json!({"name": name}))?;
+                }
+                "open" => {
+                    let name = pos.get(1).ok_or("layout open: missing NAME")?;
+                    let v = c.call("layout.open", json!({"name": name}))?;
+                    println!("{}", v["workspace_id"].as_str().unwrap_or(""));
+                }
+                _ => {
+                    let v = c.call("layout.list", json!({}))?;
+                    for name in v["layouts"].as_array().into_iter().flatten() {
+                        println!("{}", name.as_str().unwrap_or(""));
+                    }
+                }
+            }
         }
 
         "save" => {

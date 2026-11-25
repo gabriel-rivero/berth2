@@ -50,6 +50,15 @@
   `quickHeight` set where it sits; an empty `quickHotkey` disables the global chord and
   leaves the menu entry. `berth window quick` opens it from the CLI, and the AppKit shell
   reaches it from the Terminal menu (`quickTerminal`).
+- **Profiles, commands and layouts.** `profiles` and `commands` in `config.json` are named
+  launches with a program, arguments, environment, cwd, shell and tab label; a bare
+  program path or a list both parse, so a `wsl.exe` preset is one object. They are
+  reachable from the palette (`Launch`, `<name> Workspace`, `Command`), from
+  `berth new --profile` / `berth new-tab --profile`, and from `berth profiles` — all
+  resolving the same core definition, so the two shells cannot drift. `layout.save NAME`
+  captures the selected workspace's tree with each pane's cwd and command, and
+  `layout.open NAME` restores it with fresh pane ids, from the CLI or the palette. The
+  palette is now heterogeneous, indexing launches and layouts beside the chord table.
 - **Find in the AppKit shell.** `Cmd+F` opens a find bar over the focused terminal,
   backed by Ghostty's own incremental search: it shows the current and total match,
   `Enter` steps forward, `Shift+Enter` back, and `Esc` closes it and returns focus to

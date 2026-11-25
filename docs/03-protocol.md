@@ -86,6 +86,17 @@ Event:
 
 `Window` is `{id, name, created_ms, bounds?, monitor?, sidebar_width?, active_workspace?, active_surface?, broadcast, kind}`. `kind` is `main` (an ordinary window with a sidebar) or `quick` (the dropdown, which never appears in the session file). `bounds` is `{x, y, width, height, maximized, scale}`. `Workspace.window_id` names the window that shows it; `AppState.selected_window` names the focused one. The top-level `selected_workspace`/`selected_surface` mirror the selected window so older clients keep working.
 
+### launch and layout
+| method | params | result |
+| --- | --- | --- |
+| `launch.list` | `{}` | `{profiles:[{name,label,argv,cwd,has_command}], commands:[…]}` |
+| `launch.open` | `{name, kind?: "tab"\|"workspace", pane_id?, cwd?, focus?}` | `{surface_id}` or `{workspace_id}` — resolves a configured profile; the shell pushes `profiles`/`commands` into the core from `config.json` |
+| `layout.save` | `{name, workspace_id?}` | `{name}` — captures the workspace's tree, each pane's cwd and command |
+| `layout.list` | `{}` | `{layouts:[name]}` |
+| `layout.open` | `{name}` | `{workspace_id}` — restores the tree with fresh pane ids |
+
+Layouts are in memory for the session. `surface.create` also takes `label`, so a profile's tab title survives without the core reading the config.
+
 ### workspace
 | method | params | result |
 | --- | --- | --- |

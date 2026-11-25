@@ -39,6 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let engine = Engine(host: BerthCoreHost.shared)
         self.engine = engine
         BerthCoreHost.shared.engine = engine
+        pushLaunches(to: engine)
 
         var mode = AppConfig.shared.socketMode
         var token: String?
@@ -113,6 +114,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Terminal commands
+
+    /// Hand the profiles and commands to the core, which owns the definition.
+    /// A malformed section is logged by the core and ignored, never fatal.
+    private func pushLaunches(to engine: Engine) {
+        let launches = AppConfig.shared.launches
+        guard let data = try? JSONSerialization.data(withJSONObject: launches),
+              let body = String(data: data, encoding: .utf8)
+        else { return }
+        let request = #"{"id":"ui","method":"launch.configure","params":\#(body)}"#
+        let response = engine.dispatch(request: request)
+        if !response.contains(#""ok":true"#) {
+            NSLog("berth: launch.configure rejected: %@", response)
+        }
+    }
 
     @objc func splitRight(_ sender: Any?) {
         split(direction: "right")

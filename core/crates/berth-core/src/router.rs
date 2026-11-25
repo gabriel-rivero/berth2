@@ -205,6 +205,136 @@ fn handle(
             }
             Ok(json!({"workspace": ws}))
         }
+        // The shell pushes the user's launches in; these read them back and
+        // resolve one by name, so the CLI and the palette share one definition.
+        "launch.configure" => {
+            let launches: crate::launch::Launches = params(raw)?;
+            launches.validate()?;
+            state.launches = launches;
+            Ok(json!({"profiles": state.launches.profiles.len(),
+                      "commands": state.launches.commands.len()}))
+        }
+        "launch.list" => {
+            let launches = &state.launches;
+            let profiles: Vec<_> = launches
+                .profiles
+                .iter()
+                .map(|launch| {
+                    json!({
+                        "name": launch.name,
+                        "label": launch.tab_label(),
+                        "argv": launch.spawn_argv(),
+                        "cwd": launch.cwd,
+                        "has_command": launch.has_command(),
+                    })
+                })
+                .collect();
+            let commands: Vec<_> = launches
+                .commands
+                .iter()
+                .map(|launch| {
+                    json!({
+                        "name": launch.name,
+                        "label": launch.tab_label(),
+                        "argv": launch.spawn_argv(),
+                        "cwd": launch.cwd,
+                        "has_command": launch.has_command(),
+                    })
+                })
+                .collect();
+            Ok(json!({"profiles": profiles, "commands": commands}))
+        }
+        // Open a new workspace or tab from a named profile. The spawn fields
+        // come from the config the shell pushed in, so both shells launch the
+        // same way and the CLI needs no copy of the file.
+        "launch.open" => {
+            let p: LaunchOpen = params(raw)?;
+            let launch = state
+                .launches
+                .find(&p.name)
+                .cloned()
+                .ok_or_else(|| CoreError::not_found(format!("no launch {:?}", p.name)))?;
+            let argv = launch.spawn_argv();
+            let cwd = p.cwd.or_else(|| launch.cwd.clone());
+            // An unknown kind is a mistake, not a request for a tab: a typo in
+            // a script would otherwise open the wrong thing silently.
+            match p.kind.as_deref().unwrap_or("tab") {
+                "workspace" => {
+                    let workspace = state.create_workspace_with(
+                        p.name.as_str(),
+                        launch.label.as_deref(),
+                        cwd.as_deref(),
+                        argv,
+                        launch.env_pairs(),
+                        ops,
+                    )?;
+                    Ok(json!({"workspace_id": workspace.id}))
+                }
+                "tab" => {
+                    let pane_id = match p.pane_id {
+                        Some(pane_id) => pane_id,
+                        None => default_pane(state).ok_or_else(|| {
+                            CoreError::new(ErrorCode::InvalidState, "no workspace is open")
+                        })?,
+                    };
+                    let surface = state.add_surface(
+                        &pane_id,
+                        SpawnRequest {
+                            cwd,
+                            argv,
+                            env: launch.env_pairs(),
+                            cols: 80,
+                            rows: 24,
+                        },
+                        ops,
+                        p.focus.unwrap_or(true),
+                    )?;
+                    set_user_title(state, &surface.id, launch.tab_label());
+                    Ok(json!({"surface_id": surface.id}))
+                }
+                other => Err(CoreError::new(
+                    ErrorCode::BadRequest,
+                    format!("unknown launch kind {other:?}: expected tab or workspace"),
+                )),
+            }
+        }
+        // Save the selected workspace's tree under a name, and open it again.
+        "layout.save" => {
+            let p: LayoutSave = params(raw)?;
+            let name = p.name.trim().to_string();
+            if name.is_empty() {
+                return Err(CoreError::new(
+                    ErrorCode::BadRequest,
+                    "layout.save needs a name",
+                ));
+            }
+            let workspace_id = p
+                .workspace_id
+                .or_else(|| state.selected_workspace.clone())
+                .ok_or_else(|| {
+                    CoreError::new(ErrorCode::InvalidState, "no workspace is selected")
+                })?;
+            let layout = state.save_layout(&workspace_id, &name)?;
+            state.layouts.insert(name.clone(), layout);
+            Ok(json!({"name": name}))
+        }
+        "layout.list" => {
+            let names: Vec<&String> = state.layouts.keys().collect();
+            Ok(json!({"layouts": names}))
+        }
+        "layout.open" => {
+            let p: LayoutOpen = params(raw)?;
+            // `layout.save` trims its name, so `open` must too or a name with
+            // surrounding spaces lists but never opens.
+            let name = p.name.trim();
+            let layout = state
+                .layouts
+                .get(name)
+                .cloned()
+                .ok_or_else(|| CoreError::not_found(format!("no layout {name:?}")))?;
+            let workspace = state.open_layout(&layout, ops)?;
+            Ok(json!({"workspace_id": workspace.id}))
+        }
         "workspace.get" => {
             let p: IdParam = params(raw)?;
             let ws = state
@@ -515,6 +645,11 @@ fn handle(
                 ops,
                 p.focus.unwrap_or(true),
             )?;
+            // A launch profile names its tab; the core stores it as a user
+            // title, so an OSC title from the program cannot overwrite it.
+            if let Some(label) = p.label.filter(|label| !label.trim().is_empty()) {
+                set_user_title(state, &surface.id, &label);
+            }
             Ok(json!({"surface_id": surface.id}))
         }
         "surface.split" => {
@@ -980,6 +1115,24 @@ fn state_set_weight(state: &mut AppState, pane: &Pane, weight: f32) -> bool {
         .unwrap_or(false)
 }
 
+/// Name a surface the way `surface.rename` would, including the event, so a
+/// client that keys a tab label off the stream sees the name it was created
+/// with rather than an untitled tab followed by silence.
+fn set_user_title(state: &mut AppState, surface_id: &str, title: &str) {
+    let title = title.trim();
+    if title.is_empty() {
+        return;
+    }
+    if let Some(surface) = state.surface_mut(surface_id) {
+        surface.user_title = Some(title.to_string());
+        let user_title = surface.user_title.clone();
+        state.emit(
+            names::SURFACE_RENAMED,
+            json!({"surface_id": surface_id, "user_title": user_title}),
+        );
+    }
+}
+
 fn default_pane(state: &AppState) -> Option<String> {
     let workspace = state
         .selected_workspace
@@ -1437,6 +1590,29 @@ struct SurfaceList {
     pane_id: Option<String>,
 }
 #[derive(Debug, Deserialize)]
+struct LaunchOpen {
+    name: String,
+    /// `tab` (default) or `workspace`.
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default)]
+    pane_id: Option<String>,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    focus: Option<bool>,
+}
+#[derive(Debug, Deserialize)]
+struct LayoutSave {
+    name: String,
+    #[serde(default)]
+    workspace_id: Option<String>,
+}
+#[derive(Debug, Deserialize)]
+struct LayoutOpen {
+    name: String,
+}
+#[derive(Debug, Deserialize)]
 struct SurfaceCreate {
     #[serde(default)]
     pane_id: Option<String>,
@@ -1446,6 +1622,10 @@ struct SurfaceCreate {
     argv: Option<Vec<String>>,
     #[serde(default)]
     env: Option<Vec<(String, String)>>,
+    /// A label for the new tab. A launch profile's label arrives this way, so
+    /// the core needs no copy of the config to name the tab it started.
+    #[serde(default)]
+    label: Option<String>,
     #[serde(default)]
     focus: Option<bool>,
 }
@@ -1635,6 +1815,12 @@ pub const METHODS: &[&str] = &[
     "window.select",
     "window.update",
     "window.close",
+    "launch.configure",
+    "launch.list",
+    "launch.open",
+    "layout.save",
+    "layout.list",
+    "layout.open",
     "workspace.list",
     "workspace.create",
     "workspace.get",
@@ -1779,6 +1965,211 @@ mod tests {
         assert!(!r.ok, "window.create accepted the quick kind");
         let plain = call(&mut st, "window.create", json!({"name": "plain"}));
         assert_eq!(plain["window"]["kind"], json!("main"));
+    }
+
+    #[test]
+    fn given_a_configured_profile_then_launch_open_starts_a_tab_with_its_fields() {
+        use crate::launch::{Launch, Program};
+        let mut st = AppState::default();
+        st.launches.profiles.push(Launch {
+            name: "build".into(),
+            command: Some(Program::One("/bin/sh".into())),
+            args: vec!["-c".into(), "true".into()],
+            env: Default::default(),
+            cwd: Some("/tmp/berth-launch-test".into()),
+            shell: None,
+            label: Some("Build".into()),
+        });
+        call(&mut st, "workspace.create", json!({"name": "shell"}));
+        let opened = call(&mut st, "launch.open", json!({"name": "build"}));
+        let surface_id = opened["surface_id"].as_str().unwrap();
+        let surface = st.surface(surface_id).expect("the launched surface");
+        assert_eq!(surface.argv, vec!["/bin/sh", "-c", "true"]);
+        assert_eq!(surface.user_title.as_deref(), Some("Build"));
+        assert_eq!(surface.cwd, "/tmp/berth-launch-test");
+    }
+
+    #[test]
+    fn given_an_unknown_launch_then_opening_it_is_a_not_found() {
+        let mut st = AppState::default();
+        let r = dispatch(
+            &mut st,
+            &NullOps,
+            &req("launch.open", json!({"name": "nope"})),
+        );
+        assert!(!r.ok);
+    }
+
+    #[test]
+    fn given_a_split_workspace_then_the_layout_round_trips_its_shape() {
+        let mut st = AppState::default();
+        call(&mut st, "workspace.create", json!({"name": "shell"}));
+        let surface = first_surface(&mut st);
+        call(
+            &mut st,
+            "surface.split",
+            json!({"surface_id": surface, "direction": "down"}),
+        );
+        let before = st.workspaces[0].root.leaves().len();
+        assert_eq!(before, 2);
+
+        call(&mut st, "layout.save", json!({"name": "two-up"}));
+        assert_eq!(
+            call(&mut st, "layout.list", json!({}))["layouts"],
+            json!(["two-up"])
+        );
+
+        let opened = call(&mut st, "layout.open", json!({"name": "two-up"}));
+        let workspace_id = opened["workspace_id"].as_str().unwrap();
+        let ws = st.workspace(workspace_id).expect("the opened workspace");
+        assert_eq!(ws.root.leaves().len(), 2, "the split did not survive");
+        // Fresh pane ids: a layout must not reuse the pane it was saved from.
+        let saved: Vec<&str> = st.workspaces[0].root.leaves();
+        let opened_leaves: Vec<&str> = ws.root.leaves();
+        assert!(opened_leaves.iter().all(|id| !saved.contains(id)));
+    }
+
+    #[test]
+    fn given_a_split_layout_then_each_pane_keeps_its_own_cwd_in_tree_order() {
+        let mut st = AppState::default();
+        call(&mut st, "workspace.create", json!({"name": "shell"}));
+        let surface = first_surface(&mut st);
+        call(
+            &mut st,
+            "surface.split",
+            json!({"surface_id": surface, "direction": "down", "cwd": "/tmp/second"}),
+        );
+        call(&mut st, "layout.save", json!({"name": "cwds"}));
+
+        let opened = call(&mut st, "layout.open", json!({"name": "cwds"}));
+        let workspace_id = opened["workspace_id"].as_str().unwrap();
+        let ws = st.workspace(workspace_id).unwrap();
+        // Leaf order is what makes `open_layout` correct: a breadth-first walk
+        // would still produce the right count but the wrong cwds.
+        let cwds: Vec<&str> = ws
+            .root
+            .leaves()
+            .iter()
+            .map(|pane| {
+                st.panes[*pane]
+                    .active_surface()
+                    .and_then(|id| st.surface(id))
+                    .map(|s| s.cwd.as_str())
+                    .unwrap_or("")
+            })
+            .collect();
+        // The exact order depends on which side the split inserted on; what
+        // matters is that each saved cwd landed in its own pane, in the order
+        // the saved tree lists them.
+        assert_eq!(cwds.len(), 2);
+        assert!(
+            cwds.contains(&"/tmp/second"),
+            "the split pane lost its cwd: {cwds:?}"
+        );
+        let saved: Vec<&str> = {
+            let saved_layout = st.layouts.get("cwds").unwrap();
+            saved_layout
+                .root
+                .leaves()
+                .iter()
+                .map(|pane| {
+                    saved_layout
+                        .cwd
+                        .get(*pane)
+                        .map(String::as_str)
+                        .unwrap_or("")
+                })
+                .collect()
+        };
+        assert_eq!(cwds, saved, "leaf order or cwd mapping broke");
+    }
+
+    #[test]
+    fn given_a_layout_whose_pane_cannot_spawn_then_nothing_is_left_behind() {
+        struct FailingOps;
+        impl crate::SurfaceOps for FailingOps {
+            fn spawn(&self, _: crate::SpawnRequest) -> Result<crate::Spawned, CoreError> {
+                Err(CoreError::internal("boom"))
+            }
+            fn send_text(&self, _: &str, _: &str) -> Result<(), CoreError> {
+                Ok(())
+            }
+            fn send_key(&self, _: &str, _: &str, _: &[String]) -> Result<(), CoreError> {
+                Ok(())
+            }
+            fn read_text(
+                &self,
+                _: &str,
+                _: crate::ReadScope,
+                _: usize,
+            ) -> Result<crate::Readback, CoreError> {
+                Ok(crate::Readback::default())
+            }
+            fn close(&self, _: &str) -> Result<(), CoreError> {
+                Ok(())
+            }
+            fn focus(&self, _: &str) -> Result<(), CoreError> {
+                Ok(())
+            }
+            fn resize(&self, _: &str, _: u16, _: u16) -> Result<(), CoreError> {
+                Ok(())
+            }
+            fn pid_info(&self, _: &str) -> Result<crate::PidInfo, CoreError> {
+                Ok(crate::PidInfo::default())
+            }
+            fn notify_os(&self, _: &crate::Notification) -> Result<(), CoreError> {
+                Ok(())
+            }
+        }
+
+        let mut st = AppState::default();
+        call(&mut st, "workspace.create", json!({"name": "shell"}));
+        let surface = first_surface(&mut st);
+        call(
+            &mut st,
+            "surface.split",
+            json!({"surface_id": surface, "direction": "down"}),
+        );
+        call(&mut st, "layout.save", json!({"name": "doomed"}));
+        let layout = st.layouts.get("doomed").cloned().unwrap();
+
+        let before = (st.panes.len(), st.surfaces.len(), st.workspaces.len());
+        assert!(st.open_layout(&layout, &FailingOps).is_err());
+        // A half-open layout would strand panes and PTYs outside any tree.
+        assert_eq!(
+            (st.panes.len(), st.surfaces.len(), st.workspaces.len()),
+            before
+        );
+    }
+
+    #[test]
+    fn given_launch_args_without_a_command_then_validation_reports_it() {
+        use crate::launch::{Launch, Launches};
+        let set = Launches {
+            profiles: vec![Launch {
+                name: "broken".into(),
+                command: None,
+                args: vec!["--login".into()],
+                env: Default::default(),
+                cwd: None,
+                shell: None,
+                label: None,
+            }],
+            commands: Vec::new(),
+        };
+        assert!(set.validate().is_err());
+    }
+
+    #[test]
+    fn given_a_layout_save_without_a_name_then_it_is_refused() {
+        let mut st = AppState::default();
+        call(&mut st, "workspace.create", json!({"name": "shell"}));
+        let r = dispatch(
+            &mut st,
+            &NullOps,
+            &req("layout.save", json!({"name": "  "})),
+        );
+        assert!(!r.ok);
     }
 
     #[test]

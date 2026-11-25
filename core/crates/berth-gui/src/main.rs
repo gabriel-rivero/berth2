@@ -343,6 +343,7 @@ fn main() {
 
     let state = Arc::new(Mutex::new(AppState::default()));
     lock(&state).set_muted_providers(config.mute_providers.clone());
+    lock(&state).launches = config.launches.clone();
     if !args.no_restore {
         match restore_session_with(
             &state,
@@ -657,6 +658,58 @@ impl Overlay {
             | Overlay::TabMenu { selected, .. }
             | Overlay::Context { selected, .. } => *selected = index,
             Overlay::Rename { .. } | Overlay::Confirm { .. } => {}
+        }
+    }
+}
+
+/// One row in the command palette. The palette indexes more than the chord
+/// table, so a row is what to run rather than only which action it is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum PaletteEntry {
+    Action(config::Action),
+    /// A configured profile, opened as a tab or as a workspace.
+    Launch {
+        name: String,
+        workspace: bool,
+    },
+    /// A configured one-shot command.
+    Command(String),
+    /// A saved layout, opened as a workspace.
+    Layout(String),
+    /// Save the visible workspace's tree under this name.
+    SaveLayout(String),
+}
+
+impl PaletteEntry {
+    fn label(&self) -> String {
+        match self {
+            PaletteEntry::Action(action) => action.label().to_string(),
+            PaletteEntry::Launch {
+                name,
+                workspace: true,
+            } => format!("{name} Workspace"),
+            PaletteEntry::Launch { name, .. } => format!("Launch {name}"),
+            PaletteEntry::Command(name) => format!("Command {name}"),
+            PaletteEntry::Layout(name) => format!("Layout {name}"),
+            PaletteEntry::SaveLayout(name) => format!("Save Layout {name}"),
+        }
+    }
+
+    fn detail(&self, shortcuts: &config::Shortcuts) -> String {
+        match self {
+            PaletteEntry::Action(action) => shortcuts.label(*action),
+            PaletteEntry::Launch { .. } => String::from("profile"),
+            PaletteEntry::Command(_) => String::from("command"),
+            PaletteEntry::Layout(_) => String::from("layout"),
+            PaletteEntry::SaveLayout(_) => String::from("save"),
+        }
+    }
+
+    fn row(&self, shortcuts: &config::Shortcuts) -> panel::PanelRow {
+        panel::PanelRow {
+            label: self.label(),
+            detail: self.detail(shortcuts),
+            color: None,
         }
     }
 }
@@ -4274,22 +4327,71 @@ impl Gui {
 
     // ---- panels ------------------------------------------------------
 
-    fn palette_entries(query: &str) -> Vec<config::Action> {
-        config::Action::ALL
+    /// One palette row: an action, a configured launch, or a saved layout.
+    /// The palette is heterogeneous because the things a user wants to run
+    /// from it are not all bound to a chord.
+    fn palette_entries(&self, query: &str) -> Vec<PaletteEntry> {
+        let mut entries: Vec<PaletteEntry> = config::Action::ALL
             .iter()
             .copied()
             .filter(|action| panel::fuzzy_match(query, action.label()))
-            .collect()
+            .map(PaletteEntry::Action)
+            .collect();
+        // Launches come last and in config order, so the palette's first rows
+        // stay the app commands people reach for.
+        // Each row is matched against the label it shows, so typing what the
+        // palette prints finds it.
+        for launch in &self.config.launches.profiles {
+            for workspace in [false, true] {
+                let entry = PaletteEntry::Launch {
+                    name: launch.name.clone(),
+                    workspace,
+                };
+                if panel::fuzzy_match(query, &entry.label()) {
+                    entries.push(entry);
+                }
+            }
+        }
+        for command in &self.config.launches.commands {
+            let entry = PaletteEntry::Command(command.name.clone());
+            if panel::fuzzy_match(query, &entry.label()) {
+                entries.push(entry);
+            }
+        }
+        for name in self.saved_layouts() {
+            let entry = PaletteEntry::Layout(name);
+            if panel::fuzzy_match(query, &entry.label()) {
+                entries.push(entry);
+            }
+        }
+        // Saving the current tree is a palette action like any other; the
+        // workspace name is the natural default, and an existing layout of
+        // that name is replaced.
+        if let Some(name) = self.current_workspace_name() {
+            let entry = PaletteEntry::SaveLayout(name);
+            if panel::fuzzy_match(query, &entry.label()) {
+                entries.push(entry);
+            }
+        }
+        entries
     }
 
-    fn palette_rows(query: &str, shortcuts: &config::Shortcuts) -> Vec<panel::PanelRow> {
-        Self::palette_entries(query)
+    /// The visible workspace's name, or `None` when nothing is open.
+    fn current_workspace_name(&self) -> Option<String> {
+        let state = lock(&self.state);
+        let id = ui::active_workspace(&state)?;
+        state.workspace(&id).map(|workspace| workspace.name.clone())
+    }
+
+    /// Layout names the core knows about.
+    fn saved_layouts(&self) -> Vec<String> {
+        lock(&self.state).layouts.keys().cloned().collect()
+    }
+
+    fn palette_rows(&self, query: &str) -> Vec<panel::PanelRow> {
+        self.palette_entries(query)
             .into_iter()
-            .map(|action| panel::PanelRow {
-                label: action.label().to_string(),
-                detail: shortcuts.label(action),
-                color: None,
-            })
+            .map(|entry| entry.row(&self.config.shortcuts))
             .collect()
     }
 
@@ -4344,7 +4446,7 @@ impl Gui {
     /// so it must measure the value it holds, not `self.overlay`.
     fn overlay_rows_len(&self, overlay: &Overlay) -> usize {
         match overlay {
-            Overlay::Palette { query, .. } => Self::palette_entries(query).len(),
+            Overlay::Palette { query, .. } => self.palette_entries(query).len(),
             Overlay::Attention { .. } => self.attention_entries().len(),
             Overlay::Settings { recording, .. } => {
                 settings::rows(&self.config, *recording, self.hooks_notice.as_deref()).len()
@@ -4399,14 +4501,14 @@ impl Gui {
                     next_selected = Some(panel::move_selection(
                         current,
                         1,
-                        Self::palette_entries(query).len(),
+                        self.palette_entries(query).len(),
                     ));
                 }
                 Key::Named(NamedKey::ArrowUp) => {
                     next_selected = Some(panel::move_selection(
                         current,
                         -1,
-                        Self::palette_entries(query).len(),
+                        self.palette_entries(query).len(),
                     ));
                 }
                 Key::Named(NamedKey::Backspace) => {
@@ -5071,6 +5173,39 @@ impl Gui {
         let _ = window.request_inner_size(LogicalSize::new(width, height));
     }
 
+    /// Start a configured launch in the focused pane, or as a new workspace.
+    /// The core resolves the profile, so this only names it.
+    fn open_launch(&mut self, name: &str, workspace: bool) {
+        let mut params = serde_json::json!({"name": name});
+        if workspace {
+            params["kind"] = serde_json::json!("workspace");
+        }
+        match self.dispatch("launch.open", params) {
+            Ok(_) => self.request_redraw(),
+            Err(error) => eprintln!("berth-gui: launch.open {name}: {error}"),
+        }
+    }
+
+    /// Save the visible workspace's tree under a name, or open a saved layout.
+    fn save_layout(&mut self, name: &str) {
+        let workspace_id = lock(&self.state).selected_workspace.clone();
+        let mut params = serde_json::json!({"name": name});
+        if let Some(workspace_id) = workspace_id {
+            params["workspace_id"] = serde_json::json!(workspace_id);
+        }
+        match self.dispatch("layout.save", params) {
+            Ok(_) => self.request_redraw(),
+            Err(error) => eprintln!("berth-gui: layout.save: {error}"),
+        }
+    }
+
+    fn open_layout(&mut self, name: &str) {
+        match self.dispatch("layout.open", serde_json::json!({"name": name})) {
+            Ok(_) => self.request_redraw(),
+            Err(error) => eprintln!("berth-gui: layout.open: {error}"),
+        }
+    }
+
     /// Open the paste-history picker, newest entry first. The clipboard itself
     /// is not recorded: the history is what the user copied or pasted in this
     /// session, and seeding it with whatever an external app copied would make
@@ -5509,7 +5644,7 @@ impl Gui {
             Overlay::Palette { query, selected } => Some(PanelContent {
                 title: "Command Palette".to_string(),
                 query: Some(query.clone()),
-                rows: Self::palette_rows(query, &self.config.shortcuts),
+                rows: self.palette_rows(query),
                 selected: *selected,
                 hint: "↑↓ move · enter run · esc close".to_string(),
             }),
@@ -5776,9 +5911,18 @@ impl Gui {
     fn overlay_activate(&mut self) {
         match self.overlay.take() {
             Some(Overlay::Palette { query, selected }) => {
-                let entries = Self::palette_entries(&query);
-                if let Some(action) = entries.get(selected).copied() {
-                    self.run_command(Command::for_action(action));
+                let entries = self.palette_entries(&query);
+                match entries.get(selected) {
+                    Some(PaletteEntry::Action(action)) => {
+                        self.run_command(Command::for_action(*action));
+                    }
+                    Some(PaletteEntry::Launch { name, workspace }) => {
+                        self.open_launch(name, *workspace);
+                    }
+                    Some(PaletteEntry::Command(name)) => self.open_launch(name, false),
+                    Some(PaletteEntry::Layout(name)) => self.open_layout(name),
+                    Some(PaletteEntry::SaveLayout(name)) => self.save_layout(name),
+                    None => {}
                 }
             }
             Some(Overlay::Attention { selected }) => {

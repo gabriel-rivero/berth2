@@ -181,6 +181,10 @@ Goal: the prompt becomes a place in the buffer, not a string in a stream.
 - **Commands and profiles**: user-defined commands from `config.json`, recent-choice
   ranking, named launch presets that replace the single `shell` key (argv, env, cwd,
   shell, label) on both shells, and saving the current tree as a named layout.
+  **Landed in 0.17.0** as the shared `launch` module: profiles and commands parse in the
+  core, so the palette, `berth new --profile` and `berth profiles` all resolve the same
+  definition; `layout.save`/`layout.open` round-trip a workspace tree with fresh pane
+  ids. Recent-choice ranking and the AppKit palette are not wired yet.
 - **Output rules and logging**: regex rules that style matching lines, as ConEmu's
   Highlight and iTerm2's Triggers do, and a per-pane session log written to a file.
 - **Scrollback restore**: opt-in and capped by bytes, so a relaunch keeps the last screen
@@ -364,6 +368,11 @@ The 0.17 items that shipped partially, recorded so they are decisions and not ov
 | --- | --- |
 | OSC 133 `D` may carry a command duration; it is not parsed, so there is no per-command timing | 0.18 inbox |
 | Paste history is portable-only; the AppKit shell ignores the key and `Cmd+Shift+V` pastes through Ghostty | 1.0 AppKit parity |
+| Profiles and commands are offered in the portable palette only; the AppKit palette does not index them | 1.0 AppKit parity |
+| Recent-choice ranking for profiles is implemented in the core but no shell records picks into it | 0.18 |
+| A saved layout captures only each pane's active tab, not every tab, and drops per-pane `env` | 0.18 |
+| `layout.open` leaves a saved layout's weights unnormalised, so a hand-made layout can jump on the first resize | 0.18 |
+| Saved layouts live in memory for the session; nothing writes them to disk or to `config.json` | 0.18 |
 | Quick terminal registers no OS-wide hotkey in the AppKit shell; it is menu- and shortcut-only | 1.0 AppKit parity |
 | The quick terminal has one display placement, not a per-display dropdown, and is not positioned inside the work area's menu-bar/dock insets | 0.18 |
 | A global `quickHotkey` colliding with an in-app binding is not detected; the OS takes the key silently | 0.18 |

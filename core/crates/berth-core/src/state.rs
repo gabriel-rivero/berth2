@@ -29,6 +29,11 @@ pub struct AppState {
     pub selected_surface: Option<String>,
     /// Providers whose OS notifications are silenced. In-app attention stays.
     pub muted_providers: std::collections::HashSet<String>,
+    /// Launch profiles and custom commands, pushed in by the shell from
+    /// `config.json`. The core never reads a config file.
+    pub launches: crate::launch::Launches,
+    /// Repositories the user saved with `layout.save`, by name.
+    pub layouts: std::collections::BTreeMap<String, crate::launch::SavedLayout>,
     /// Minted lazily; identifies this app run in `system.hello`.
     pub instance: String,
     /// First activity timestamp, used by `system.ping` uptime.
@@ -251,6 +256,165 @@ impl AppState {
             }
         }
         window.id
+    }
+
+    /// Create a workspace whose first pane runs `argv` with `env`, which is how
+    /// a launch profile opens a workspace rather than a tab.
+    pub fn create_workspace_with(
+        &mut self,
+        name: &str,
+        label: Option<&str>,
+        cwd: Option<&str>,
+        argv: Vec<String>,
+        env: Vec<(String, String)>,
+        ops: &dyn SurfaceOps,
+    ) -> Result<Workspace, CoreError> {
+        let window_id = self.ensure_window();
+        let ws_id = ids::mint(ids::WORKSPACE);
+        let pane_id = ids::mint(ids::PANE);
+        let mut ws = Workspace {
+            id: ws_id.clone(),
+            name: if name.is_empty() {
+                format!("workspace {}", self.workspaces.len() + 1)
+            } else {
+                name.to_string()
+            },
+            group_id: None,
+            icon: None,
+            color: None,
+            pinned: false,
+            unread: 0,
+            created_ms: time::now_ms(),
+            root: PaneNode::leaf(pane_id.clone()),
+            active_surface: None,
+            window_id: Some(window_id),
+            zoomed_pane: None,
+        };
+        let surface = self.spawn_into(&ws, &pane_id, cwd, argv, env, ops)?;
+        ws.active_surface = Some(surface.id.clone());
+        if let Some(label) = label.map(str::trim).filter(|label| !label.is_empty())
+            && let Some(surface) = self.surface_mut(&surface.id)
+        {
+            surface.user_title = Some(label.to_string());
+        }
+        self.workspaces.push(ws.clone());
+        self.emit(names::WORKSPACE_CREATED, serde_json::json!(ws));
+        // `select_workspace` points the window, the selection and the focus at
+        // the new workspace; setting the fields directly left the window's
+        // `active_workspace` stale and emitted no selection event.
+        self.select_workspace(&ws.id)?;
+        Ok(ws)
+    }
+
+    /// Capture a workspace's tree, with each pane's cwd and argv, as a layout.
+    pub fn save_layout(
+        &self,
+        workspace_id: &str,
+        name: &str,
+    ) -> Result<crate::launch::SavedLayout, CoreError> {
+        let workspace = self
+            .workspace(workspace_id)
+            .ok_or_else(|| CoreError::not_found(format!("no workspace {workspace_id}")))?;
+        let mut cwd: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+        let mut argv: std::collections::BTreeMap<String, Vec<String>> =
+            std::collections::BTreeMap::new();
+        for pane_id in workspace.root.leaves() {
+            let Some(pane) = self.panes.get(pane_id) else {
+                continue;
+            };
+            let Some(surface) = pane.active_surface().and_then(|id| self.surface(id)) else {
+                continue;
+            };
+            cwd.insert(pane_id.to_string(), surface.cwd.clone());
+            if !surface.argv.is_empty() {
+                argv.insert(pane_id.to_string(), surface.argv.clone());
+            }
+        }
+        Ok(crate::launch::SavedLayout {
+            name: name.to_string(),
+            root: workspace.root.clone(),
+            cwd,
+            argv,
+            saved_ms: time::now_ms(),
+        })
+    }
+
+    /// Open a saved layout as a new workspace: the same tree shape, each pane
+    /// in its saved cwd, and a pane's saved command re-run where it had one.
+    pub fn open_layout(
+        &mut self,
+        layout: &crate::launch::SavedLayout,
+        ops: &dyn SurfaceOps,
+    ) -> Result<Workspace, CoreError> {
+        let saved_leaves: Vec<String> =
+            layout.root.leaves().iter().map(|s| s.to_string()).collect();
+        if saved_leaves.is_empty() {
+            return Err(CoreError::new(
+                ErrorCode::BadRequest,
+                "a layout needs at least one pane",
+            ));
+        }
+        let window_id = self.ensure_window();
+        let ws_id = ids::mint(ids::WORKSPACE);
+        // Pane ids in the saved tree may still be live in the workspace the
+        // layout was captured from, so every leaf gets a fresh id.
+        let leaves: Vec<String> = saved_leaves.iter().map(|_| ids::mint(ids::PANE)).collect();
+        let mut ws = Workspace {
+            id: ws_id.clone(),
+            name: layout.name.clone(),
+            group_id: None,
+            icon: None,
+            color: None,
+            pinned: false,
+            unread: 0,
+            created_ms: time::now_ms(),
+            root: rebuild_tree(&layout.root, &leaves),
+            active_surface: None,
+            window_id: Some(window_id),
+            zoomed_pane: None,
+        };
+
+        // Spawn every pane first, tracking what was created. A spawn can fail
+        // (a program that no longer exists, a cwd that is gone), and leaving
+        // half a layout behind would strand live PTYs outside any tree.
+        let mut spawned: Vec<(String, String)> = Vec::new();
+        for (index, leaf) in leaves.iter().enumerate() {
+            let saved = &saved_leaves[index];
+            let cwd = layout.cwd.get(saved).map(String::as_str);
+            let argv = layout.argv.get(saved).cloned().unwrap_or_default();
+            let result = self.spawn_into(&ws, leaf, cwd, argv, Vec::new(), ops);
+            match result {
+                Ok(surface) => {
+                    spawned.push((leaf.clone(), surface.id.clone()));
+                    if ws.active_surface.is_none() {
+                        ws.active_surface = Some(surface.id.clone());
+                    }
+                }
+                Err(error) => {
+                    // Roll back: close the surfaces this layout opened and drop
+                    // the panes it registered.
+                    for (_, surface_id) in &spawned {
+                        let _ = self.close_surface(surface_id, ops);
+                    }
+                    return Err(error);
+                }
+            }
+        }
+        for (leaf, surface_id) in &spawned {
+            self.panes.insert(
+                leaf.clone(),
+                Pane {
+                    id: leaf.clone(),
+                    workspace_id: ws_id.clone(),
+                    surfaces: vec![surface_id.clone()],
+                    active: 0,
+                },
+            );
+        }
+        self.workspaces.push(ws.clone());
+        self.emit(names::WORKSPACE_CREATED, serde_json::json!(ws));
+        self.select_workspace(&ws.id)?;
+        Ok(ws)
     }
 
     /// The first window of a kind.
@@ -1510,6 +1674,39 @@ impl AppState {
         );
         Ok(())
     }
+}
+
+/// Rebuild a saved tree with fresh leaf ids, in the same order, so the shape
+/// (splits and weights) survives without reusing pane ids that now belong to
+/// another workspace.
+fn rebuild_tree(node: &PaneNode, leaves: &[String]) -> PaneNode {
+    fn walk(node: &PaneNode, leaves: &[String], cursor: &mut usize) -> PaneNode {
+        match node {
+            PaneNode::Leaf { .. } => {
+                let id = leaves
+                    .get(*cursor)
+                    .cloned()
+                    .unwrap_or_else(|| ids::mint(ids::PANE));
+                *cursor += 1;
+                PaneNode::leaf(id)
+            }
+            PaneNode::Split {
+                id: _,
+                orientation,
+                children,
+                weights,
+            } => PaneNode::Split {
+                id: ids::mint(ids::PANE),
+                orientation: *orientation,
+                children: children
+                    .iter()
+                    .map(|child| walk(child, leaves, cursor))
+                    .collect(),
+                weights: weights.clone(),
+            },
+        }
+    }
+    walk(node, leaves, &mut 0)
 }
 
 #[cfg(test)]

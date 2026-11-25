@@ -421,6 +421,8 @@ pub struct Config {
     pub shortcuts: Shortcuts,
     /// The dropdown quick terminal's global hotkey, placement and height.
     pub quick: crate::quick::Options,
+    /// Launch profiles and custom commands from `config.json`.
+    pub launches: berth_core::launch::Launches,
 }
 
 impl Default for Config {
@@ -451,6 +453,7 @@ impl Default for Config {
             socket: None,
             shortcuts: Shortcuts::build(&HashMap::new()),
             quick: crate::quick::Options::default(),
+            launches: berth_core::launch::Launches::default(),
         }
     }
 }
@@ -612,9 +615,33 @@ struct FileConfig {
     sidebar_width: Option<f64>,
     socket: Option<String>,
     shortcuts: HashMap<String, String>,
+    /// Named launch presets and one-shot commands.
+    profiles: Option<Vec<berth_core::launch::Launch>>,
+    commands: Option<Vec<berth_core::launch::Launch>>,
     quick_hotkey: Option<String>,
     quick_placement: Option<String>,
     quick_height: Option<f64>,
+}
+
+/// Build the launch set, dropping it when it is malformed. A duplicate or
+/// nameless entry would resolve unpredictably, and a bad `profiles` block
+/// should not stop the window opening; the rest of the file still applies.
+fn launches_from(
+    profiles: Option<Vec<berth_core::launch::Launch>>,
+    commands: Option<Vec<berth_core::launch::Launch>>,
+) -> berth_core::launch::Launches {
+    let launches = berth_core::launch::Launches {
+        profiles: profiles.unwrap_or_default(),
+        commands: commands.unwrap_or_default(),
+    };
+    match launches.validate() {
+        Ok(()) => launches,
+        Err(error) => {
+            crate::log::line(&format!("config: profiles/commands ignored: {error}"));
+            eprintln!("berth-gui: config: profiles/commands ignored: {error}");
+            berth_core::launch::Launches::default()
+        }
+    }
 }
 
 impl Config {
@@ -730,6 +757,7 @@ impl Config {
                 .clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH),
             socket: file.socket,
             shortcuts: Shortcuts::build(&file.shortcuts),
+            launches: launches_from(file.profiles, file.commands),
             quick: crate::quick::Options::from_config(
                 file.quick_hotkey.as_deref(),
                 file.quick_placement.as_deref(),
@@ -1471,5 +1499,19 @@ mod tests {
             "opaque must not be written as an explicit override"
         );
         let _ = std::fs::remove_file(&path);
+    }
+    #[test]
+    fn given_profiles_in_config_then_they_parse_into_launches() {
+        let config = Config::parse(
+            r#"{
+                "profiles": [{"name": "wsl", "command": ["wsl.exe"], "label": "Ubuntu"}],
+                "commands": [{"name": "serve", "command": "make serve"}]
+            }"#,
+        )
+        .expect("the document parses");
+        assert_eq!(config.launches.profiles.len(), 1);
+        assert_eq!(config.launches.profiles[0].tab_label(), "Ubuntu");
+        assert_eq!(config.launches.commands[0].argv(), vec!["make serve"]);
+        assert!(config.launches.validate().is_ok());
     }
 }

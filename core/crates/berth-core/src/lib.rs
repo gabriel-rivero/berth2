@@ -16,6 +16,7 @@
 
 pub mod agent;
 pub mod ids;
+pub mod launch;
 pub mod model;
 pub mod paths;
 pub mod protocol;
