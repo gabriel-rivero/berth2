@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- **Native macOS menu bar.** The portable window's `Berth`, `Terminal`, `View` and
+  `Window` menus are real `NSMenu`s in the system menu bar, appended to the
+  application menu winit installs. The app menu's Quit is routed through Berth so it
+  saves the session before exiting, and macOS no longer reserves a row for a painted
+  bar. Linux and Windows keep the painted menu. The macOS items are click-only for
+  now; keyboard chords still run through the window.
+
 ## 0.18.0 — 2026-11-25
 
 ### Features

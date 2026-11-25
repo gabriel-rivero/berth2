@@ -82,6 +82,20 @@ pub fn entries(menu: usize) -> &'static [Entry] {
     }
 }
 
+/// Encode a menu row as an `NSMenuItem` tag: the menu index and row in one
+/// number. Called from the macOS menu builder.
+#[cfg(target_os = "macos")]
+pub fn tag(menu: usize, row: usize) -> isize {
+    (menu * 100 + row) as isize
+}
+
+/// The entry a tag refers to, or `None` for a tag this window never created.
+#[cfg(target_os = "macos")]
+pub fn entry_for_tag(tag: isize) -> Option<Entry> {
+    let tag = usize::try_from(tag).ok()?;
+    entries(tag / 100).get(tag % 100).copied()
+}
+
 impl Entry {
     /// The row's label; empty for a separator.
     pub fn label(self) -> &'static str {
@@ -169,5 +183,17 @@ mod tests {
         assert_eq!(Entry::Quit.label(), "Quit Berth");
         assert!(Entry::Quit.selectable());
         assert!(!Entry::Separator.selectable());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn given_a_menu_row_then_its_tag_resolves_back_to_the_entry() {
+        for menu in 0..TITLES.len() {
+            for (row, entry) in entries(menu).iter().enumerate() {
+                assert_eq!(entry_for_tag(tag(menu, row)), Some(*entry));
+            }
+        }
+        assert_eq!(entry_for_tag(-1), None);
+        assert_eq!(entry_for_tag(tag(9, 0)), None);
     }
 }

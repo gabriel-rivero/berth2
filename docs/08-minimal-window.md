@@ -178,11 +178,16 @@ correctly.
   shortcuts. Arrows adjust or cycle a value, Enter toggles or starts recording a
   chord, Backspace unbinds. Every change applies live and is written to
   `config.json` with the keys the window does not own preserved.
-- The painted menu bar (`Berth`, `Terminal`, `View`, `Window`) is a real menu:
-  click a title to open its dropdown, hover or arrow to move, click or Enter to
-  run, Escape to close. Each row shows its current chord and runs the same
-  command the chord table does. It is painted into the frame because winit has
-  no native menu API; on macOS it is not in the system menu bar yet.
+- The menu bar has the same four menus (`Berth`, `Terminal`, `View`, `Window`) on
+  every platform, and every row runs the same command the chord table does. On
+  macOS they are real `NSMenu`s in the system menu bar, appended to the
+  application menu winit installs; the app menu's Quit is routed through Berth so
+  it saves the session before exiting, and the window reserves no row for a
+  painted bar. On Linux and Windows the bar is painted into the frame because
+  winit exposes no menu API there: click a title, hover or arrow to move, click
+  or Enter to run, Escape to close, with each row showing its chord. The macOS
+  items do not show key equivalents yet; the chords still work through the
+  window.
 - Long panels scroll to follow the selection. Clicking outside a panel or
   focusing another window closes it.
 

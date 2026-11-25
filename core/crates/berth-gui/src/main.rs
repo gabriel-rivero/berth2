@@ -48,6 +48,8 @@ mod keys;
 mod layout;
 mod links;
 mod log;
+#[cfg(target_os = "macos")]
+mod macos_menu;
 mod menu;
 mod mouse;
 mod output_rules;
@@ -568,6 +570,9 @@ enum UserEvent {
     /// manager's own thread, so the work hops to the event loop like a wake.
     QuickTerminal,
     Quit,
+    /// A choice from the macOS system menu bar, encoded as an item tag.
+    #[cfg(target_os = "macos")]
+    Menu(isize),
 }
 
 impl From<accesskit_winit::Event> for UserEvent {
@@ -1057,6 +1062,10 @@ struct WinStash {
 
 impl ApplicationHandler<UserEvent> for Gui {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        // macOS draws the menus in the system bar; other platforms paint them
+        // into the frame below. Installing is idempotent across resumes.
+        #[cfg(target_os = "macos")]
+        macos_menu::install(&self.proxy);
         if self.window.is_some() || !self.stash.is_empty() {
             return;
         }
@@ -1273,6 +1282,12 @@ impl ApplicationHandler<UserEvent> for Gui {
             UserEvent::Quit => {
                 self.save_and_close();
                 event_loop.exit();
+            }
+            #[cfg(target_os = "macos")]
+            UserEvent::Menu(tag) => {
+                if let Some(entry) = menu::entry_for_tag(tag) {
+                    self.menu_activate(entry);
+                }
             }
             UserEvent::A11y(event) => match event.window_event {
                 accesskit_winit::WindowEvent::InitialTreeRequested => {
@@ -1961,7 +1976,12 @@ impl Gui {
     }
 
     fn menu_bar_height(&self) -> usize {
-        (24.0 * self.scale) as usize
+        // The macOS window uses the system menu bar, so it reserves no row.
+        if cfg!(target_os = "macos") {
+            0
+        } else {
+            (24.0 * self.scale) as usize
+        }
     }
 
     /// Titles and, when one is open, the dropdown's frame and row hit boxes.
@@ -2574,28 +2594,31 @@ impl Gui {
             };
             let chrome_cell = self.chrome_font().cell();
             painter.fill(menu_rect, theme.tab_bar_bg);
-            for (rect, index) in &menu_bar.titles {
-                let active = self.menu_open == Some(*index);
-                if active {
-                    painter.fill(*rect, theme.tab_active_bg);
-                }
-                let title = menu::TITLES[*index];
-                let font = self.chrome_font();
-                let used = font.advance(title, font::TextStyle::BOLD);
-                let x = rect.x + rect.w.saturating_sub(used) / 2;
-                let y = rect.y + rect.h.saturating_sub(chrome_cell.height) / 2;
-                painter.text(
-                    font,
-                    (x, y),
-                    title,
-                    font::TextStyle::BOLD,
+            // macOS puts these menus in the system bar instead.
+            if !cfg!(target_os = "macos") {
+                for (rect, index) in &menu_bar.titles {
+                    let active = self.menu_open == Some(*index);
                     if active {
-                        theme.text_primary
-                    } else {
-                        theme.text_secondary
-                    },
-                    rect.w,
-                );
+                        painter.fill(*rect, theme.tab_active_bg);
+                    }
+                    let title = menu::TITLES[*index];
+                    let font = self.chrome_font();
+                    let used = font.advance(title, font::TextStyle::BOLD);
+                    let x = rect.x + rect.w.saturating_sub(used) / 2;
+                    let y = rect.y + rect.h.saturating_sub(chrome_cell.height) / 2;
+                    painter.text(
+                        font,
+                        (x, y),
+                        title,
+                        font::TextStyle::BOLD,
+                        if active {
+                            theme.text_primary
+                        } else {
+                            theme.text_secondary
+                        },
+                        rect.w,
+                    );
+                }
             }
             painter.fill(status_rect, status_bg);
             let status_font = self.chrome_font();
@@ -2835,7 +2858,9 @@ impl Gui {
                 }
             }
 
-            if let Some(open) = &menu_bar.open {
+            if !cfg!(target_os = "macos")
+                && let Some(open) = &menu_bar.open
+            {
                 painter.fill(open.panel, theme.panel_bg);
                 painter.stroke(open.panel, theme.pane_border);
                 let pointer = (
@@ -3372,8 +3397,9 @@ impl Gui {
             self.request_redraw();
             return;
         }
-        // The menu bar and its dropdown take the click before any pane does.
-        if button == MouseButton::Left && self.menu_click(point) {
+        // The painted menu bar and its dropdown take the click before any pane
+        // does; macOS has no painted bar, the system handles its menus.
+        if !cfg!(target_os = "macos") && button == MouseButton::Left && self.menu_click(point) {
             self.request_redraw();
             return;
         }
@@ -6901,7 +6927,7 @@ impl Gui {
             self.overlay_key(&event);
             return;
         }
-        if self.menu_open.is_some() && self.menu_key(&event) {
+        if !cfg!(target_os = "macos") && self.menu_open.is_some() && self.menu_key(&event) {
             self.request_redraw();
             return;
         }
