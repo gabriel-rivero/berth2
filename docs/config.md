@@ -240,6 +240,19 @@ default: unlike the clipboard, a log outlives the session, and session output
 can contain a token. One file rotates to `.log.1` at 8 MiB, and logs are closed
 when their pane closes.
 
+## Command palette
+
+The palette (`palette`, `Cmd/Ctrl+Shift+P`) indexes more than the shortcut table: every
+action, the configured profiles and commands, saved layouts, and the live session —
+each workspace, the tabs of the visible workspace (labelled with their pane), and each
+group, whose row says whether Enter will collapse or expand it.
+
+With an empty query the rows are ordered by what you picked last in this window, so the
+palette opens on the thing you keep reaching for. A destructive action (close, restart,
+duplicate, new window, quick terminal) is never promoted that way, because the palette
+preselects the first row and a repeat would then be one Enter away. Typing a query
+filters on the label, including its prefix (`Workspace `, `Tab `, `Group `).
+
 ## File drops
 
 Dropping a file or folder on a pane types its path, quoted for the shell that will

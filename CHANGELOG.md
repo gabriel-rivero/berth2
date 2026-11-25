@@ -81,6 +81,13 @@
   quote or recall a command, so those paths are refused, the text is wrapped in a
   bracketed paste where the program asked for one, and a drop is refused into a
   full-screen program, where a path is a sequence of editor commands.
+- **Palette depth.** The palette now indexes the session, not just the shortcut table:
+  every workspace, the tabs of the visible workspace (labelled with their pane, so three
+  `shell` rows stay distinguishable) and each group, whose row says whether Enter
+  collapses or expands it. Profiles, commands and layouts were already there. With an
+  empty query the rows are ordered by what you picked last in that window; destructive
+  actions are never promoted, since the palette preselects the first row and a repeat
+  would be one Enter away.
 - **Find in the AppKit shell.** `Cmd+F` opens a find bar over the focused terminal,
   backed by Ghostty's own incremental search: it shows the current and total match,
   `Enter` steps forward, `Shift+Enter` back, and `Esc` closes it and returns focus to

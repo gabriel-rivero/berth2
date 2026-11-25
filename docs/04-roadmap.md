@@ -201,7 +201,10 @@ Goal: the prompt becomes a place in the buffer, not a string in a stream.
   bracketed paste; paths with control characters and drops into full-screen programs are
   refused rather than typed wrong.
 - **Palette depth**: workspace, tab and group commands, and a palette that indexes the
-  new actions.
+  new actions. **Landed in 0.17.0** for the portable window: the palette is
+  heterogeneous, indexing actions, profiles, commands, layouts and the live session
+  (workspaces, tabs with their pane, groups), with per-window recency that never
+  promotes a destructive action.
 
 **Done when:** a failing command can be found by jumping prompt to prompt and reading its
 status, a search in one pane reaches the others, a selection can be made without the
@@ -380,6 +383,9 @@ The 0.17 items that shipped partially, recorded so they are decisions and not ov
 | Paste history is portable-only; the AppKit shell ignores the key and `Cmd+Shift+V` pastes through Ghostty | 1.0 AppKit parity |
 | Profiles and commands are offered in the portable palette only; the AppKit palette does not index them | 1.0 AppKit parity |
 | Recent-choice ranking for profiles is implemented in the core but no shell records picks into it | 0.18 |
+| The palette's session rows are core-global, so a window's palette can list and switch to another window's workspace | 0.18 |
+| Palette rows are rebuilt on every paint; the list is uncapped, so a very large session makes each frame allocate | 0.18 |
+| AppKit has no palette entry for profiles, commands, layouts or session rows | 1.0 AppKit parity |
 | File drops are portable-only; the AppKit shell does not accept a dropped file yet | 1.0 AppKit parity |
 | A drop uses the last pointer position, which winit freezes during a native drag, so a multi-pane release can target the wrong pane | 0.18 |
 | `cmd` cannot escape `"` or `%` inside a path, so such a path is emitted without the quote and `%` is left unexpanded | 0.18 |

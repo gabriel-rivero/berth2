@@ -512,6 +512,7 @@ fn main() {
         },
         logged: HashMap::new(),
         dropped: Vec::new(),
+        recent: Vec::new(),
     };
 
     if let Err(error) = event_loop.run_app(&mut app) {
@@ -699,6 +700,24 @@ enum PaletteEntry {
     Layout(String),
     /// Save the visible workspace's tree under this name.
     SaveLayout(String),
+    /// Switch to a workspace by id, labelled with its name.
+    Workspace {
+        id: String,
+        name: String,
+    },
+    /// Switch to a tab (a surface) by id.
+    Tab {
+        surface_id: String,
+        label: String,
+        /// One-based pane number, so identical tab titles stay distinguishable.
+        pane: usize,
+    },
+    /// Toggle a group's collapsed state.
+    Group {
+        id: String,
+        name: String,
+        collapsed: bool,
+    },
 }
 
 impl PaletteEntry {
@@ -713,6 +732,9 @@ impl PaletteEntry {
             PaletteEntry::Command(name) => format!("Command {name}"),
             PaletteEntry::Layout(name) => format!("Layout {name}"),
             PaletteEntry::SaveLayout(name) => format!("Save Layout {name}"),
+            PaletteEntry::Workspace { name, .. } => format!("Workspace {name}"),
+            PaletteEntry::Tab { label, .. } => format!("Tab {label}"),
+            PaletteEntry::Group { name, .. } => format!("Group {name}"),
         }
     }
 
@@ -723,6 +745,71 @@ impl PaletteEntry {
             PaletteEntry::Command(_) => String::from("command"),
             PaletteEntry::Layout(_) => String::from("layout"),
             PaletteEntry::SaveLayout(_) => String::from("save"),
+            PaletteEntry::Workspace { .. } => String::from("go"),
+            PaletteEntry::Tab { pane, .. } => format!("pane {pane}"),
+            PaletteEntry::Group { collapsed, .. } => {
+                if *collapsed {
+                    String::from("expand")
+                } else {
+                    String::from("collapse")
+                }
+            }
+        }
+    }
+
+    /// Whether picking this entry is safe to repeat. Recency puts the last
+    /// pick on row 0, which the palette preselects, so a destructive action
+    /// would be one Enter away on open.
+    fn repeat_safe(&self) -> bool {
+        match self {
+            PaletteEntry::Action(action) => matches!(
+                action,
+                // Navigation, toggles and searches repeat harmlessly.
+                config::Action::Palette
+                    | config::Action::Search
+                    | config::Action::Settings
+                    | config::Action::ShowAttention
+                    | config::Action::JumpAttention
+                    | config::Action::SidebarFilter
+                    | config::Action::ToggleSidebar
+                    | config::Action::NextTab
+                    | config::Action::PreviousTab
+                    | config::Action::NextPane
+                    | config::Action::PreviousPane
+                    | config::Action::FocusLeft
+                    | config::Action::FocusRight
+                    | config::Action::FocusUp
+                    | config::Action::FocusDown
+                    | config::Action::NextWindow
+                    | config::Action::PreviousPrompt
+                    | config::Action::NextPrompt
+                    | config::Action::CopyMode
+                    | config::Action::PasteHistory
+                    | config::Action::ZoomIn
+                    | config::Action::ZoomOut
+                    | config::Action::ZoomReset
+            ),
+            // Switching to a workspace, tab or group is a navigation, not a
+            // change, and a launch repeats cleanly.
+            _ => true,
+        }
+    }
+
+    /// A stable key for recent-choice ranking. Actions and named things have
+    /// natural names; the id-keyed rows use it so two workspaces with the same
+    /// name are still distinct.
+    fn recent_key(&self) -> String {
+        match self {
+            PaletteEntry::Action(action) => format!("action:{}", action.key()),
+            PaletteEntry::Launch { name, workspace } => {
+                format!("launch:{}{}", if *workspace { "w:" } else { "" }, name)
+            }
+            PaletteEntry::Command(name) => format!("command:{name}"),
+            PaletteEntry::Layout(name) => format!("layout:{name}"),
+            PaletteEntry::SaveLayout(name) => format!("save-layout:{name}"),
+            PaletteEntry::Workspace { id, .. } => format!("workspace:{id}"),
+            PaletteEntry::Tab { surface_id, .. } => format!("tab:{surface_id}"),
+            PaletteEntry::Group { id, .. } => format!("group:{id}"),
         }
     }
 
@@ -899,6 +986,9 @@ struct Gui {
     session_log: session_log::SessionLog,
     /// Paths dropped since the last frame, typed together as one command line.
     dropped: Vec<String>,
+    /// Palette keys the user picked in this window, most recent first, so the
+    /// palette opens on the thing they keep reaching for here.
+    recent: Vec<String>,
     /// How much of each pane has been written to its log, so output already
     /// logged is not written twice.
     logged: HashMap<String, usize>,
@@ -935,6 +1025,7 @@ struct WinStash {
     sidebar_filter: String,
     sidebar_filter_active: bool,
     copy_mode: Option<copymode::CopyMode>,
+    recent: Vec<String>,
 }
 
 impl ApplicationHandler<UserEvent> for Gui {
@@ -1672,6 +1763,7 @@ impl Gui {
             sidebar_filter: std::mem::take(&mut self.sidebar_filter),
             sidebar_filter_active: self.sidebar_filter_active,
             copy_mode: self.copy_mode.take(),
+            recent: std::mem::take(&mut self.recent),
         };
         self.stash.insert(id, stash);
     }
@@ -1700,6 +1792,7 @@ impl Gui {
         self.sidebar_filter = stash.sidebar_filter;
         self.sidebar_filter_active = stash.sidebar_filter_active;
         self.copy_mode = stash.copy_mode;
+        self.recent = stash.recent;
         // Transient input state must not follow the pointer between windows.
         self.preedit = None;
         self.mouse_down = None;
@@ -4578,6 +4671,87 @@ impl Gui {
                 entries.push(entry);
             }
         }
+        // Then the things that live in this session: switching to a workspace,
+        // a tab or a group is a command the palette should index, not only a
+        // mouse target in the sidebar.
+        for entry in self.session_entries() {
+            if panel::fuzzy_match(query, &entry.label()) {
+                entries.push(entry);
+            }
+        }
+        // With no query, put what was picked last first: an empty palette is
+        // the one people open to repeat the last thing they did.
+        // Sorting only on an empty query means the list visibly reorders when
+        // the last character is deleted; that is intended, since an empty
+        // palette is the "do the last thing again" affordance.
+        if query.is_empty() && !self.recent.is_empty() {
+            // `sort_by_cached_key` computes each key once rather than once per
+            // comparison, and `recent_key` allocates a String.
+            entries.sort_by_cached_key(|entry| {
+                self.recent
+                    .iter()
+                    .position(|key| key == &entry.recent_key())
+                    .unwrap_or(usize::MAX)
+            });
+        }
+        entries
+    }
+
+    /// Remember a palette pick so it sorts first next time.
+    fn record_pick(&mut self, entry: &PaletteEntry) {
+        // A destructive action is never promoted to row 0: the palette
+        // preselects it, so a repeat would be one Enter away.
+        if !entry.repeat_safe() {
+            return;
+        }
+        let key = entry.recent_key();
+        self.recent.retain(|existing| existing != &key);
+        self.recent.insert(0, key);
+        // A dozen is enough to make the top of the list useful without turning
+        // it into a history.
+        self.recent.truncate(12);
+    }
+
+    /// Palette rows for the current session: every workspace, the tabs of the
+    /// visible workspace, and every group.
+    fn session_entries(&self) -> Vec<PaletteEntry> {
+        let state = lock(&self.state);
+        let mut entries = Vec::new();
+        for workspace in &state.workspaces {
+            entries.push(PaletteEntry::Workspace {
+                id: workspace.id.clone(),
+                name: workspace.name.clone(),
+            });
+        }
+        if let Some(workspace_id) = ui::active_workspace(&state)
+            && let Some(workspace) = state.workspace(&workspace_id)
+        {
+            // A workspace with three untitled shells would otherwise give three
+            // identical `Tab shell` rows, so each names its pane.
+            let leaves = workspace.root.leaves();
+            for (pane_index, pane_id) in leaves.iter().enumerate() {
+                let Some(pane) = state.panes.get(*pane_id) else {
+                    continue;
+                };
+                for (index, surface_id) in pane.surfaces.iter().enumerate() {
+                    let Some(surface) = state.surface(surface_id) else {
+                        continue;
+                    };
+                    entries.push(PaletteEntry::Tab {
+                        surface_id: surface_id.clone(),
+                        label: ui::tab_title(surface, index),
+                        pane: pane_index + 1,
+                    });
+                }
+            }
+        }
+        for group in &state.groups {
+            entries.push(PaletteEntry::Group {
+                id: group.id.clone(),
+                name: group.name.clone(),
+                collapsed: group.collapsed,
+            });
+        }
         entries
     }
 
@@ -5378,6 +5552,24 @@ impl Gui {
         let _ = window.request_inner_size(LogicalSize::new(width, height));
     }
 
+    /// Collapse or expand a group, the same toggle the sidebar row does.
+    fn toggle_group(&mut self, group_id: &str) {
+        // A group can be deleted between the frame that painted the row and the
+        // Enter that activates it; dispatching then would log a spurious error.
+        let Some(collapsed) = lock(&self.state)
+            .groups
+            .iter()
+            .find(|group| group.id == group_id)
+            .map(|group| !group.collapsed)
+        else {
+            return;
+        };
+        let params = serde_json::json!({"group_id": group_id, "collapsed": collapsed});
+        if let Err(error) = self.dispatch("group.update", params) {
+            eprintln!("berth-gui: group.update: {error}");
+        }
+    }
+
     /// Start a configured launch in the focused pane, or as a new workspace.
     /// The core resolves the profile, so this only names it.
     fn open_launch(&mut self, name: &str, workspace: bool) {
@@ -6117,6 +6309,9 @@ impl Gui {
         match self.overlay.take() {
             Some(Overlay::Palette { query, selected }) => {
                 let entries = self.palette_entries(&query);
+                if let Some(entry) = entries.get(selected) {
+                    self.record_pick(entry);
+                }
                 match entries.get(selected) {
                     Some(PaletteEntry::Action(action)) => {
                         self.run_command(Command::for_action(*action));
@@ -6127,6 +6322,9 @@ impl Gui {
                     Some(PaletteEntry::Command(name)) => self.open_launch(name, false),
                     Some(PaletteEntry::Layout(name)) => self.open_layout(name),
                     Some(PaletteEntry::SaveLayout(name)) => self.save_layout(name),
+                    Some(PaletteEntry::Workspace { id, .. }) => self.select_workspace(id),
+                    Some(PaletteEntry::Tab { surface_id, .. }) => self.activate(surface_id),
+                    Some(PaletteEntry::Group { id, .. }) => self.toggle_group(id),
                     None => {}
                 }
             }
@@ -6790,6 +6988,78 @@ mod cycle_tests {
     fn given_a_step_when_cycling_tabs_then_it_becomes_a_protocol_direction() {
         assert_eq!(cycle_direction(1), "next");
         assert_eq!(cycle_direction(-1), "prev");
+    }
+}
+
+#[cfg(test)]
+mod palette_tests {
+    use super::*;
+
+    fn action(name: config::Action) -> PaletteEntry {
+        PaletteEntry::Action(name)
+    }
+
+    #[test]
+    fn given_two_workspaces_then_their_keys_differ_even_with_the_same_name() {
+        // Recent ranking is keyed by id, so two workspaces called `1` are still
+        // distinct rows: a name-keyed sort would merge them.
+        let first = PaletteEntry::Workspace {
+            id: "wsp_a".into(),
+            name: "1".into(),
+        };
+        let second = PaletteEntry::Workspace {
+            id: "wsp_b".into(),
+            name: "1".into(),
+        };
+        assert_eq!(first.label(), second.label());
+        assert_ne!(first.recent_key(), second.recent_key());
+    }
+
+    #[test]
+    fn given_a_label_then_the_row_detail_says_what_kind_it_is() {
+        let shortcuts = config::Shortcuts::build(&std::collections::HashMap::new());
+        let row = PaletteEntry::Tab {
+            surface_id: "srf_a".into(),
+            label: "build".into(),
+            pane: 2,
+        }
+        .row(&shortcuts);
+        assert_eq!(row.label, "Tab build");
+        // The pane number keeps two `Tab shell` rows distinguishable.
+        assert_eq!(row.detail, "pane 2");
+    }
+
+    #[test]
+    fn given_a_destructive_action_then_it_is_not_repeat_safe() {
+        // Recency puts the last pick on the preselected row, so Close Tab must
+        // never be promoted there.
+        assert!(!action(config::Action::CloseTab).repeat_safe());
+        assert!(!action(config::Action::DuplicateTab).repeat_safe());
+        assert!(!action(config::Action::RestartTab).repeat_safe());
+        assert!(!action(config::Action::QuickTerminal).repeat_safe());
+        assert!(action(config::Action::Search).repeat_safe());
+        assert!(action(config::Action::NextTab).repeat_safe());
+        // Navigation and launches repeat cleanly.
+        assert!(
+            PaletteEntry::Workspace {
+                id: "wsp_a".into(),
+                name: "1".into(),
+            }
+            .repeat_safe()
+        );
+    }
+
+    #[test]
+    fn given_a_launch_then_the_workspace_form_has_its_own_key() {
+        let tab = PaletteEntry::Launch {
+            name: "wsl".into(),
+            workspace: false,
+        };
+        let workspace = PaletteEntry::Launch {
+            name: "wsl".into(),
+            workspace: true,
+        };
+        assert_ne!(tab.recent_key(), workspace.recent_key());
     }
 }
 
