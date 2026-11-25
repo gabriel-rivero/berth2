@@ -11,11 +11,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject};
 use objc2::{ClassType, define_class, msg_send, sel};
-use objc2_app_kit::{NSApplication, NSMenu, NSMenuItem};
+use objc2_app_kit::{NSApplication, NSEventModifierFlags, NSMenu, NSMenuItem};
 use objc2_foundation::{MainThreadMarker, NSString};
 use winit::event_loop::EventLoopProxy;
 
 use crate::UserEvent;
+use crate::config::{Binding, Shortcuts};
 use crate::menu::{self, Entry};
 
 thread_local! {
@@ -50,7 +51,7 @@ define_class!(
 
 /// Add Berth's menus to the system menu bar. Safe to call more than once: only
 /// the first call builds anything.
-pub fn install(proxy: &EventLoopProxy<UserEvent>) {
+pub fn install(proxy: &EventLoopProxy<UserEvent>, shortcuts: &Shortcuts) {
     if INSTALLED.load(Ordering::SeqCst) {
         return;
     }
@@ -95,14 +96,22 @@ pub fn install(proxy: &EventLoopProxy<UserEvent>) {
                 continue;
             }
             let label = NSString::from_str(entry.label());
+            let equivalent = entry.chord(shortcuts).as_deref().and_then(key_equivalent);
+            let key = equivalent
+                .as_ref()
+                .map(|(key, _)| key.as_str())
+                .unwrap_or("");
             let item = unsafe {
                 NSMenuItem::initWithTitle_action_keyEquivalent(
                     mtm.alloc(),
                     &label,
                     Some(sel!(berthMenuAction:)),
-                    &NSString::from_str(""),
+                    &NSString::from_str(key),
                 )
             };
+            if let Some((_, mask)) = equivalent {
+                item.setKeyEquivalentModifierMask(mask);
+            }
             unsafe { item.setTarget(Some(target_ref)) };
             item.setTag(menu::tag(index, row));
             submenu.addItem(&item);
@@ -144,6 +153,60 @@ pub fn install(proxy: &EventLoopProxy<UserEvent>) {
     TARGET.with(|cell| *cell.borrow_mut() = Some(target));
 }
 
+/// Turn a config chord (`cmd+shift+]`) into an AppKit key equivalent and
+/// modifier mask, so the system menu bar displays the same shortcut the chord
+/// table runs. Returns `None` when the chord has no modifier at all: a bare
+/// character as a menu key equivalent would swallow ordinary typing.
+fn key_equivalent(chord: &str) -> Option<(String, NSEventModifierFlags)> {
+    let binding = Binding::parse(chord)?;
+    let key = match binding.key.as_str() {
+        "up" => "\u{F700}".to_string(),
+        "down" => "\u{F701}".to_string(),
+        "left" => "\u{F702}".to_string(),
+        "right" => "\u{F703}".to_string(),
+        "home" => "\u{F729}".to_string(),
+        "end" => "\u{F72B}".to_string(),
+        "pageup" => "\u{F72C}".to_string(),
+        "pagedown" => "\u{F72D}".to_string(),
+        "enter" | "return" => "\r".to_string(),
+        "tab" => "\t".to_string(),
+        "escape" | "esc" => "\u{1b}".to_string(),
+        "space" => " ".to_string(),
+        "backspace" => "\u{8}".to_string(),
+        "delete" => "\u{7f}".to_string(),
+        other => {
+            let f = other
+                .strip_prefix('f')
+                .and_then(|n| n.parse::<u8>().ok())
+                .filter(|n| (1..=12).contains(n));
+            if let Some(n) = f {
+                char::from_u32(0xF704 + u32::from(n) - 1)?.to_string()
+            } else if other.chars().count() == 1 {
+                other.to_string()
+            } else {
+                return None;
+            }
+        }
+    };
+    let mut mask = NSEventModifierFlags::empty();
+    if binding.cmd {
+        mask |= NSEventModifierFlags::Command;
+    }
+    if binding.shift {
+        mask |= NSEventModifierFlags::Shift;
+    }
+    if binding.alt {
+        mask |= NSEventModifierFlags::Option;
+    }
+    if binding.ctrl {
+        mask |= NSEventModifierFlags::Control;
+    }
+    if mask.is_empty() {
+        return None;
+    }
+    Some((key, mask))
+}
+
 /// The entries to show, with a trailing separator trimmed and Quit optionally
 /// removed. The original row index is kept so the tag still resolves.
 fn visible_entries(entries: &[Entry], include_quit: bool) -> Vec<(usize, Entry)> {
@@ -175,7 +238,7 @@ mod tests {
         assert!(entries.iter().all(|(_, entry)| *entry != Entry::Quit));
         assert_eq!(
             entries.last().map(|(_, entry)| *entry),
-            Some(Entry::Action(crate::config::Action::QuickTerminal))
+            Some(Entry::Action(crate::config::Action::Settings))
         );
         assert!(entries.iter().all(|(_, entry)| *entry != Entry::Separator));
     }
@@ -184,6 +247,28 @@ mod tests {
     fn given_no_app_menu_then_our_menus_keep_quit() {
         let entries = visible_entries(menu::entries(0), true);
         assert!(entries.iter().any(|(_, entry)| *entry == Entry::Quit));
+    }
+
+    #[test]
+    fn given_a_config_chord_then_it_becomes_an_appkit_key_equivalent() {
+        let (key, mask) = key_equivalent("cmd+shift+]").expect("a chord");
+        assert_eq!(key, "]");
+        assert!(mask.contains(NSEventModifierFlags::Command));
+        assert!(mask.contains(NSEventModifierFlags::Shift));
+        assert!(!mask.contains(NSEventModifierFlags::Option));
+    }
+
+    #[test]
+    fn given_named_keys_then_they_map_to_appkit_function_keys() {
+        assert_eq!(key_equivalent("cmd+opt+left").expect("left").0, "\u{F702}");
+        assert_eq!(key_equivalent("cmd+shift+enter").expect("enter").0, "\r");
+        assert_eq!(key_equivalent("cmd+f5").expect("f5").0, "\u{F708}");
+    }
+
+    #[test]
+    fn given_a_bare_key_then_no_menu_equivalent_is_installed() {
+        assert!(key_equivalent("f1").is_none());
+        assert!(key_equivalent("").is_none());
     }
 
     #[test]

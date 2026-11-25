@@ -1082,7 +1082,7 @@ impl ApplicationHandler<UserEvent> for Gui {
         // macOS draws the menus in the system bar; other platforms paint them
         // into the frame below. Installing is idempotent across resumes.
         #[cfg(target_os = "macos")]
-        macos_menu::install(&self.proxy);
+        macos_menu::install(&self.proxy, &self.config.shortcuts);
         if self.window.is_some() || !self.stash.is_empty() {
             return;
         }
@@ -1196,7 +1196,12 @@ impl ApplicationHandler<UserEvent> for Gui {
                     self.send_clipboard_response(&surface_id, &selection, None);
                 }
                 if focused {
-                    if let Some(core_id) = self.current_core_window() {
+                    // The dropdown is presented over the user's window and must
+                    // not become the core's selected window: dismissing it
+                    // restores the selection the user was working in.
+                    if !self.active_core_is_quick()
+                        && let Some(core_id) = self.current_core_window()
+                    {
                         let _ = self
                             .dispatch("window.select", serde_json::json!({"window_id": core_id}));
                     }
@@ -1350,6 +1355,7 @@ impl ApplicationHandler<UserEvent> for Gui {
         self.sync_windows(event_loop);
         let selected_core = lock(&self.state).selected_window.clone();
         if let Some(core_id) = selected_core
+            && !self.active_core_is_quick()
             && self.current_core_window().as_deref() != Some(core_id.as_str())
             && let Some(native) = self
                 .core_of
@@ -1696,6 +1702,19 @@ impl Gui {
             .and_then(|id| self.core_of.get(&id).cloned())
     }
 
+    /// Whether the active native window is the quick dropdown. `window.quick`
+    /// deliberately leaves the core's selected window alone, so the
+    /// follow-the-selection rule in `about_to_wait` must not drag focus back
+    /// out of the dropdown the moment it opens.
+    fn active_core_is_quick(&self) -> bool {
+        let Some(core_id) = self.current_core_window() else {
+            return false;
+        };
+        lock(&self.state)
+            .window(&core_id)
+            .is_some_and(|window| window.kind == berth_core::model::WindowKind::Quick)
+    }
+
     fn window_count(&self) -> usize {
         self.stash.len() + usize::from(self.window.is_some())
     }
@@ -2032,11 +2051,8 @@ impl Gui {
             let mut width = self
                 .chrome_font()
                 .advance(entry.label(), font::TextStyle::NORMAL);
-            if let Some(action) = entry.action() {
-                let chord = self.config.shortcuts.label(action);
-                if !chord.is_empty() && chord != "unbound" {
-                    width += gap + self.chrome_font().advance(&chord, font::TextStyle::NORMAL);
-                }
+            if let Some(chord) = entry.chord(&self.config.shortcuts) {
+                width += gap + self.chrome_font().advance(&chord, font::TextStyle::NORMAL);
             }
             content = content.max(width);
         }
@@ -2109,6 +2125,7 @@ impl Gui {
         self.menu_selected = 0;
         match entry {
             menu::Entry::Action(action) => self.run_command(Command::for_action(action)),
+            menu::Entry::Command(command) => self.run_command(command),
             menu::Entry::Quit => self.quit = true,
             menu::Entry::Separator => {}
         }
@@ -2911,10 +2928,7 @@ impl Gui {
                     if hovered || index == self.menu_selected {
                         painter.fill(*rect, theme.sidebar_active);
                     }
-                    let chord = entry
-                        .action()
-                        .map(|action| self.config.shortcuts.label(action))
-                        .filter(|chord| !chord.is_empty() && chord != "unbound");
+                    let chord = entry.chord(&self.config.shortcuts);
                     let font = self.chrome_font();
                     let y = rect.y + rect.h.saturating_sub(chrome_cell.height) / 2;
                     let chord_width = chord
@@ -4590,8 +4604,53 @@ impl Gui {
                     eprintln!("berth-gui: workspace.create: {error}");
                 }
             }
+            Command::CloseWorkspace => {
+                let workspace = {
+                    let state = lock(&self.state);
+                    ui::active_workspace(&state)
+                };
+                if let Some(workspace) = workspace
+                    && let Err(error) = self.dispatch(
+                        "workspace.close",
+                        serde_json::json!({"workspace_id": workspace}),
+                    )
+                {
+                    eprintln!("berth-gui: workspace.close: {error}");
+                }
+            }
             Command::NewWindow => self.new_window(),
+            Command::CloseWindow => {
+                if self.window_count() <= 1 {
+                    self.quit = true;
+                } else if let Some(core_id) = self.current_core_window()
+                    && let Err(error) =
+                        self.dispatch("window.close", serde_json::json!({"window_id": core_id}))
+                {
+                    eprintln!("berth-gui: window.close: {error}");
+                }
+            }
             Command::NextWindow => self.next_window(),
+            Command::Minimize => {
+                if let Some(window) = &self.window {
+                    window.set_minimized(true);
+                }
+            }
+            Command::ToggleFullscreen => {
+                if let Some(window) = &self.window {
+                    let next = if window.fullscreen().is_some() {
+                        None
+                    } else {
+                        Some(winit::window::Fullscreen::Borderless(None))
+                    };
+                    window.set_fullscreen(next);
+                }
+            }
+            Command::OpenDocs => {
+                let _ = links::open("https://github.com/gabriel-rivero/berth2/tree/main/docs");
+            }
+            Command::OpenIssues => {
+                let _ = links::open("https://github.com/gabriel-rivero/berth2/issues");
+            }
             Command::TogglePaneZoom => self.toggle_pane_zoom(),
             Command::ToggleBroadcast => self.toggle_broadcast(),
             Command::DuplicateTab => self.surface_action("surface.duplicate"),
@@ -4607,8 +4666,18 @@ impl Gui {
             }
             Command::Workspace(index) => self.select_workspace_index(index),
             Command::JumpAttention => self.jump_attention(),
-            Command::Copy => self.copy_selection(),
-            Command::Paste => self.paste(),
+            // Menu key equivalents bypass the overlay branch in `key`, so a
+            // modal panel must not paste into the terminal behind it.
+            Command::Copy => {
+                if self.overlay.is_none() && !self.sidebar_filter_active {
+                    self.copy_selection();
+                }
+            }
+            Command::Paste => {
+                if self.overlay.is_none() && !self.sidebar_filter_active {
+                    self.paste();
+                }
+            }
             Command::ScrollUp(lines) => self.scroll_view(lines),
             Command::ScrollDown(lines) => {
                 let Some(surface_id) = self.active_surface() else {
@@ -4925,9 +4994,22 @@ impl Gui {
             match self.open_window(event_loop, core) {
                 Ok(()) => {
                     let opened = self.current_window_id();
-                    self.stash_active();
-                    if let Some(id) = previous.or(opened) {
-                        self.load_window(id);
+                    if core.kind == berth_core::model::WindowKind::Quick {
+                        // The dropdown is the window the user asked for: show it
+                        // and keep it active. Stashing it like an ordinary new
+                        // window would leave it invisible and hand the active
+                        // slot back to the window underneath.
+                        if let Some(window) = self.window.clone() {
+                            self.place_quick(&window);
+                            window.set_visible(true);
+                            window.focus_window();
+                        }
+                        self.quick_pending = None;
+                    } else {
+                        self.stash_active();
+                        if let Some(id) = previous.or(opened) {
+                            self.load_window(id);
+                        }
                     }
                 }
                 Err(error) => {
@@ -5881,26 +5963,37 @@ impl Gui {
         if let Some(window) = window {
             window.set_visible(false);
         }
+        // Hiding the dropdown while it is the active native window would leave
+        // the app pointing at a hidden window; hand the active slot back to the
+        // core's selected window. `switch_window` does not raise or focus it,
+        // so this never steals focus from another application.
+        if self.current_window_id() == Some(native) {
+            let selected = lock(&self.state).selected_window.clone();
+            let other = selected.and_then(|core_id| {
+                self.core_of
+                    .iter()
+                    .find(|(id, core)| **core == core_id && **id != native)
+                    .map(|(id, _)| *id)
+            });
+            if let Some(other) = other {
+                self.switch_window(other);
+            }
+        }
     }
 
-    /// Order a window in, place the dropdown, and give it focus without
-    /// disturbing the state of the window the user was working in.
+    /// Bring the dropdown up: make it the active native window, place it, show
+    /// it and give it focus. The window the user was working in is stashed but
+    /// stays on screen, so closing the dropdown returns to exactly that state.
     fn reveal_window(&mut self, native: WindowId) {
-        let Some(stash) = self.stash.remove(&native) else {
-            // It is the active window: place and focus it in place.
-            if let Some(window) = &self.window
-                && window.id() == native
-            {
-                self.place_quick(window);
-                window.set_visible(true);
-                window.focus_window();
-            }
+        if self.current_window_id() != Some(native) {
+            self.switch_window(native);
+        }
+        let Some(window) = &self.window else {
             return;
         };
-        self.place_quick(&stash.window);
-        stash.window.set_visible(true);
-        stash.window.focus_window();
-        self.stash.insert(native, stash);
+        self.place_quick(window);
+        window.set_visible(true);
+        window.focus_window();
     }
 
     /// Size and position the dropdown on the display it is on, in logical

@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- **Menu shortcuts and parity.** The macOS menu bar now shows each item's chord beside
+  its label — pulled from the same shortcut table the window runs — and the menus cover
+  the commands people expect: File (new window, new workspace, close tab, close
+  workspace, palette), Edit (copy, paste, find, paste history, copy mode), Terminal
+  (new tab, splits, tab/pane cycling, zoom, broadcast, quick terminal), View (sidebar,
+  directional focus, zoom, attention) and Window (next window, minimize, full screen,
+  close window), plus a Help menu for the docs and the issue tracker.
+
+### Fixes
+
+- **Quick terminal stays open.** Opening the dropdown no longer gets dragged back to the
+  selected window by the follow-the-selection pass, and hiding it hands the active slot
+  back to the window the user was in instead of leaving the app pointed at a hidden
+  window. A quick window created from the CLI or the palette is revealed too, not just
+  one opened by the hotkey or the menu.
+
 ## 0.20.0 — 2026-11-25
 
 ### Features

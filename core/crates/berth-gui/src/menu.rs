@@ -4,80 +4,115 @@
 //! platform menu, so the same code works on macOS, Linux and Windows. Choosing
 //! an entry runs the same command the chord table would, so the two can never
 //! drift apart.
+//!
+//! Rows are either a configurable [`Action`] (its chord comes from the shortcut
+//! table and is shown beside the label) or a fixed [`Command`] that has no
+//! settings entry (copy, window management, help links).
 
-use crate::config::Action;
+use crate::config::{Action, Shortcuts};
+use crate::keys::Command;
 
 /// What choosing a row does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Entry {
     Action(Action),
+    /// A command outside the shortcut table: its chord, if any, is fixed.
+    Command(Command),
     Quit,
     /// A spacer between groups; it is not selectable.
     Separator,
 }
 
 /// The titles, in bar order.
-pub const TITLES: [&str; 4] = ["Berth", "Terminal", "View", "Window"];
+pub const TITLES: [&str; 7] = [
+    "Berth", "File", "Edit", "Terminal", "View", "Window", "Help",
+];
 
 const BERTH: &[Entry] = &[
     Entry::Action(Action::Settings),
-    Entry::Action(Action::Palette),
-    Entry::Action(Action::QuickTerminal),
     Entry::Separator,
     Entry::Quit,
+];
+
+const FILE: &[Entry] = &[
+    Entry::Action(Action::NewWindow),
+    Entry::Action(Action::NewWorkspace),
+    Entry::Separator,
+    Entry::Action(Action::CloseTab),
+    Entry::Command(Command::CloseWorkspace),
+    Entry::Separator,
+    Entry::Action(Action::Palette),
+];
+
+const EDIT: &[Entry] = &[
+    Entry::Command(Command::Copy),
+    Entry::Command(Command::Paste),
+    Entry::Separator,
+    Entry::Action(Action::Search),
+    Entry::Action(Action::PasteHistory),
+    Entry::Separator,
+    Entry::Action(Action::CopyMode),
 ];
 
 const TERMINAL: &[Entry] = &[
     Entry::Action(Action::NewTab),
     Entry::Action(Action::SplitRight),
     Entry::Action(Action::SplitDown),
-    Entry::Action(Action::CloseTab),
     Entry::Separator,
     Entry::Action(Action::NextTab),
     Entry::Action(Action::PreviousTab),
     Entry::Action(Action::NextPane),
     Entry::Action(Action::PreviousPane),
     Entry::Separator,
-    Entry::Action(Action::Search),
-    Entry::Action(Action::CopyMode),
-    Entry::Action(Action::PasteHistory),
-    Entry::Separator,
-    Entry::Action(Action::ZoomIn),
-    Entry::Action(Action::ZoomOut),
-    Entry::Action(Action::ZoomReset),
-    Entry::Separator,
-    Entry::Action(Action::ToggleBroadcast),
     Entry::Action(Action::TogglePaneZoom),
+    Entry::Action(Action::ToggleBroadcast),
     Entry::Action(Action::DuplicateTab),
     Entry::Action(Action::RestartTab),
+    Entry::Separator,
+    Entry::Action(Action::QuickTerminal),
 ];
 
 const VIEW: &[Entry] = &[
     Entry::Action(Action::ToggleSidebar),
     Entry::Action(Action::SidebarFilter),
     Entry::Separator,
+    Entry::Action(Action::FocusLeft),
+    Entry::Action(Action::FocusRight),
+    Entry::Action(Action::FocusUp),
+    Entry::Action(Action::FocusDown),
+    Entry::Separator,
+    Entry::Action(Action::ZoomIn),
+    Entry::Action(Action::ZoomOut),
+    Entry::Action(Action::ZoomReset),
+    Entry::Separator,
     Entry::Action(Action::ShowAttention),
     Entry::Action(Action::JumpAttention),
-    Entry::Separator,
-    Entry::Action(Action::NewWorkspace),
 ];
 
 const WINDOW: &[Entry] = &[
-    Entry::Action(Action::NewWindow),
     Entry::Action(Action::NextWindow),
     Entry::Separator,
-    Entry::Action(Action::Settings),
+    Entry::Command(Command::Minimize),
+    Entry::Command(Command::ToggleFullscreen),
     Entry::Separator,
-    Entry::Quit,
+    Entry::Command(Command::CloseWindow),
+];
+
+const HELP: &[Entry] = &[
+    Entry::Command(Command::OpenDocs),
+    Entry::Command(Command::OpenIssues),
 ];
 
 /// The entries of the menu at `menu`, or an empty slice for an unknown index.
 pub fn entries(menu: usize) -> &'static [Entry] {
     match menu {
         0 => BERTH,
-        1 => TERMINAL,
-        2 => VIEW,
-        3 => WINDOW,
+        1 => FILE,
+        2 => EDIT,
+        3 => TERMINAL,
+        4 => VIEW,
+        5 => WINDOW,
+        6 => HELP,
         _ => &[],
     }
 }
@@ -101,15 +136,21 @@ impl Entry {
     pub fn label(self) -> &'static str {
         match self {
             Self::Action(action) => action.label(),
+            Self::Command(command) => command.label(),
             Self::Quit => "Quit Berth",
             Self::Separator => "",
         }
     }
 
-    /// The action whose chord is shown beside the label, if any.
-    pub fn action(self) -> Option<Action> {
+    /// The chord to show beside the label, in config spelling. Actions read the
+    /// user's shortcut table; fixed commands carry their own.
+    pub fn chord(self, shortcuts: &Shortcuts) -> Option<String> {
         match self {
-            Self::Action(action) => Some(action),
+            Self::Action(action) => {
+                let chord = shortcuts.label(action);
+                (!chord.is_empty() && chord != "unbound").then_some(chord)
+            }
+            Self::Command(command) => command.chord().map(str::to_string),
             _ => None,
         }
     }
@@ -148,6 +189,10 @@ pub fn first_selectable(entries: &[Entry]) -> usize {
 mod tests {
     use super::*;
 
+    fn shortcuts() -> Shortcuts {
+        Shortcuts::build(&std::collections::HashMap::new())
+    }
+
     #[test]
     fn given_every_title_then_it_has_at_least_one_selectable_entry() {
         for (index, title) in TITLES.iter().enumerate() {
@@ -158,6 +203,25 @@ mod tests {
                 "{title} has nothing to choose"
             );
         }
+    }
+
+    #[test]
+    fn given_an_action_row_then_its_chord_comes_from_the_shortcut_table() {
+        let shortcuts = shortcuts();
+        let entry = Entry::Action(Action::SplitRight);
+        assert_eq!(
+            entry.chord(&shortcuts).as_deref(),
+            Some(shortcuts.label(Action::SplitRight).as_str())
+        );
+        assert_eq!(Entry::Separator.chord(&shortcuts), None);
+    }
+
+    #[test]
+    fn given_a_fixed_command_then_it_can_still_show_a_chord() {
+        assert_eq!(
+            Entry::Command(Command::Copy).chord(&shortcuts()).as_deref(),
+            Command::Copy.chord()
+        );
     }
 
     #[test]

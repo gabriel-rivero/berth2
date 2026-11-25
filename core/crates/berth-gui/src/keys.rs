@@ -27,8 +27,14 @@ pub enum Command {
     FocusUp,
     FocusDown,
     NewWorkspace,
+    CloseWorkspace,
     NewWindow,
+    CloseWindow,
     NextWindow,
+    Minimize,
+    ToggleFullscreen,
+    OpenDocs,
+    OpenIssues,
     TogglePaneZoom,
     ToggleBroadcast,
     DuplicateTab,
@@ -95,6 +101,38 @@ impl Command {
             Action::ZoomIn => Command::ZoomIn,
             Action::ZoomOut => Command::ZoomOut,
             Action::ZoomReset => Command::ZoomReset,
+        }
+    }
+}
+
+impl Command {
+    /// A menu row label for a command with no `Action` behind it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Command::Copy => "Copy",
+            Command::Paste => "Paste",
+            Command::CloseWorkspace => "Close Workspace",
+            Command::CloseWindow => "Close Window",
+            Command::Minimize => "Minimize",
+            Command::ToggleFullscreen => "Toggle Full Screen",
+            Command::OpenDocs => "Berth Documentation",
+            Command::OpenIssues => "Report an Issue",
+            _ => "",
+        }
+    }
+
+    /// The chord shown beside a fixed command, in config spelling. These are
+    /// not part of the shortcut table, so they are only informational (plus,
+    /// on macOS, the menu's key equivalent).
+    pub fn chord(self) -> Option<&'static str> {
+        let macos = cfg!(target_os = "macos");
+        match self {
+            Command::Copy => Some(if macos { "cmd+c" } else { "ctrl+shift+c" }),
+            Command::Paste => Some(if macos { "cmd+v" } else { "ctrl+shift+v" }),
+            Command::CloseWindow => Some(if macos { "cmd+shift+w" } else { "ctrl+alt+w" }),
+            Command::Minimize => macos.then_some("cmd+m"),
+            Command::ToggleFullscreen => macos.then_some("cmd+ctrl+f"),
+            _ => None,
         }
     }
 }
