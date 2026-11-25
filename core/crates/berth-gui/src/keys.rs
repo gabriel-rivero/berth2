@@ -43,6 +43,7 @@ pub enum Command {
     JumpPrompt(i32),
     CopyMode,
     PasteHistory,
+    QuickTerminal,
     /// Select the nth workspace, one-based.
     Workspace(usize),
     /// One point larger, one point smaller, or back to the config default.
@@ -90,6 +91,7 @@ impl Command {
             Action::NextPrompt => Command::JumpPrompt(1),
             Action::CopyMode => Command::CopyMode,
             Action::PasteHistory => Command::PasteHistory,
+            Action::QuickTerminal => Command::QuickTerminal,
             Action::ZoomIn => Command::ZoomIn,
             Action::ZoomOut => Command::ZoomOut,
             Action::ZoomReset => Command::ZoomReset,

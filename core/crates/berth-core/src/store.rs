@@ -9,7 +9,8 @@ use serde_json::Value;
 
 use crate::ids;
 use crate::model::{
-    AgentSurface, Group, Orientation, Pane, PaneNode, Resume, Surface, Window, Workspace,
+    AgentSurface, Group, Orientation, Pane, PaneNode, Resume, Surface, Window, WindowKind,
+    Workspace,
 };
 use crate::state::AppState;
 use crate::time;
@@ -58,9 +59,19 @@ pub fn snapshot_path() -> String {
 
 impl AppState {
     pub fn snapshot(&self) -> Snapshot {
+        // The quick terminal is transient: it is recreated on the next press
+        // and its geometry is a placement, not a window the user arranged. A
+        // restored dropdown would also pop up over everything at launch.
+        let quick: std::collections::HashSet<String> = self
+            .windows
+            .iter()
+            .filter(|window| window.kind == WindowKind::Quick)
+            .map(|window| window.id.clone())
+            .collect();
         let workspaces = self
             .workspaces
             .iter()
+            .filter(|w| w.window_id.as_ref().is_none_or(|id| !quick.contains(id)))
             .map(|w| {
                 let pane_ids = w.root.leaves();
                 let panes: Vec<Pane> = pane_ids
@@ -91,7 +102,12 @@ impl AppState {
         Snapshot {
             version: SESSION_VERSION,
             saved_ms: time::now_ms(),
-            windows: self.windows.clone(),
+            windows: self
+                .windows
+                .iter()
+                .filter(|window| window.kind != WindowKind::Quick)
+                .cloned()
+                .collect(),
             selected_window: self.selected_window.clone(),
             selected_workspace: self.selected_workspace.clone(),
             selected_surface: self.selected_surface.clone(),
@@ -122,6 +138,7 @@ pub fn migrate(mut snapshot: Snapshot) -> Result<Snapshot, CoreError> {
                     .or_else(|| snapshot.workspaces.first().map(|w| w.workspace.id.clone())),
                 active_surface: snapshot.selected_surface.clone(),
                 broadcast: false,
+                kind: WindowKind::Main,
             };
             for wsnap in &mut snapshot.workspaces {
                 if wsnap.workspace.window_id.is_none() {
@@ -618,6 +635,39 @@ mod tests {
     use crate::NullOps;
     use serde_json::json;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn given_a_quick_window_then_the_snapshot_leaves_it_out() {
+        let mut state = AppState::default();
+        let ops = RecordingOps::default();
+        let main = state.create_window(Some("main"));
+        state
+            .create_workspace_in(Some(&main.id), Some("shell"), None, None, &ops)
+            .expect("the main workspace spawns");
+        state.ensure_quick_window(&ops);
+
+        let snapshot = state.snapshot();
+        // A restored dropdown would pop up over everything at launch, and its
+        // frame is a placement rather than a window the user arranged.
+        assert!(
+            snapshot
+                .windows
+                .iter()
+                .all(|window| window.kind != WindowKind::Quick),
+            "the quick window reached the session file"
+        );
+        assert!(
+            !snapshot.workspaces.is_empty(),
+            "the ordinary window's workspace was dropped with it"
+        );
+        assert!(
+            snapshot
+                .workspaces
+                .iter()
+                .all(|w| w.workspace.name != "quick"),
+            "the quick workspace reached the session file"
+        );
+    }
 
     #[derive(Default)]
     struct RecordingOps {

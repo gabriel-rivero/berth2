@@ -9,7 +9,7 @@ use crate::agent::{self, AgentState, Attention};
 use crate::ids;
 use crate::model::{
     AgentSurface, Group, NotifLevel, Notification, Orientation, Pane, PaneNode, Resume, Surface,
-    SurfaceKind, Window, Workspace,
+    SurfaceKind, Window, WindowKind, Workspace,
 };
 use crate::protocol::{Event, names};
 use crate::time;
@@ -178,6 +178,11 @@ impl AppState {
     }
 
     pub fn create_window(&mut self, name: Option<&str>) -> Window {
+        self.create_window_of(WindowKind::Main, name)
+    }
+
+    /// Create a window of a given kind.
+    pub fn create_window_of(&mut self, kind: WindowKind, name: Option<&str>) -> Window {
         let window = Window {
             id: ids::mint(ids::WINDOW),
             name: name
@@ -190,6 +195,7 @@ impl AppState {
             active_workspace: None,
             active_surface: None,
             broadcast: false,
+            kind,
         };
         self.windows.push(window.clone());
         if self.selected_window.is_none() {
@@ -211,6 +217,45 @@ impl AppState {
             return id;
         }
         self.create_window(Some("main")).id
+    }
+
+    /// The quick terminal window, created on first use with its own workspace
+    /// so it never disturbs the layout the user is working in.
+    pub fn ensure_quick_window(&mut self, ops: &dyn SurfaceOps) -> String {
+        if let Some(window) = self.window_kind(WindowKind::Quick) {
+            return window.id.clone();
+        }
+        let window = self.create_window_of(WindowKind::Quick, Some("quick"));
+        // The workspace must be spawned through the caller's ops: a real PTY
+        // lives behind it, and `NullOps` would leave the drop-down with a pane
+        // that can never be read or typed into.
+        // `create_workspace` with no window binds to the *selected* window,
+        // which is the one the user is working in; the drop-down must own its
+        // workspace outright.
+        let workspace = self.create_workspace_in(Some(&window.id), Some("quick"), None, None, ops);
+        match workspace {
+            Ok(workspace) => {
+                let _ = self.assign_workspace_to_window(&workspace.id, &window.id);
+                // Pin the window to its own workspace explicitly:
+                // `assign_workspace_to_window` leaves an existing choice alone,
+                // and a new window can inherit one from the previous selection.
+                if let Some(w) = self.window_mut(&window.id) {
+                    w.active_workspace = Some(workspace.id.clone());
+                    w.active_surface = workspace.active_surface.clone();
+                }
+            }
+            Err(_) => {
+                // No shell: drop the window rather than leave a dead drop-down
+                // that a later press would keep returning.
+                self.windows.retain(|w| w.id != window.id);
+            }
+        }
+        window.id
+    }
+
+    /// The first window of a kind.
+    pub fn window_kind(&self, kind: WindowKind) -> Option<&Window> {
+        self.windows.iter().find(|window| window.kind == kind)
     }
 
     pub fn select_window(&mut self, window_id: &str) -> Result<(), CoreError> {

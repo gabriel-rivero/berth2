@@ -29,7 +29,7 @@ use berth_headless::{
 };
 use berth_server::{Server, ServerConfig, ServerHandle, SocketMode, auth};
 use winit::application::ApplicationHandler;
-use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
+use winit::dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, Ime, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
@@ -51,6 +51,7 @@ mod mouse;
 mod paint;
 mod panel;
 mod paste_history;
+mod quick;
 mod search;
 mod settings;
 mod shells;
@@ -196,6 +197,61 @@ fn print_help() {
     );
 }
 
+/// Register the quick-terminal hotkey. The event goes to the window when it
+/// fires; the manager has to stay alive for the chord to stay registered.
+fn register_quick_hotkey(
+    chord: &str,
+    proxy: &EventLoopProxy<UserEvent>,
+) -> Option<global_hotkey::GlobalHotKeyManager> {
+    use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
+
+    if chord.trim().is_empty() {
+        // An empty value disables the global hotkey; the menu still opens it.
+        return None;
+    }
+    let Some(hotkey) = quick::parse(chord) else {
+        log::line(&format!("quick terminal: cannot register {chord:?}"));
+        eprintln!("berth-gui: quick terminal: unusable hotkey {chord:?}");
+        return None;
+    };
+    let manager = match GlobalHotKeyManager::new() {
+        Ok(manager) => manager,
+        Err(error) => {
+            log::line(&format!("quick terminal: hotkey manager: {error}"));
+            return None;
+        }
+    };
+    if let Err(error) = manager.register(hotkey) {
+        log::line(&format!("quick terminal: register {chord:?}: {error}"));
+        eprintln!("berth-gui: quick terminal: {chord} is not available: {error}");
+        return None;
+    }
+    // The manager delivers on its own thread; hand the work to the event loop.
+    // `GlobalHotKeyEvent::receiver` is one process-wide channel, so the id is
+    // filtered here: a second global hotkey must not open this terminal.
+    let id = hotkey.id();
+    let proxy = proxy.clone();
+    if let Err(error) = std::thread::Builder::new()
+        .name("berth-hotkey".into())
+        .spawn(move || {
+            let receiver = GlobalHotKeyEvent::receiver();
+            while let Ok(event) = receiver.recv() {
+                if event.id == id
+                    && event.state == HotKeyState::Pressed
+                    && proxy.send_event(UserEvent::QuickTerminal).is_err()
+                {
+                    break;
+                }
+            }
+        })
+    {
+        log::line(&format!("quick terminal: listener thread: {error}"));
+        eprintln!("berth-gui: quick terminal: cannot start the hotkey listener: {error}");
+        return None;
+    }
+    Some(manager)
+}
+
 fn main() {
     console::attach_parent_console();
     let args = match Args::parse() {
@@ -279,6 +335,11 @@ fn main() {
         let wake = Arc::clone(&wake);
         Arc::new(move || wake.wake())
     });
+
+    // The global hotkey needs an event loop on this thread; winit has one here.
+    // A chord the platform refuses is logged rather than fatal: the quick
+    // terminal is still reachable from the menu and the CLI.
+    let hotkey = register_quick_hotkey(&config.quick.hotkey, &proxy);
 
     let state = Arc::new(Mutex::new(AppState::default()));
     lock(&state).set_muted_providers(config.mute_providers.clone());
@@ -427,6 +488,8 @@ fn main() {
         prompt_surfaces: HashSet::new(),
         copy_mode: None,
         paste_history: paste_history::PasteHistory::new(),
+        _hotkey: hotkey,
+        quick_pending: None,
     };
 
     if let Err(error) = event_loop.run_app(&mut app) {
@@ -474,6 +537,9 @@ enum UserEvent {
     /// request handled by the socket server.
     Redraw,
     A11y(accesskit_winit::Event),
+    /// The global quick-terminal hotkey fired. Emitted from the hotkey
+    /// manager's own thread, so the work hops to the event loop like a wake.
+    QuickTerminal,
     Quit,
 }
 
@@ -745,6 +811,11 @@ struct Gui {
     copy_mode: Option<copymode::CopyMode>,
     /// The last few clipboards, in memory only.
     paste_history: paste_history::PasteHistory,
+    /// The registered global hotkey. Kept only so the manager lives for the
+    /// session — dropping it unregisters the chord — so it is never read.
+    _hotkey: Option<global_hotkey::GlobalHotKeyManager>,
+    /// The quick window the hotkey asked for, until its native window exists.
+    quick_pending: Option<String>,
 }
 
 /// Last branch read for a cwd, with the time it was read. A cwd change or a
@@ -870,6 +941,18 @@ impl ApplicationHandler<UserEvent> for Gui {
             }
             WindowEvent::Focused(focused) => {
                 self.window_focused = focused;
+                // The dropdown is dismissed like a menu: losing focus hides it.
+                // The window and its shell stay alive, so the next press shows
+                // the same session rather than a fresh one.
+                if !focused
+                    && let Some(core_id) = self.current_core_window()
+                    && lock(&self.state)
+                        .window(&core_id)
+                        .is_some_and(|w| w.kind == berth_core::model::WindowKind::Quick)
+                    && let Some(native) = self.current_window_id()
+                {
+                    self.hide_quick_window(native);
+                }
                 if !focused
                     && let Some(Overlay::ClipboardRead {
                         surface_id,
@@ -954,6 +1037,7 @@ impl ApplicationHandler<UserEvent> for Gui {
                 self.wake.clear();
                 self.request_redraw();
             }
+            UserEvent::QuickTerminal => self.show_quick_terminal(),
             UserEvent::Quit => {
                 self.save_and_close();
                 event_loop.exit();
@@ -1358,6 +1442,7 @@ impl Gui {
         event_loop: &ActiveEventLoop,
         core: &berth_core::model::Window,
     ) -> Result<(), String> {
+        let is_quick = core.kind == berth_core::model::WindowKind::Quick;
         let mut attributes = Window::default_attributes()
             .with_title(if core.name.is_empty() {
                 "Berth"
@@ -1368,6 +1453,14 @@ impl Gui {
             // The accessibility adapter must exist before the window is shown,
             // so it starts hidden and is revealed below.
             .with_visible(false);
+        if is_quick {
+            // A dropdown: borderless, above other windows, no taskbar entry
+            // (winit has no skip-taskbar, so the borderless shape carries it).
+            attributes = attributes
+                .with_decorations(false)
+                .with_resizable(true)
+                .with_window_level(winit::window::WindowLevel::AlwaysOnTop);
+        }
         match core.bounds {
             Some(bounds) => {
                 attributes = attributes
@@ -1379,6 +1472,11 @@ impl Gui {
                         bounds.width.max(320) as f64,
                         bounds.height.max(240) as f64,
                     ));
+            }
+            None if is_quick => {
+                attributes = attributes
+                    .with_position(LogicalPosition::new(0.0, 0.0))
+                    .with_inner_size(LogicalSize::new(1180.0, 420.0));
             }
             None => {
                 attributes = attributes.with_inner_size(LogicalSize::new(1180.0, 720.0));
@@ -1409,14 +1507,20 @@ impl Gui {
             &window,
             self.proxy.clone(),
         ));
-        window.set_visible(true);
+        // A quick window is revealed by `reveal_window`, which places it first;
+        // showing it here would flash it at the default frame.
+        if !is_quick {
+            window.set_visible(true);
+        }
         crate::window::set_opacity(&window, self.config.opacity);
 
         self.sidebar_width = core
             .sidebar_width
             .unwrap_or(self.config.sidebar_pixels())
             .clamp(config::MIN_SIDEBAR_WIDTH, config::MAX_SIDEBAR_WIDTH);
-        self.sidebar_visible = true;
+        // The dropdown is all terminal: a sidebar would make it a second
+        // workspace browser.
+        self.sidebar_visible = !is_quick;
         self.sidebar_scroll = 0;
         self.sidebar_filter.clear();
         self.sidebar_filter_active = false;
@@ -3866,6 +3970,7 @@ impl Gui {
             Command::JumpPrompt(direction) => self.jump_prompt(direction),
             Command::CopyMode => self.toggle_copy_mode(),
             Command::PasteHistory => self.open_paste_history(),
+            Command::QuickTerminal => self.show_quick_terminal(),
             Command::ZoomIn => self.zoom_font(1.0),
             Command::ZoomOut => self.zoom_font(-1.0),
             Command::ZoomReset => self.reset_zoom(),
@@ -4152,6 +4257,18 @@ impl Gui {
                     }
                 }
             }
+        }
+        // A dropdown the hotkey just created only has a native window now.
+        if let Some(core_id) = self.quick_pending.clone()
+            && let Some(native) = self
+                .core_of
+                .iter()
+                .find(|(_, core)| **core == core_id)
+                .map(|(native, _)| *native)
+        {
+            self.quick_pending = None;
+            self.reveal_window(native);
+            self.request_redraw();
         }
     }
 
@@ -4833,6 +4950,125 @@ impl Gui {
             .filter(|hit| hit.surface_id == surface_id)
             .map(|hit| (hit.line, hit.col, hit.len));
         (hits, current)
+    }
+
+    /// Show the dropdown quick terminal, creating it on first use. The working
+    /// window is left as it was: the dropdown is a separate native window that
+    /// is only ordered in and given focus, so opening it never restructures the
+    /// window the user was in.
+    fn show_quick_terminal(&mut self) {
+        // Go through the protocol so the workspace is spawned through the real
+        // host, exactly as any other window's is.
+        let had_quick = lock(&self.state)
+            .window_kind(berth_core::model::WindowKind::Quick)
+            .is_some();
+        let core_id = match self.dispatch("window.quick", serde_json::json!({})) {
+            Ok(result) => result["window"]["id"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            Err(error) => {
+                eprintln!("berth-gui: window.quick: {error}");
+                return;
+            }
+        };
+        if core_id.is_empty() {
+            return;
+        }
+
+        // The hotkey toggles: a dropdown already showing goes away, so the
+        // same chord closes it as opens it.
+        if had_quick
+            && let Some(native) = self
+                .core_of
+                .iter()
+                .find(|(_, core)| **core == core_id)
+                .map(|(native, _)| *native)
+        {
+            if self.quick_is_showing(native) {
+                self.hide_quick_window(native);
+            } else {
+                self.reveal_window(native);
+            }
+            self.request_redraw();
+            return;
+        }
+        // A window that does not exist yet only gets a native window on the
+        // next sync pass, which places and reveals it once.
+        self.quick_pending = Some(core_id);
+        self.request_redraw();
+    }
+
+    /// Whether the dropdown is the visible window: it is the active window, or
+    /// it is stashed (hidden from this process's perspective) and visible.
+    fn quick_is_showing(&self, native: WindowId) -> bool {
+        let window = if self.current_window_id() == Some(native) {
+            self.window.as_ref()
+        } else {
+            self.stash.get(&native).map(|stash| &stash.window)
+        };
+        // winit reports `Option<bool>`; a window the platform has not answered
+        // for is treated as showing, which is the state right after reveal.
+        window.is_some_and(|window| window.is_visible().unwrap_or(true))
+    }
+
+    /// Hide the dropdown without closing it, so the shell inside keeps running
+    /// and the next press shows the same session.
+    fn hide_quick_window(&mut self, native: WindowId) {
+        let window = if self.current_window_id() == Some(native) {
+            self.window.as_ref()
+        } else {
+            self.stash.get(&native).map(|stash| &stash.window)
+        };
+        if let Some(window) = window {
+            window.set_visible(false);
+        }
+    }
+
+    /// Order a window in, place the dropdown, and give it focus without
+    /// disturbing the state of the window the user was working in.
+    fn reveal_window(&mut self, native: WindowId) {
+        let Some(stash) = self.stash.remove(&native) else {
+            // It is the active window: place and focus it in place.
+            if let Some(window) = &self.window
+                && window.id() == native
+            {
+                self.place_quick(window);
+                window.set_visible(true);
+                window.focus_window();
+            }
+            return;
+        };
+        self.place_quick(&stash.window);
+        stash.window.set_visible(true);
+        stash.window.focus_window();
+        self.stash.insert(native, stash);
+    }
+
+    /// Size and position the dropdown on the display it is on, in logical
+    /// points so the window is the same fraction of the screen at any scale.
+    fn place_quick(&self, window: &Window) {
+        let Some(monitor) = window.current_monitor() else {
+            return;
+        };
+        let scale = monitor.scale_factor();
+        let area = monitor.position();
+        let size = monitor.size();
+        // macOS reports an already-scaled size; the other platforms report
+        // physical pixels. `logical_monitor` is the one place that knows.
+        let area = quick::logical_monitor(
+            (area.x, area.y),
+            (size.width, size.height),
+            scale,
+            cfg!(target_os = "macos"),
+        );
+        let (x, y, width, height) = self
+            .config
+            .quick
+            .placement
+            .rect(area, self.config.quick.height);
+        window.set_outer_position(LogicalPosition::new(x, y));
+        let _ = window.request_inner_size(LogicalSize::new(width, height));
     }
 
     /// Open the paste-history picker, newest entry first. The clipboard itself

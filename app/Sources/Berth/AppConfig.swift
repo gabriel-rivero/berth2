@@ -71,6 +71,7 @@ enum ShortcutAction: String, CaseIterable {
     case zoomReset
     case settings
     case search
+    case quickTerminal
     case previousPrompt
     case nextPrompt
 
@@ -103,6 +104,7 @@ enum ShortcutAction: String, CaseIterable {
         case .zoomReset: return "Actual Size"
         case .settings: return "Settings…"
         case .search: return "Find…"
+        case .quickTerminal: return "Quick Terminal"
         case .previousPrompt: return "Previous Prompt"
         case .nextPrompt: return "Next Prompt"
         }
@@ -137,6 +139,7 @@ enum ShortcutAction: String, CaseIterable {
         case .zoomReset: return "cmd+0"
         case .settings: return "cmd+,"
         case .search: return "cmd+f"
+        case .quickTerminal: return "cmd+shift+`"
         case .previousPrompt: return "cmd+shift+up"
         case .nextPrompt: return "cmd+shift+down"
         }

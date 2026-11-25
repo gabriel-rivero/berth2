@@ -41,6 +41,15 @@
   clipped when it is recorded rather than every frame. On macOS the chord sits on the
   fixed paste binding, so an empty history falls back to a plain paste; a multi-line
   entry still asks for the paste confirmation, and is only recorded once it is confirmed.
+- **Quick terminal.** `quickHotkey` (`Cmd+Shift+backquote` by default) registers a global chord
+  that opens a dropdown terminal over whatever application is frontmost. The window is a
+  core window with `kind: quick`: it has no sidebar, floats above other windows, hides
+  when it loses focus, and is deliberately kept out of the session file so it never pops
+  up at launch. The chord toggles it, and its shell keeps running while hidden, so the
+  next press shows the same session. `quickPlacement` (`top`, `bottom`, `center`) and
+  `quickHeight` set where it sits; an empty `quickHotkey` disables the global chord and
+  leaves the menu entry. `berth window quick` opens it from the CLI, and the AppKit shell
+  reaches it from the Terminal menu (`quickTerminal`).
 - **Find in the AppKit shell.** `Cmd+F` opens a find bar over the focused terminal,
   backed by Ghostty's own incremental search: it shows the current and total match,
   `Enter` steps forward, `Shift+Enter` back, and `Esc` closes it and returns focus to

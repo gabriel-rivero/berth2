@@ -440,12 +440,17 @@ final class BerthCoreHost: HostOps, @unchecked Sendable {
                 guard let coreID = spec["id"] as? String else { continue }
                 live.insert(coreID)
                 let win: MainWindow
+                let isQuick = spec["kind"] as? String == "quick"
                 if let existing = windows[coreID] {
                     win = existing
                 } else {
                     win = MainWindow()
                     windows[coreID] = win
                     wireSidebar(win, coreWindow: coreID)
+                    // The dropdown is all terminal and floats above the rest.
+                    if isQuick {
+                        win.applyQuickTerminal()
+                    }
                     win.makeKeyAndOrderFront(nil)
                 }
                 if let bounds = spec["bounds"] as? [String: Any],

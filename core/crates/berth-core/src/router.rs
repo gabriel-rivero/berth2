@@ -71,6 +71,15 @@ fn handle(
         })),
         "window.create" => {
             let p: WindowCreate = params(raw)?;
+            // `window.quick` is the only way to make a quick window: it also
+            // gives it a spawned workspace, and one drop-down is all a hotkey
+            // can reveal.
+            if p.kind == Some(crate::model::WindowKind::Quick) {
+                return Err(CoreError::new(
+                    ErrorCode::BadRequest,
+                    "use window.quick to create the quick terminal",
+                ));
+            }
             let window = state.create_window(p.name.as_deref());
             if let Some(workspace_id) = p.workspace_id {
                 state.assign_workspace_to_window(&workspace_id, &window.id)?;
@@ -85,6 +94,20 @@ fn handle(
                 }
             }
             let window = state.window(&window.id).cloned().unwrap_or(window);
+            Ok(json!({"window": window}))
+        }
+        // Open the dropdown quick terminal, creating it on first use. The shell
+        // owns placement and show/hide; this only guarantees the window exists
+        // and asks the shell to reveal it.
+        "window.quick" => {
+            // Deliberately leaves `selected_window` alone: the drop-down is
+            // revealed over the window the user is working in, so selecting it
+            // would repoint every "selected" operation at the drop-down.
+            let window_id = state.ensure_quick_window(ops);
+            let window = state
+                .window(&window_id)
+                .cloned()
+                .ok_or_else(|| CoreError::not_found("quick window could not be created"))?;
             Ok(json!({"window": window}))
         }
         "window.get" => {
@@ -1289,6 +1312,8 @@ struct WindowCreate {
     #[serde(default)]
     name: Option<String>,
     #[serde(default)]
+    kind: Option<crate::model::WindowKind>,
+    #[serde(default)]
     workspace_id: Option<String>,
     #[serde(default)]
     focus: Option<bool>,
@@ -1605,6 +1630,7 @@ pub const METHODS: &[&str] = &[
     "system.capabilities",
     "window.list",
     "window.create",
+    "window.quick",
     "window.get",
     "window.select",
     "window.update",
@@ -1694,6 +1720,65 @@ mod tests {
 
     fn pane_of(state: &AppState, surface_id: &str) -> String {
         state.surface(surface_id).unwrap().pane_id.clone()
+    }
+
+    #[test]
+    fn given_window_quick_twice_then_it_reuses_the_same_window_and_workspace() {
+        let mut st = AppState::default();
+        let first = call(&mut st, "window.quick", json!({}));
+        let first_id = first["window"]["id"].as_str().unwrap().to_string();
+        assert_eq!(first["window"]["kind"], json!("quick"));
+
+        let second = call(&mut st, "window.quick", json!({}));
+        assert_eq!(second["window"]["id"], json!(first_id));
+        // The dropdown keeps one window, not one per press.
+        let listed = call(&mut st, "window.list", json!({}));
+        let quick: Vec<_> = listed["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|w| w["kind"] == json!("quick"))
+            .collect();
+        assert_eq!(quick.len(), 1);
+    }
+
+    #[test]
+    fn given_a_quick_window_then_it_gets_its_own_workspace_and_keeps_the_selection() {
+        let mut st = AppState::default();
+        let main = call(&mut st, "window.create", json!({"name": "main"}));
+        let main_id = main["window"]["id"].as_str().unwrap().to_string();
+        let before = call(&mut st, "window.list", json!({}))["selected_window"].clone();
+
+        call(&mut st, "window.quick", json!({}));
+
+        let listed = call(&mut st, "window.list", json!({}));
+        // Opening the drop-down must not repoint the selection: every
+        // "selected" operation would otherwise act on the drop-down.
+        assert_eq!(listed["selected_window"], before);
+        let windows = listed["windows"].as_array().unwrap();
+        let main_window = windows.iter().find(|w| w["id"] == json!(main_id)).unwrap();
+        let quick = windows
+            .iter()
+            .find(|w| w["kind"] == json!("quick"))
+            .unwrap();
+        assert_ne!(main_window["active_workspace"], quick["active_workspace"]);
+        assert!(quick["active_surface"].is_string());
+    }
+
+    #[test]
+    fn given_window_create_with_the_quick_kind_then_it_is_refused() {
+        let mut st = AppState::default();
+        // Only `window.quick` can make one: it spawns the workspace a plain
+        // `window.create` would leave empty, and one dropdown is all a hotkey
+        // can reveal.
+        let r = dispatch(
+            &mut st,
+            &NullOps,
+            &req("window.create", json!({"kind": "quick"})),
+        );
+        assert!(!r.ok, "window.create accepted the quick kind");
+        let plain = call(&mut st, "window.create", json!({"name": "plain"}));
+        assert_eq!(plain["window"]["kind"], json!("main"));
     }
 
     #[test]

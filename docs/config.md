@@ -141,6 +141,7 @@ capture, so the window ships a Ctrl-based default table instead:
 | `nextPrompt` | `cmd+shift+down` | `ctrl+shift+down` |
 | `copyMode` | `cmd+shift+c` | `ctrl+shift+space` |
 | `pasteHistory` | `cmd+shift+v` | `ctrl+alt+v` |
+| `quickTerminal` | `cmd+shift+backquote` | `ctrl+shift+backquote` |
 
 Copy mode is vi-style keyboard selection over the pane's scrollback. The chord opens
 it on the focused pane with the cursor on the newest line; press it again (or `q`,
@@ -209,6 +210,26 @@ as `-l`, so the profile loads. Agent panes are unaffected: their argv comes from
 the launch or resume command. A change applies to panes created afterwards,
 including restored workspaces whose shell was not recorded; panes already
 running keep their program. The macOS app does not read this key yet.
+
+## Quick terminal
+
+`quickHotkey` is a global chord that opens a dropdown terminal over whatever
+application is frontmost. It is registered with the OS, so it works while Berth
+is in the background; an empty string disables it, and the Terminal menu still
+opens the dropdown.
+
+```json
+{ "quickHotkey": "cmd+shift+`", "quickPlacement": "top", "quickHeight": 0.45 }
+```
+
+`quickPlacement` is `top`, `bottom` or `center`, and `quickHeight` is the
+fraction of the display the dropdown covers, clamped to `0.15…1`. The dropdown
+has no sidebar, floats above other windows, hides when it loses focus, and is
+never written to the session file: it is recreated on demand, so it never pops
+up at launch. The default chord avoids the backquote chord, which `nextWindow` owns.
+
+Portable window only: the AppKit shell reaches the dropdown from the Terminal
+menu (and the `quickTerminal` shortcut) but registers no OS-wide hotkey.
 
 ## Terminal engine
 

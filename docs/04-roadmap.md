@@ -172,6 +172,12 @@ Goal: the prompt becomes a place in the buffer, not a string in a stream.
   user's copies and pastes, not OSC 52 writes or copy-on-select. On macOS the chord
   overlaps the fixed paste binding, so an empty history falls back to a plain paste.
 - **Quick terminal**: a global-hotkey dropdown window per display, both shells.
+  **Landed in 0.17.0** for the portable window: `quickHotkey` is an OS-wide chord, the
+  dropdown is a `WindowKind::Quick` window that floats, hides on focus loss, toggles on
+  the chord and is excluded from the session file, with `quickPlacement`/`quickHeight`
+  setting where it sits. It has its own spawned workspace, and `window.quick` leaves
+  `selected_window` alone so opening it cannot steal the window the user is in. The
+  AppKit shell opens it from the Terminal menu but registers no OS-wide chord.
 - **Commands and profiles**: user-defined commands from `config.json`, recent-choice
   ranking, named launch presets that replace the single `shell` key (argv, env, cwd,
   shell, label) on both shells, and saving the current tree as a named layout.
@@ -358,6 +364,10 @@ The 0.17 items that shipped partially, recorded so they are decisions and not ov
 | --- | --- |
 | OSC 133 `D` may carry a command duration; it is not parsed, so there is no per-command timing | 0.18 inbox |
 | Paste history is portable-only; the AppKit shell ignores the key and `Cmd+Shift+V` pastes through Ghostty | 1.0 AppKit parity |
+| Quick terminal registers no OS-wide hotkey in the AppKit shell; it is menu- and shortcut-only | 1.0 AppKit parity |
+| The quick terminal has one display placement, not a per-display dropdown, and is not positioned inside the work area's menu-bar/dock insets | 0.18 |
+| A global `quickHotkey` colliding with an in-app binding is not detected; the OS takes the key silently | 0.18 |
+| The OS-wide quick chord is X11/macOS/Windows only; a pure-Wayland session falls back to the menu | 0.18 |
 | Paste history is one ring shared by every native window, not per window | 0.18 |
 | Picking a single-line history entry does not move it to the front, while a confirmed multi-line one does | 0.18 |
 | The AppKit shell has no prompt gutter: it inherits Ghostty's marks and `jump_to_prompt` but draws no gutter | 1.0 AppKit parity |

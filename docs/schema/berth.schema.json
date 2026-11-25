@@ -231,6 +231,7 @@
     "system.capabilities",
     "window.list",
     "window.create",
+    "window.quick",
     "window.get",
     "window.select",
     "window.update",
@@ -897,6 +898,15 @@
           "id": {
             "type": "string"
           },
+          "kind": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/WindowKind"
+              }
+            ],
+            "default": "main",
+            "description": "What the window is for. A quick terminal is a dropdown over the other windows, opened by a global hotkey rather than created by the user."
+          },
           "monitor": {
             "default": null,
             "type": [
@@ -960,6 +970,25 @@
           "y"
         ],
         "type": "object"
+      },
+      "WindowKind": {
+        "description": "What a window is for. Only the quick terminal changes how a shell builds and shows the window.",
+        "oneOf": [
+          {
+            "description": "An ordinary window with a sidebar.",
+            "enum": [
+              "main"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "The dropdown quick terminal: no sidebar, above other windows, hidden instead of closed when it loses focus.",
+            "enum": [
+              "quick"
+            ],
+            "type": "string"
+          }
+        ]
       },
       "Workspace": {
         "properties": {
@@ -1134,5 +1163,5 @@
     "type": "object"
   },
   "title": "Berth protocol v1",
-  "version": "0.16.0"
+  "version": "0.17.0"
 }

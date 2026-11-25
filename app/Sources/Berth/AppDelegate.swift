@@ -176,6 +176,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         send("surface.duplicate", ["surface_id": id])
     }
 
+    @objc func showQuickTerminal(_ sender: Any?) {
+        // The core owns the window; the shell only reveals what it creates.
+        send("window.quick", [:])
+    }
+
     @objc func showSearch(_ sender: Any?) {
         guard let view = BerthCoreHost.shared.focusedSurfaceView else { return }
         SearchBar.present(for: view)

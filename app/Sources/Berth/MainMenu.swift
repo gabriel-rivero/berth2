@@ -89,6 +89,9 @@ enum MainMenu {
         add(terminalMenu, "Restart Tab", #selector(AppDelegate.restartTab(_:)), .restartTab)
         terminalMenu.addItem(.separator())
         add(terminalMenu, "Find…", #selector(AppDelegate.showSearch(_:)), .search)
+        add(
+            terminalMenu, "Quick Terminal",
+            #selector(AppDelegate.showQuickTerminal(_:)), .quickTerminal)
         terminalMenu.addItem(.separator())
         add(terminalMenu, "Zoom Pane", #selector(AppDelegate.zoomPane(_:)), .zoomPane)
         add(

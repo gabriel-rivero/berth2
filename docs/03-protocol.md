@@ -78,12 +78,13 @@ Event:
 | --- | --- | --- |
 | `window.list` | `{}` | `{windows:[Window], selected_window, selected_workspace, selected_surface}` |
 | `window.get` | `{window_id}` | `{window:Window}` |
-| `window.create` | `{name?, workspace_id?, focus?}` | `{window:Window}` — `workspace_id` moves that workspace into the new window (tear-off) |
+| `window.create` | `{name?, workspace_id?, focus?}` | `{window:Window}` — `workspace_id` moves that workspace into the new window (tear-off). A `quick` window must be made with `window.quick` |
+| `window.quick` | `{}` | `{window:Window}` — the dropdown quick terminal, created with its own spawned workspace on first call. Does not change `selected_window` |
 | `window.select` | `{window_id}` | `{}` |
 | `window.update` | `{window_id, name?, bounds?, monitor?, sidebar_width?, broadcast?, active_workspace?, clear_bounds?}` | `{window:Window}` |
 | `window.close` | `{window_id}` | `{}` — closes its workspaces; the last window is never removed |
 
-`Window` is `{id, name, created_ms, bounds?, monitor?, sidebar_width?, active_workspace?, active_surface?, broadcast}`. `bounds` is `{x, y, width, height, maximized, scale}`. `Workspace.window_id` names the window that shows it; `AppState.selected_window` names the focused one. The top-level `selected_workspace`/`selected_surface` mirror the selected window so older clients keep working.
+`Window` is `{id, name, created_ms, bounds?, monitor?, sidebar_width?, active_workspace?, active_surface?, broadcast, kind}`. `kind` is `main` (an ordinary window with a sidebar) or `quick` (the dropdown, which never appears in the session file). `bounds` is `{x, y, width, height, maximized, scale}`. `Workspace.window_id` names the window that shows it; `AppState.selected_window` names the focused one. The top-level `selected_workspace`/`selected_surface` mirror the selected window so older clients keep working.
 
 ### workspace
 | method | params | result |

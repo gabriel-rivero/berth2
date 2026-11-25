@@ -55,6 +55,12 @@ app itself has the gaps listed in
 - **Settings stops at appearance and shortcuts.** The `⌘,` panel edits font size,
   display scale, sidebar density, exit/restore, socket mode and every shortcut; font
   family, theme, profiles and per-provider mute stay in `config.json`.
+- **The quick terminal is portable-only for the OS-wide chord.** `quickHotkey` is
+  registered globally by `berth-gui`; the AppKit shell opens the same window from the
+  Terminal menu and the `quickTerminal` shortcut but registers no system-wide hotkey.
+  There is one placement, not one dropdown per display. On a pure-Wayland session the
+  OS-wide chord is silently unavailable (the backend is X11-only) and the menu or
+  `quickTerminal` chord is the only way in.
 - **No file drops.** Tab, workspace and divider drags are internal; a file or folder
   dropped on a pane does nothing.
 - **Right-to-left text is shaped in terminal panes only.** Sidebar rows, tab

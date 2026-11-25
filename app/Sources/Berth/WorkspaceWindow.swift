@@ -175,6 +175,32 @@ final class MainWindow: NSWindow {
         splitView.adjustSubviews()
     }
 
+    /// Shape this window as the dropdown quick terminal: no sidebar, no title
+    /// bar chrome, a strip across the top of the screen, floating above other
+    /// windows.
+    func applyQuickTerminal() {
+        sidebar.isHidden = true
+        splitView.adjustSubviews()
+        titleVisibility = .hidden
+        titlebarAppearsTransparent = true
+        styleMask.insert(.fullSizeContentView)
+        level = .floating
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        // Park it as a Quake-style strip before it is first shown, so it never
+        // flashes at the default frame.
+        if let screen = NSScreen.main {
+            let visible = screen.visibleFrame
+            let height = max(200, visible.height * 0.45)
+            setFrame(
+                NSRect(
+                    x: visible.minX,
+                    y: visible.maxY - height,
+                    width: visible.width,
+                    height: height),
+                display: false)
+        }
+    }
+
     /// Flash the pane that holds a surface, used when an agent starts needing
     /// attention while the user is looking elsewhere.
     func ring(surfaceID: String) {

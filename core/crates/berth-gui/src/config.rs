@@ -50,13 +50,14 @@ pub enum Action {
     NextPrompt,
     CopyMode,
     PasteHistory,
+    QuickTerminal,
     ZoomIn,
     ZoomOut,
     ZoomReset,
 }
 
 impl Action {
-    pub const ALL: [Action; 33] = [
+    pub const ALL: [Action; 34] = [
         Action::SplitRight,
         Action::SplitDown,
         Action::NewTab,
@@ -87,6 +88,7 @@ impl Action {
         Action::NextPrompt,
         Action::CopyMode,
         Action::PasteHistory,
+        Action::QuickTerminal,
         Action::ZoomIn,
         Action::ZoomOut,
         Action::ZoomReset,
@@ -125,6 +127,7 @@ impl Action {
             Action::NextPrompt => "Next Prompt",
             Action::CopyMode => "Copy Mode",
             Action::PasteHistory => "Paste History",
+            Action::QuickTerminal => "Quick Terminal",
             Action::ZoomIn => "Zoom In",
             Action::ZoomOut => "Zoom Out",
             Action::ZoomReset => "Actual Size",
@@ -164,6 +167,7 @@ impl Action {
             Action::NextPrompt => "nextPrompt",
             Action::CopyMode => "copyMode",
             Action::PasteHistory => "pasteHistory",
+            Action::QuickTerminal => "quickTerminal",
             Action::ZoomIn => "zoomIn",
             Action::ZoomOut => "zoomOut",
             Action::ZoomReset => "zoomReset",
@@ -203,6 +207,7 @@ impl Action {
             Action::NextPrompt => "cmd+shift+down",
             Action::CopyMode => "cmd+shift+c",
             Action::PasteHistory => "cmd+shift+v",
+            Action::QuickTerminal => "cmd+shift+`",
             Action::ZoomIn => "cmd+=",
             Action::ZoomOut => "cmd+-",
             Action::ZoomReset => "cmd+0",
@@ -244,6 +249,7 @@ impl Action {
             Action::NextPrompt => "ctrl+shift+down",
             Action::CopyMode => "ctrl+shift+space",
             Action::PasteHistory => "ctrl+alt+v",
+            Action::QuickTerminal => "ctrl+shift+`",
             Action::ZoomIn => "ctrl+=",
             Action::ZoomOut => "ctrl+-",
             Action::ZoomReset => "ctrl+0",
@@ -413,6 +419,8 @@ pub struct Config {
     pub sidebar_width: f64,
     pub socket: Option<String>,
     pub shortcuts: Shortcuts,
+    /// The dropdown quick terminal's global hotkey, placement and height.
+    pub quick: crate::quick::Options,
 }
 
 impl Default for Config {
@@ -442,6 +450,7 @@ impl Default for Config {
             sidebar_width: 200.0,
             socket: None,
             shortcuts: Shortcuts::build(&HashMap::new()),
+            quick: crate::quick::Options::default(),
         }
     }
 }
@@ -603,6 +612,9 @@ struct FileConfig {
     sidebar_width: Option<f64>,
     socket: Option<String>,
     shortcuts: HashMap<String, String>,
+    quick_hotkey: Option<String>,
+    quick_placement: Option<String>,
+    quick_height: Option<f64>,
 }
 
 impl Config {
@@ -718,6 +730,11 @@ impl Config {
                 .clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH),
             socket: file.socket,
             shortcuts: Shortcuts::build(&file.shortcuts),
+            quick: crate::quick::Options::from_config(
+                file.quick_hotkey.as_deref(),
+                file.quick_placement.as_deref(),
+                file.quick_height,
+            ),
         }
     }
 

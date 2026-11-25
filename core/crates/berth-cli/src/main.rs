@@ -868,7 +868,8 @@ usage:
   berth ping
   berth ls [--json]             workspaces, surfaces and agents
   berth window list [--json]
-  berth window new [--name N] [--workspace WORKSPACE_ID]
+  berth window new [--name N] [--workspace WORKSPACE_ID] [--kind main|quick]
+  berth window quick            open the dropdown quick terminal
   berth window select WINDOW_ID
   berth window close WINDOW_ID
   berth window update WINDOW_ID [--name N] [--broadcast on|off] [--sidebar-width N]
@@ -1148,7 +1149,15 @@ fn run() -> Result<(), String> {
                     if let Some(workspace) = arg_after(rest, "--workspace") {
                         params["workspace_id"] = json!(workspace);
                     }
+                    if let Some(kind) = arg_after(rest, "--kind") {
+                        params["kind"] = json!(kind);
+                    }
                     let v = c.call("window.create", params)?;
+                    println!("{}", v["window"]["id"].as_str().unwrap_or(""));
+                }
+                // Open the dropdown quick terminal, creating it on first use.
+                "quick" => {
+                    let v = c.call("window.quick", json!({}))?;
                     println!("{}", v["window"]["id"].as_str().unwrap_or(""));
                 }
                 "select" => {

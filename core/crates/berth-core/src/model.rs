@@ -54,6 +54,23 @@ pub struct Window {
     /// Type into every pane of the active workspace.
     #[serde(default)]
     pub broadcast: bool,
+    /// What the window is for. A quick terminal is a dropdown over the other
+    /// windows, opened by a global hotkey rather than created by the user.
+    #[serde(default)]
+    pub kind: WindowKind,
+}
+
+/// What a window is for. Only the quick terminal changes how a shell builds
+/// and shows the window.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum WindowKind {
+    /// An ordinary window with a sidebar.
+    #[default]
+    Main,
+    /// The dropdown quick terminal: no sidebar, above other windows, hidden
+    /// instead of closed when it loses focus.
+    Quick,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
