@@ -48,6 +48,7 @@ mod keys;
 mod layout;
 mod links;
 mod log;
+mod menu;
 mod mouse;
 mod output_rules;
 mod paint;
@@ -432,6 +433,7 @@ fn main() {
         host,
         server,
         theme: config.theme(),
+        system_light: false,
         font_zoom: 0.0,
         config,
         font: None,
@@ -467,6 +469,8 @@ fn main() {
         exit_announced: HashMap::new(),
         window_focused: true,
         overlay: None,
+        menu_open: None,
+        menu_selected: 0,
         mouse_down: None,
         preedit: None,
         a11y: None,
@@ -862,6 +866,20 @@ enum ClickTarget {
     GroupRow(String),
 }
 
+/// Hit boxes for the painted menu bar and, when one is open, its dropdown.
+struct MenuBarGeometry {
+    /// Each title's clickable rect, with the menu index it opens.
+    titles: Vec<(Rect, usize)>,
+    open: Option<MenuGeometry>,
+}
+
+/// One open dropdown: its frame and the selectable rows.
+struct MenuGeometry {
+    panel: Rect,
+    /// A row per entry, paired with the entry (`None` for a separator).
+    rows: Vec<(Rect, Option<menu::Entry>)>,
+}
+
 /// The metadata last applied to the core, so a frame only emits changes.
 #[derive(PartialEq, Default)]
 struct AppliedMeta {
@@ -876,6 +894,9 @@ struct Gui {
     host: Arc<PtyHost>,
     server: Option<ServerHandle>,
     theme: Theme,
+    /// Whether the OS currently reports a light appearance, from the window's
+    /// theme and the `ThemeChanged` event.
+    system_light: bool,
     /// Session offset from `config.font_size` that the zoom chords set.
     font_zoom: f32,
     config: Config,
@@ -916,6 +937,10 @@ struct Gui {
     exit_announced: HashMap<String, bool>,
     window_focused: bool,
     overlay: Option<Overlay>,
+    /// Index of the open menu dropdown, if any.
+    menu_open: Option<usize>,
+    /// Selected entry index inside the open menu.
+    menu_selected: usize,
     last_detect: Instant,
     last_sweep: Instant,
     /// Button currently held, for drag reports and local selection.
@@ -1017,6 +1042,8 @@ struct WinStash {
     sidebar_scroll: usize,
     drag: Drag,
     overlay: Option<Overlay>,
+    menu_open: Option<usize>,
+    menu_selected: usize,
     window_focused: bool,
     a11y: Option<accesskit_winit::Adapter>,
     a11y_active: bool,
@@ -1118,6 +1145,9 @@ impl ApplicationHandler<UserEvent> for Gui {
             }
             WindowEvent::Focused(focused) => {
                 self.window_focused = focused;
+                if !focused {
+                    self.menu_open = None;
+                }
                 // The dropdown is dismissed like a menu: losing focus hides it.
                 // The window and its shell stay alive, so the next press shows
                 // the same session rather than a fresh one.
@@ -1150,6 +1180,11 @@ impl ApplicationHandler<UserEvent> for Gui {
                 }
                 self.request_redraw();
             }
+            WindowEvent::ThemeChanged(theme) => {
+                self.system_light = theme == winit::window::Theme::Light;
+                self.theme = self.config.theme_with(self.system_light);
+                self.request_redraw();
+            }
             WindowEvent::Ime(ime) => self.ime(ime),
             WindowEvent::ModifiersChanged(modifiers) => {
                 self.modifiers = modifiers.state();
@@ -1161,6 +1196,10 @@ impl ApplicationHandler<UserEvent> for Gui {
                 }
                 self.drag_to_pointer();
                 self.update_cursor_icon();
+                // The open dropdown highlights the row under the pointer.
+                if self.menu_open.is_some() {
+                    self.request_redraw();
+                }
             }
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
@@ -1601,8 +1640,8 @@ impl Gui {
         if self.chrome_font.is_none() {
             self.chrome_font = Some(FontRenderer::new(
                 CHROME_FONT_SIZE * self.scale as f32,
-                &self.config.font_family,
-                self.config.font_options(),
+                &self.config.ui_font_family,
+                self.config.ui_font_options(),
             ));
         }
         self.chrome_font.as_mut().expect("chrome font just created")
@@ -1681,6 +1720,11 @@ impl Gui {
                 .map_err(|error| error.to_string())?,
         );
         self.scale = window.scale_factor();
+        // Follow the OS appearance when the config asks for it. The window
+        // reports the platform's current theme at creation and again through
+        // `ThemeChanged` when the user switches.
+        self.system_light = matches!(window.theme(), Some(winit::window::Theme::Light));
+        self.theme = self.config.theme_with(self.system_light);
         self.font_job = Some(font::FontSlot::spawn(
             self.config.font_pixels(self.font_points(), self.scale),
             self.config.font_family.clone(),
@@ -1688,8 +1732,8 @@ impl Gui {
         ));
         self.chrome_job = Some(font::FontSlot::spawn(
             CHROME_FONT_SIZE * self.scale as f32,
-            self.config.font_family.clone(),
-            self.config.font_options(),
+            self.config.ui_font_family.clone(),
+            self.config.ui_font_options(),
         ));
         let context = softbuffer::Context::new(window.clone())
             .map_err(|error| format!("softbuffer context: {error}"))?;
@@ -1722,6 +1766,8 @@ impl Gui {
         self.title = core.name.clone();
         self.drag = Drag::None;
         self.overlay = None;
+        self.menu_open = None;
+        self.menu_selected = 0;
         self.window_focused = false;
         self.a11y_active = false;
         self.a11y_text.clear();
@@ -1755,6 +1801,8 @@ impl Gui {
             sidebar_scroll: self.sidebar_scroll,
             drag: std::mem::replace(&mut self.drag, Drag::None),
             overlay: self.overlay.take(),
+            menu_open: self.menu_open.take(),
+            menu_selected: self.menu_selected,
             window_focused: self.window_focused,
             a11y: self.a11y.take(),
             a11y_active: self.a11y_active,
@@ -1784,6 +1832,8 @@ impl Gui {
         self.sidebar_scroll = stash.sidebar_scroll;
         self.drag = stash.drag;
         self.overlay = stash.overlay;
+        self.menu_open = stash.menu_open;
+        self.menu_selected = stash.menu_selected;
         self.window_focused = stash.window_focused;
         self.a11y = stash.a11y;
         self.a11y_active = stash.a11y_active;
@@ -1912,6 +1962,161 @@ impl Gui {
 
     fn menu_bar_height(&self) -> usize {
         (24.0 * self.scale) as usize
+    }
+
+    /// Titles and, when one is open, the dropdown's frame and row hit boxes.
+    fn menu_bar_geometry(&mut self) -> MenuBarGeometry {
+        let scale = self.scale;
+        let bar_height = self.menu_bar_height();
+        let padding = (10.0 * scale) as usize;
+        // The bar shares the content column with the panes, so it starts where
+        // the sidebar ends; the sidebar paints over anything to its left.
+        let mut x = self.sidebar_pixels() + (6.0 * scale) as usize;
+        let mut titles = Vec::new();
+        for (index, title) in menu::TITLES.iter().enumerate() {
+            let width = self.chrome_font().advance(title, font::TextStyle::BOLD);
+            let rect = Rect::new(x, 0, width + padding * 2, bar_height);
+            titles.push((rect, index));
+            x = rect.right();
+        }
+        let open_menu = self.menu_open;
+        let open = open_menu.map(|menu| self.menu_geometry(menu, &titles));
+        MenuBarGeometry { titles, open }
+    }
+
+    fn menu_geometry(&mut self, menu: usize, titles: &[(Rect, usize)]) -> MenuGeometry {
+        let scale = self.scale;
+        let entries = menu::entries(menu);
+        let padding = (10.0 * scale) as usize;
+        let gap = (24.0 * scale) as usize;
+        let row_height = self.chrome_font().cell().height + (10.0 * scale) as usize;
+        let mut content = 0;
+        for entry in entries {
+            let mut width = self
+                .chrome_font()
+                .advance(entry.label(), font::TextStyle::NORMAL);
+            if let Some(action) = entry.action() {
+                let chord = self.config.shortcuts.label(action);
+                if !chord.is_empty() && chord != "unbound" {
+                    width += gap + self.chrome_font().advance(&chord, font::TextStyle::NORMAL);
+                }
+            }
+            content = content.max(width);
+        }
+        let anchor = titles
+            .iter()
+            .find(|(_, index)| *index == menu)
+            .map(|(rect, _)| *rect)
+            .unwrap_or(Rect::new(0, 0, 0, self.menu_bar_height()));
+        let panel = Rect::new(
+            anchor.x,
+            self.menu_bar_height(),
+            content + padding * 2 + gap,
+            entries.len() * row_height + (8.0 * scale) as usize,
+        );
+        let mut rows = Vec::new();
+        let mut y = panel.y + (4.0 * scale) as usize;
+        for entry in entries {
+            let selectable = entry.selectable().then_some(*entry);
+            rows.push((Rect::new(panel.x, y, panel.w, row_height), selectable));
+            y += row_height;
+        }
+        MenuGeometry { panel, rows }
+    }
+
+    fn open_menu(&mut self, index: usize) {
+        self.menu_open = Some(index);
+        self.menu_selected = menu::first_selectable(menu::entries(index));
+        self.request_redraw();
+    }
+
+    /// Handle a click on the bar or an open dropdown. Returns true when the
+    /// click belonged to the menu and must not reach a pane.
+    fn menu_click(&mut self, point: (usize, usize)) -> bool {
+        let geometry = self.menu_bar_geometry();
+        if let Some(open) = &geometry.open
+            && open.panel.contains(point.0, point.1)
+        {
+            let entry = open
+                .rows
+                .iter()
+                .find(|(rect, _)| rect.contains(point.0, point.1))
+                .and_then(|(_, entry)| *entry);
+            self.menu_open = None;
+            if let Some(entry) = entry {
+                self.menu_activate(entry);
+            }
+            return true;
+        }
+        let title = geometry
+            .titles
+            .iter()
+            .find(|(rect, _)| rect.contains(point.0, point.1))
+            .map(|(_, index)| *index);
+        if let Some(index) = title {
+            if self.menu_open == Some(index) {
+                self.menu_open = None;
+            } else {
+                self.open_menu(index);
+            }
+            return true;
+        }
+        if self.menu_open.take().is_some() {
+            return true;
+        }
+        point.1 < self.menu_bar_height()
+    }
+
+    fn menu_activate(&mut self, entry: menu::Entry) {
+        self.menu_open = None;
+        self.menu_selected = 0;
+        match entry {
+            menu::Entry::Action(action) => self.run_command(Command::for_action(action)),
+            menu::Entry::Quit => self.quit = true,
+            menu::Entry::Separator => {}
+        }
+        self.request_redraw();
+    }
+
+    /// Keys while a menu is open. Returns false to let the key fall through to
+    /// the chord table, after closing the menu.
+    fn menu_key(&mut self, event: &KeyEvent) -> bool {
+        let Some(menu) = self.menu_open else {
+            return false;
+        };
+        let entries = menu::entries(menu);
+        match &event.logical_key {
+            Key::Named(NamedKey::Escape) => {
+                self.menu_open = None;
+                true
+            }
+            Key::Named(NamedKey::ArrowDown) => {
+                self.menu_selected = menu::step(entries, self.menu_selected, 1);
+                true
+            }
+            Key::Named(NamedKey::ArrowUp) => {
+                self.menu_selected = menu::step(entries, self.menu_selected, -1);
+                true
+            }
+            Key::Named(NamedKey::ArrowRight) => {
+                self.open_menu((menu + 1) % menu::TITLES.len());
+                true
+            }
+            Key::Named(NamedKey::ArrowLeft) => {
+                self.open_menu((menu + menu::TITLES.len() - 1) % menu::TITLES.len());
+                true
+            }
+            Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Space) => {
+                if let Some(entry) = entries.get(self.menu_selected) {
+                    self.menu_activate(*entry);
+                }
+                true
+            }
+            _ => {
+                self.menu_open = None;
+                false
+            }
+        }
     }
 
     fn status_height(&self) -> usize {
@@ -2189,7 +2394,13 @@ impl Gui {
             self.exit_announced.insert(surface_id.clone(), true);
             if self.config.close_exited_panes {
                 self.close_surface(&surface_id);
-                self.ensure_workspace();
+                // The last pane leaving the last workspace is the window's
+                // exit, not an empty frame: closing it matches the macOS
+                // shell, which terminates when the core reports no workspaces.
+                if lock(&self.state).workspaces.is_empty() {
+                    self.quit = true;
+                    return;
+                }
                 continue;
             }
             let params = serde_json::json!({
@@ -2199,16 +2410,6 @@ impl Gui {
             if let Err(error) = self.dispatch("surface.update", params) {
                 eprintln!("berth-gui: surface.update exited: {error}");
             }
-        }
-    }
-
-    /// Keep the window usable when the last pane exits and its workspace closes.
-    fn ensure_workspace(&mut self) {
-        if !lock(&self.state).workspaces.is_empty() {
-            return;
-        }
-        if let Err(error) = self.dispatch("workspace.create", serde_json::json!({"name": "1"})) {
-            eprintln!("berth-gui: workspace.create after exit: {error}");
         }
     }
 
@@ -2331,6 +2532,9 @@ impl Gui {
         };
         self.sync_sizes(&panes, cell);
         self.sync_title();
+        // Computed before the frame borrows the buffer: it measures the chrome
+        // font, which needs the renderer.
+        let menu_bar = self.menu_bar_geometry();
 
         let (Some(nonzero_w), Some(nonzero_h)) = (
             std::num::NonZeroU32::new(width as u32),
@@ -2370,18 +2574,29 @@ impl Gui {
             };
             let chrome_cell = self.chrome_font().cell();
             painter.fill(menu_rect, theme.tab_bar_bg);
-            let menu_font = self.chrome_font();
-            painter.text(
-                menu_font,
-                (
-                    menu_rect.x + 10,
-                    menu_rect.y + menu_rect.h.saturating_sub(chrome_cell.height) / 2,
-                ),
-                "Berth   Terminal   View   Window",
-                font::TextStyle::NORMAL,
-                theme.text_secondary,
-                menu_rect.w.saturating_sub(20),
-            );
+            for (rect, index) in &menu_bar.titles {
+                let active = self.menu_open == Some(*index);
+                if active {
+                    painter.fill(*rect, theme.tab_active_bg);
+                }
+                let title = menu::TITLES[*index];
+                let font = self.chrome_font();
+                let used = font.advance(title, font::TextStyle::BOLD);
+                let x = rect.x + rect.w.saturating_sub(used) / 2;
+                let y = rect.y + rect.h.saturating_sub(chrome_cell.height) / 2;
+                painter.text(
+                    font,
+                    (x, y),
+                    title,
+                    font::TextStyle::BOLD,
+                    if active {
+                        theme.text_primary
+                    } else {
+                        theme.text_secondary
+                    },
+                    rect.w,
+                );
+            }
             painter.fill(status_rect, status_bg);
             let status_font = self.chrome_font();
             painter.text_elided(
@@ -2620,6 +2835,58 @@ impl Gui {
                 }
             }
 
+            if let Some(open) = &menu_bar.open {
+                painter.fill(open.panel, theme.panel_bg);
+                painter.stroke(open.panel, theme.pane_border);
+                let pointer = (
+                    self.pointer.0.max(0.0) as usize,
+                    self.pointer.1.max(0.0) as usize,
+                );
+                for (index, (rect, entry)) in open.rows.iter().enumerate() {
+                    let Some(entry) = entry else {
+                        let y = rect.y + rect.h / 2;
+                        painter.fill(
+                            Rect::new(rect.x + 8, y, rect.w.saturating_sub(16), 1),
+                            theme.pane_border,
+                        );
+                        continue;
+                    };
+                    let hovered = rect.contains(pointer.0, pointer.1);
+                    if hovered || index == self.menu_selected {
+                        painter.fill(*rect, theme.sidebar_active);
+                    }
+                    let chord = entry
+                        .action()
+                        .map(|action| self.config.shortcuts.label(action))
+                        .filter(|chord| !chord.is_empty() && chord != "unbound");
+                    let font = self.chrome_font();
+                    let y = rect.y + rect.h.saturating_sub(chrome_cell.height) / 2;
+                    let chord_width = chord
+                        .as_deref()
+                        .map(|chord| font.advance(chord, font::TextStyle::NORMAL) + 12)
+                        .unwrap_or(0);
+                    painter.text_elided(
+                        font,
+                        (rect.x + 12, y),
+                        entry.label(),
+                        font::TextStyle::NORMAL,
+                        theme.text_primary,
+                        rect.w.saturating_sub(chord_width + 24),
+                    );
+                    if let Some(chord) = chord {
+                        let font = self.chrome_font();
+                        let width = font.advance(&chord, font::TextStyle::NORMAL);
+                        painter.text(
+                            font,
+                            (rect.right().saturating_sub(width + 12), y),
+                            &chord,
+                            font::TextStyle::NORMAL,
+                            theme.text_tertiary,
+                            rect.w,
+                        );
+                    }
+                }
+            }
             if let Some(content) = self.panel_data() {
                 let geometry = panel::geometry(
                     Rect::new(0, 0, width, height),
@@ -3102,6 +3369,11 @@ impl Gui {
             if button == MouseButton::Left {
                 self.overlay_click(point);
             }
+            self.request_redraw();
+            return;
+        }
+        // The menu bar and its dropdown take the click before any pane does.
+        if button == MouseButton::Left && self.menu_click(point) {
             self.request_redraw();
             return;
         }
@@ -5271,8 +5543,14 @@ impl Gui {
             self.font_zoom = 0.0;
             self.invalidate_fonts();
         }
+        if change == settings::Change::UiFont {
+            // Only the chrome font changed; the terminal grid and its zoom
+            // stay put.
+            self.chrome_font = None;
+            self.chrome_job = None;
+        }
         if change == settings::Change::Theme {
-            self.theme = self.config.theme();
+            self.theme = self.config.theme_with(self.system_light);
         }
         if change == settings::Change::Opacity
             && let Some(window) = &self.window
@@ -6621,6 +6899,10 @@ impl Gui {
         }
         if self.overlay.is_some() {
             self.overlay_key(&event);
+            return;
+        }
+        if self.menu_open.is_some() && self.menu_key(&event) {
+            self.request_redraw();
             return;
         }
         // Copy mode is a modal capture in front of the chord table: its keys are

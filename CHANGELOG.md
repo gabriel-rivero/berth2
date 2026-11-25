@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- **Window font selector.** `uiFontFamily` sets the chrome face — tabs, sidebar, menu bar
+  and status — independently of the terminal's `fontFamily`. Settings → **Window font**
+  cycles the default and every installed family, and the default is the system
+  sans-serif. Text advances are measured per glyph, so a proportional face lays out
+  correctly, and changing it leaves the terminal zoom alone.
+- **System appearance.** `theme` now accepts `system` (and an absent key means it),
+  which follows the OS light/dark setting and switches live on `ThemeChanged`.
+  `berth-dark` and `berth-light` still force a palette.
+- **The painted menu bar works.** `Berth`, `Terminal`, `View` and `Window` open real
+  dropdowns with their current chords; click, hover, arrow and Enter run the same
+  commands as the shortcut table, and Escape closes. It is painted into the frame
+  because winit has no native menu API, so it is not in the macOS system menu bar yet.
+
+### Fixes
+
+- **Closing the last terminal closes the window.** When the final pane in the final
+  workspace exits, the portable window saves and quits instead of leaving an empty
+  "no live surface" frame, matching the macOS shell.
+
 ## 0.17.0 — 2026-11-25
 
 ### Features

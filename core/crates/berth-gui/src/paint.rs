@@ -658,18 +658,17 @@ impl<'a> Painter<'a> {
         color: u32,
         max_width: usize,
     ) -> usize {
-        let cell = font.cell();
-        let limit = (max_width / cell.width).max(1);
+        // Advances come from the font, not the cell: the chrome font may be
+        // proportional, and a fixed step would overlap or gap its letters.
         let mut x = origin.0;
-        for (index, character) in text.chars().enumerate() {
-            if index >= limit {
+        for character in text.chars() {
+            let glyph = character.to_string();
+            let advance = font.advance(&glyph, style).max(1);
+            if x > origin.0 && x - origin.0 + advance > max_width {
                 break;
             }
-            let start = x;
-            x += self.glyph(font, (x, origin.1), &character.to_string(), style, color);
-            if x == start {
-                x += cell.width;
-            }
+            self.glyph(font, (x, origin.1), &glyph, style, color);
+            x += advance;
         }
         x - origin.0
     }
@@ -684,19 +683,29 @@ impl<'a> Painter<'a> {
         color: u32,
         max_width: usize,
     ) {
-        let cell = font.cell();
-        let limit = (max_width / cell.width).max(1);
-        if text.chars().count() <= limit {
+        if font.advance(text, style) <= max_width {
             self.text(font, origin, text, style, color, max_width);
             return;
         }
-        if limit <= 1 {
+        let ellipsis = font.advance("…", style).max(1);
+        let budget = max_width.saturating_sub(ellipsis);
+        let mut head = String::new();
+        let mut used = 0;
+        for character in text.chars() {
+            let glyph = character.to_string();
+            let advance = font.advance(&glyph, style).max(1);
+            if used + advance > budget {
+                break;
+            }
+            used += advance;
+            head.push(character);
+        }
+        if head.is_empty() {
             self.text(font, origin, "…", style, color, max_width);
             return;
         }
-        let head: String = text.chars().take(limit - 1).collect();
-        let used = self.text(font, origin, &head, style, color, max_width);
-        self.glyph(font, (origin.0 + used, origin.1), "…", style, color);
+        let drawn = self.text(font, origin, &head, style, color, max_width);
+        self.glyph(font, (origin.0 + drawn, origin.1), "…", style, color);
     }
 
     /// Draw one underline variant in a cell. The width may span a wide glyph.
@@ -2155,6 +2164,27 @@ mod tests {
         let pixel = buffer[0];
         let channel = (pixel >> 16) & 0xff;
         assert!(channel > 100 && channel < 160, "channel {channel}");
+    }
+
+    #[test]
+    fn given_text_when_drawn_then_the_returned_width_is_the_sum_of_advances() {
+        let mut font = FontRenderer::new(12.0, &[], crate::font::Options::default());
+        let mut buffer = vec![0u32; 400 * 40];
+        let mut painter = Painter::new(&mut buffer, 400, 40);
+        let width = painter.text(
+            &mut font,
+            (0, 0),
+            "hello",
+            TextStyle::NORMAL,
+            0x00ff_ffff,
+            400,
+        );
+        let expected: usize = "hello"
+            .chars()
+            .map(|character| font.advance(&character.to_string(), TextStyle::NORMAL))
+            .sum();
+        assert_eq!(width, expected);
+        assert!(width > 0);
     }
 
     #[test]

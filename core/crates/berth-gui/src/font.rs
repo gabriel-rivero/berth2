@@ -42,6 +42,9 @@ pub struct Options {
     pub features: Vec<([u8; 4], bool)>,
     /// Per-family cell overrides, keyed by the face name.
     pub metrics: Vec<(String, FaceMetrics)>,
+    /// Resolve as interface text: the system sans-serif leads and the
+    /// monospace defaults do not apply. Off for the terminal grid.
+    pub ui: bool,
 }
 
 impl Default for Options {
@@ -51,6 +54,7 @@ impl Default for Options {
             line_height: 1.35,
             features: Vec::new(),
             metrics: Vec::new(),
+            ui: false,
         }
     }
 }
@@ -159,6 +163,9 @@ pub struct FontRenderer {
     /// glyphs from whichever face actually has them.
     families: Vec<FamilyOwned>,
     cache: HashMap<CacheKey, Option<Arc<Raster>>>,
+    /// Shaped advances, keyed by text and style. A proportional chrome font is
+    /// measured per glyph when drawing, and labels repeat every frame.
+    advances: HashMap<(String, bool, bool), usize>,
     /// Face lookup is a database query; a glyph redraws often, so remember the
     /// answer per family and style.
     faces: HashMap<(usize, bool, bool), Option<fontdb::ID>>,
@@ -216,32 +223,62 @@ pub fn default_family_name() -> String {
 /// database only changes when the user installs a font and relaunches.
 pub fn installed_monospace_families() -> Vec<String> {
     static NAMES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    NAMES.get_or_init(|| installed_families_where(true)).clone()
+}
+
+/// Every installed family, monospaced or not, sorted for the window-font
+/// picker. The same hidden-face filter applies, so a system face the user
+/// cannot pick for text stays out of the list.
+pub fn installed_families() -> Vec<String> {
+    static NAMES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
     NAMES
-        .get_or_init(|| {
-            let (_, database) = shared_database();
-            let mut names: Vec<String> = Vec::new();
-            for face in database.faces() {
-                if !face.monospaced {
-                    continue;
-                }
-                let Some((name, _)) = face.families.first() else {
-                    continue;
-                };
-                let hidden = name.starts_with('.')
-                    || name.contains("Emoji")
-                    || name.contains("emoji")
-                    || name.contains("Bitmap");
-                let known = names
-                    .iter()
-                    .any(|existing| existing.eq_ignore_ascii_case(name));
-                if !hidden && !known {
-                    names.push(name.clone());
-                }
-            }
-            names.sort_by_key(|name| name.to_lowercase());
-            names
-        })
+        .get_or_init(|| installed_families_where(false))
         .clone()
+}
+
+fn installed_families_where(monospaced_only: bool) -> Vec<String> {
+    let (_, database) = shared_database();
+    let mut names: Vec<String> = Vec::new();
+    for face in database.faces() {
+        if monospaced_only && !face.monospaced {
+            continue;
+        }
+        let Some((name, _)) = face.families.first() else {
+            continue;
+        };
+        let hidden = name.starts_with('.')
+            || name.contains("Emoji")
+            || name.contains("emoji")
+            || name.contains("Bitmap");
+        let known = names
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(name));
+        if !hidden && !known {
+            names.push(name.clone());
+        }
+    }
+    names.sort_by_key(|name| name.to_lowercase());
+    names
+}
+
+/// The family the settings row reports for an unset window font: whatever the
+/// generic sans-serif resolves to on this system.
+pub fn default_ui_family_name() -> String {
+    static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    NAME.get_or_init(|| {
+        let (_, database) = shared_database();
+        database
+            .query(&fontdb::Query {
+                families: &[fontdb::Family::SansSerif],
+                weight: fontdb::Weight::NORMAL,
+                stretch: fontdb::Stretch::Normal,
+                style: fontdb::Style::Normal,
+            })
+            .and_then(|id| database.face(id))
+            .and_then(|face| face.families.first().map(|(name, _)| name.clone()))
+            .unwrap_or_else(|| "System sans-serif".to_string())
+    })
+    .clone()
 }
 
 /// The family the generic `Monospace` resolves to, so the default row can name
@@ -265,7 +302,7 @@ fn system_monospace_name(database: &fontdb::Database) -> String {
 /// face lacks. Names are matched case-insensitively; an unknown name is
 /// skipped rather than fatal, so a config copied from another machine opens.
 /// With nothing installed, the preferred ligature face leads.
-fn resolve_families(font_system: &FontSystem, names: &[String]) -> Vec<FamilyOwned> {
+fn resolve_families(font_system: &FontSystem, names: &[String], ui: bool) -> Vec<FamilyOwned> {
     let database = font_system.db();
     let mut families: Vec<FamilyOwned> = Vec::new();
     for name in names {
@@ -277,6 +314,7 @@ fn resolve_families(font_system: &FontSystem, names: &[String]) -> Vec<FamilyOwn
         }
     }
     if families.is_empty()
+        && !ui
         && let Some(default) = DEFAULT_FAMILIES
             .iter()
             .find_map(|name| installed_family(database, name))
@@ -284,13 +322,26 @@ fn resolve_families(font_system: &FontSystem, names: &[String]) -> Vec<FamilyOwn
         families.push(FamilyOwned::Name(default.into()));
     }
     if families.is_empty() {
-        families.push(FamilyOwned::Monospace);
+        families.push(if ui {
+            FamilyOwned::SansSerif
+        } else {
+            FamilyOwned::Monospace
+        });
     }
-    for generic in [
-        FamilyOwned::Monospace,
-        FamilyOwned::SansSerif,
-        FamilyOwned::Serif,
-    ] {
+    let generics = if ui {
+        [
+            FamilyOwned::SansSerif,
+            FamilyOwned::Monospace,
+            FamilyOwned::Serif,
+        ]
+    } else {
+        [
+            FamilyOwned::Monospace,
+            FamilyOwned::SansSerif,
+            FamilyOwned::Serif,
+        ]
+    };
+    for generic in generics {
         if !families.contains(&generic) {
             families.push(generic);
         }
@@ -351,7 +402,7 @@ impl FontRenderer {
         let (locale, database) = shared_database();
         let database_ms = started.elapsed().as_millis();
         let mut font_system = FontSystem::new_with_locale_and_db(locale, database);
-        let resolved = resolve_families(&font_system, families);
+        let resolved = resolve_families(&font_system, families, options.ui);
         let mut buffer = Buffer::new(&mut font_system, metrics);
         buffer.set_wrap(Wrap::None);
         buffer.set_size(Some(f32::MAX), Some(metrics.line_height * 2.0));
@@ -374,6 +425,7 @@ impl FontRenderer {
             metrics_overrides: options.metrics,
             families: resolved,
             cache: HashMap::new(),
+            advances: HashMap::new(),
             faces: HashMap::new(),
         };
         renderer.cell = renderer.measure_cell();
@@ -415,6 +467,45 @@ impl FontRenderer {
 
     pub fn cell(&self) -> CellSize {
         self.cell
+    }
+
+    /// Shaped advance of `text` in pixels, rounded up like the cell width. The
+    /// chrome font may be proportional, so its labels cannot assume a fixed
+    /// per-character step.
+    pub fn advance(&mut self, text: &str, style: TextStyle) -> usize {
+        if text.is_empty() {
+            return 0;
+        }
+        let key = (text.to_string(), style.bold, style.italic);
+        if let Some(hit) = self.advances.get(&key) {
+            return *hit;
+        }
+        if self.advances.len() >= CACHE_LIMIT {
+            self.advances.clear();
+        }
+        let advance = self.measure_advance(text, style);
+        self.advances.insert(key, advance);
+        advance
+    }
+
+    fn measure_advance(&mut self, text: &str, style: TextStyle) -> usize {
+        let primary = self
+            .families
+            .first()
+            .cloned()
+            .unwrap_or(FamilyOwned::Monospace);
+        let attrs = attrs_for(primary.as_family(), style, self.weight, &self.features);
+        self.buffer
+            .set_size(Some(f32::MAX), Some(self.metrics.line_height * 2.0));
+        self.buffer.set_text(text, &attrs, Shaping::Advanced, None);
+        self.buffer.shape_until_scroll(&mut self.font_system, false);
+        let advance: f32 = self
+            .buffer
+            .layout_runs()
+            .next()
+            .map(|run| run.glyphs.iter().map(|glyph| glyph.w).sum())
+            .unwrap_or(0.0);
+        cell_width(advance)
     }
 
     /// Width of one cell's advance and height of one line, from the font's own
@@ -1174,7 +1265,10 @@ mod tests {
         let expected = installed_default()
             .map(|name| FamilyOwned::Name(name.into()))
             .unwrap_or(FamilyOwned::Monospace);
-        assert_eq!(resolve_families(&system, &[]).first(), Some(&expected));
+        assert_eq!(
+            resolve_families(&system, &[], false).first(),
+            Some(&expected)
+        );
     }
 
     #[test]
@@ -1184,7 +1278,10 @@ mod tests {
         let expected = installed_default()
             .map(|name| FamilyOwned::Name(name.into()))
             .unwrap_or(FamilyOwned::Monospace);
-        assert_eq!(resolve_families(&system, &names).first(), Some(&expected));
+        assert_eq!(
+            resolve_families(&system, &names, false).first(),
+            Some(&expected)
+        );
     }
 
     #[test]
@@ -1214,6 +1311,44 @@ mod tests {
     }
 
     #[test]
+    fn given_a_ui_font_with_no_family_then_a_sans_serif_leads_instead_of_monospace() {
+        let system = FontSystem::new();
+        let resolved = resolve_families(&system, &[], true);
+        assert_eq!(resolved.first(), Some(&FamilyOwned::SansSerif));
+        assert!(resolved.contains(&FamilyOwned::Monospace));
+    }
+
+    #[test]
+    fn given_the_installed_family_list_then_it_includes_more_than_the_monospace_ones() {
+        let all = installed_families();
+        let mono = installed_monospace_families();
+        assert!(all.len() >= mono.len());
+        assert!(
+            mono.iter()
+                .all(|name| all.iter().any(|other| other == name))
+        );
+        let mut sorted = all.clone();
+        sorted.sort_by_key(|name| name.to_lowercase());
+        assert_eq!(all, sorted);
+    }
+
+    #[test]
+    fn given_a_ui_renderer_when_measured_then_advances_follow_the_text() {
+        let mut font = FontRenderer::new(
+            13.0,
+            &[],
+            Options {
+                ui: true,
+                ..Options::default()
+            },
+        );
+        let narrow = font.advance("i", TextStyle::NORMAL);
+        let wide = font.advance("M", TextStyle::NORMAL);
+        assert!(narrow > 0 && wide > 0);
+        assert!(wide >= narrow, "`M` ({wide}) narrower than `i` ({narrow})");
+    }
+
+    #[test]
     fn given_an_installed_family_name_when_resolved_then_that_face_leads_ignoring_case() {
         let system = FontSystem::new();
         let installed = system
@@ -1222,7 +1357,7 @@ mod tests {
             .find_map(|face| face.families.first().map(|(name, _)| name.clone()))
             .expect("the font database is never empty");
         let shouted = vec![installed.to_uppercase()];
-        match resolve_families(&system, &shouted).first() {
+        match resolve_families(&system, &shouted, false).first() {
             Some(FamilyOwned::Name(name)) => assert_eq!(name.as_str(), installed),
             other => panic!("expected {installed}, resolved {other:?}"),
         }
@@ -1242,7 +1377,7 @@ mod tests {
                 break;
             }
         }
-        let resolved = resolve_families(&system, &names);
+        let resolved = resolve_families(&system, &names, false);
         assert!(resolved.len() >= 2);
         match (&resolved[0], &resolved[1]) {
             (FamilyOwned::Name(first), FamilyOwned::Name(second)) => {

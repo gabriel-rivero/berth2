@@ -4,8 +4,9 @@
 //! focus and the attention colours whose meaning the core already defines.
 //! Views read these instead of hard-coding colours.
 
-/// Named palettes, in the order the settings row cycles them.
-pub const THEMES: [&str; 2] = ["berth-dark", "berth-light"];
+/// Palette choices, in the order the settings row cycles them. `system` is
+/// not a palette of its own: it follows the OS light/dark appearance.
+pub const THEMES: [&str; 3] = ["system", "berth-dark", "berth-light"];
 
 /// Packed 0x00RRGGBB.
 #[derive(Clone, Copy, Debug)]
@@ -71,6 +72,22 @@ impl Theme {
             "berth-dark" => Some(Self::default()),
             "berth-light" => Some(Self::light()),
             _ => None,
+        }
+    }
+
+    /// The palette a config name selects. An empty name and `system` follow
+    /// `system_light`; a named palette wins; an unknown name keeps the dark
+    /// default so a typo cannot leave the window unstyled.
+    pub fn resolve(name: &str, system_light: bool) -> Self {
+        match name.trim() {
+            "" | "system" => {
+                if system_light {
+                    Self::light()
+                } else {
+                    Self::default()
+                }
+            }
+            other => Self::named(other).unwrap_or_default(),
         }
     }
 
@@ -181,10 +198,28 @@ mod tests {
     }
 
     #[test]
-    fn given_every_named_theme_then_it_resolves() {
-        for name in THEMES {
+    fn given_every_named_palette_then_it_resolves() {
+        for name in ["berth-dark", "berth-light"] {
             assert!(Theme::named(name).is_some(), "{name} did not resolve");
         }
+        assert!(THEMES.contains(&"system"));
+    }
+
+    #[test]
+    fn given_the_system_choice_then_it_follows_the_appearance() {
+        assert_eq!(
+            Theme::resolve("", true).terminal_bg,
+            Theme::named("berth-light").unwrap().terminal_bg
+        );
+        assert_eq!(
+            Theme::resolve("system", false).terminal_bg,
+            Theme::default().terminal_bg
+        );
+        assert_eq!(
+            Theme::resolve("berth-dark", true).terminal_bg,
+            Theme::default().terminal_bg,
+            "an explicit palette must override the OS"
+        );
     }
 
     #[test]

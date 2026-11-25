@@ -15,6 +15,7 @@ const SOCKET_MODES: [Option<&str>; 3] = [Some("local"), Some("trusted"), Some("o
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Field {
     FontFamily,
+    UiFontFamily,
     FontSize,
     FontScale,
     Theme,
@@ -43,8 +44,10 @@ pub struct Row {
 pub enum Change {
     /// Nothing changed.
     None,
-    /// Font metrics changed; the renderer must be rebuilt.
+    /// Terminal font metrics changed; the renderer must be rebuilt.
     Font,
+    /// Window/chrome font changed; only the chrome renderer must be rebuilt.
+    UiFont,
     /// The palette changed; the window must adopt the new tokens.
     Theme,
     /// Window opacity changed; the platform window must be told.
@@ -67,6 +70,11 @@ pub fn rows(config: &Config, recording: Option<Action>, notice: Option<&str>) ->
             field: Field::FontFamily,
             label: "Font".into(),
             value: font_label(config),
+        },
+        Row {
+            field: Field::UiFontFamily,
+            label: "Window font".into(),
+            value: ui_font_label(config),
         },
         Row {
             field: Field::FontSize,
@@ -223,7 +231,38 @@ fn font_choices(config: &Config) -> Vec<Option<String>> {
 
 /// Position of the configured primary face in the choice list.
 fn font_index(config: &Config, choices: &[Option<String>]) -> i32 {
-    let Some(current) = config.font_family.first() else {
+    index_of(config.font_family.first(), choices)
+}
+
+/// The window font row's value: the configured chrome face, or the system
+/// sans-serif the default resolves to.
+fn ui_font_label(config: &Config) -> String {
+    match config.ui_font_family.first() {
+        Some(name) => name.clone(),
+        None => format!("Default ({})", crate::font::default_ui_family_name()),
+    }
+}
+
+/// The window font row's choices: the default, every installed family (not
+/// only the monospaced ones), then any configured name this system lacks.
+fn ui_font_choices(config: &Config) -> Vec<Option<String>> {
+    let mut choices: Vec<Option<String>> = vec![None];
+    let installed = crate::font::installed_families();
+    choices.extend(installed.iter().cloned().map(Some));
+    for name in &config.ui_font_family {
+        let known = choices
+            .iter()
+            .flatten()
+            .any(|choice| choice.eq_ignore_ascii_case(name));
+        if !known {
+            choices.push(Some(name.clone()));
+        }
+    }
+    choices
+}
+
+fn index_of(current: Option<&String>, choices: &[Option<String>]) -> i32 {
+    let Some(current) = current else {
         return 0;
     };
     choices
@@ -254,6 +293,22 @@ pub fn adjust(config: &mut Config, field: Field, delta: i32) -> Change {
             }
             config.set_font_family(picked);
             Change::Font
+        }
+        Field::UiFontFamily => {
+            let choices = ui_font_choices(config);
+            let index = index_of(config.ui_font_family.first(), &choices);
+            let next = (index + delta).rem_euclid(choices.len() as i32) as usize;
+            let picked = choices[next].clone();
+            let unchanged = match (&picked, config.ui_font_family.first()) {
+                (None, None) => true,
+                (Some(next), Some(current)) => next.eq_ignore_ascii_case(current),
+                _ => false,
+            };
+            if unchanged {
+                return Change::None;
+            }
+            config.set_ui_font_family(picked);
+            Change::UiFont
         }
         Field::FontSize => {
             let size = (config.font_size + delta as f32).clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
@@ -394,9 +449,10 @@ mod tests {
     fn given_the_settings_rows_when_built_then_every_action_has_a_row() {
         let config = Config::default();
         let rows = rows(&config, None, None);
-        assert_eq!(rows.len(), 15 + Action::ALL.len());
+        assert_eq!(rows.len(), 16 + Action::ALL.len());
         assert_eq!(rows[0].label, "Font");
-        assert_eq!(rows[1].label, "Font size");
+        assert_eq!(rows[1].label, "Window font");
+        assert_eq!(rows[2].label, "Font size");
     }
 
     #[test]
@@ -416,6 +472,30 @@ mod tests {
         );
         assert_eq!(adjust(&mut config, Field::FontFamily, -1), Change::Font);
         assert!(config.font_family.is_empty());
+    }
+
+    #[test]
+    fn given_the_window_font_row_when_adjusted_then_it_cycles_installed_faces() {
+        let mut config = Config::default();
+        let choices = ui_font_choices(&config);
+        assert_eq!(choices.first(), Some(&None));
+        assert!(
+            choices.len() > font_choices(&config).len() - 1,
+            "the window font list should not be limited to monospace faces"
+        );
+        if choices.len() < 2 {
+            assert_eq!(adjust(&mut config, Field::UiFontFamily, 1), Change::None);
+            return;
+        }
+        assert_eq!(adjust(&mut config, Field::UiFontFamily, 1), Change::UiFont);
+        assert_eq!(
+            config.ui_font_family.first().map(String::as_str),
+            choices[1].as_deref()
+        );
+        assert!(
+            config.font_family.is_empty(),
+            "the terminal font must not change"
+        );
     }
 
     #[test]
@@ -460,12 +540,14 @@ mod tests {
     fn given_the_theme_when_adjusted_then_it_cycles_through_the_list() {
         let mut config = Config::default();
         assert_eq!(adjust(&mut config, Field::Theme, 1), Change::Theme);
+        assert_eq!(config.theme, "berth-dark");
+        assert_eq!(adjust(&mut config, Field::Theme, 1), Change::Theme);
         assert_eq!(config.theme, "berth-light");
         assert_eq!(adjust(&mut config, Field::Theme, 1), Change::Theme);
-        assert_eq!(config.theme, "berth-dark");
+        assert_eq!(config.theme, "system");
         config.theme = "not-a-theme".into();
         assert_eq!(adjust(&mut config, Field::Theme, 1), Change::Theme);
-        assert_eq!(config.theme, "berth-light");
+        assert_eq!(config.theme, "berth-dark");
     }
 
     #[test]

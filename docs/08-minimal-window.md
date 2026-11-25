@@ -32,8 +32,10 @@ berth-server  ── the same socket/named pipe the CLI and hooks use
   concern; `wezterm` and `ghostty` are accepted by config but not built yet. See
   [docs/config.md](config.md#terminal-engine).
 
-Chrome (sidebar, tab labels) uses the same renderer at a smaller size, matching
-the macOS window's 12pt labels.
+Chrome (sidebar, tab labels, menus, status) uses the same renderer at a smaller
+size with its own `uiFontFamily`, defaulting to the system sans-serif. The
+advances are measured per glyph, so a proportional interface face lays out
+correctly.
 
 ## What works
 
@@ -115,10 +117,11 @@ the macOS window's 12pt labels.
   `surface.bell`, OSC 9;4 reports progress, OSC 52 writes the clipboard, and
   OSC 9/777 create a core notification.
 - A pane closes when its process exits, so `Ctrl+D` removes the tab and the
-  layout reflows; the last workspace exit opens a fresh one. Set
-  `closeExitedPanes` to `false` to keep the final screen with a red "process
-  exited" banner instead (then the exit is reported as `surface.exited` and the
-  tab stays until you close it).
+  layout reflows. When the last pane in the last workspace exits, the window
+  closes and the app saves and quits, matching the macOS shell, instead of
+  leaving an empty frame behind. Set `closeExitedPanes` to `false` to keep the
+  final screen with a red "process exited" banner instead (then the exit is
+  reported as `surface.exited` and the tab stays until you close it).
 - OSC 9/777 notifications reach the desktop through `osascript` on macOS and
   `notify-send` on Linux, in addition to the attention list. Agent rows show
   token counts and cost when the hooks report them.
@@ -170,11 +173,16 @@ the macOS window's 12pt labels.
 - `⌘I` opens the attention list: unacknowledged notifications newest first, with
   the level colour, body and workspace. Enter acknowledges the notification,
   selects its workspace and focuses the surface that raised it.
-- `⌘,` opens settings: font size, display scale, theme, window opacity, compact
-  sidebar, close on exit, socket mode, and all 18 shortcuts. Arrows adjust or cycle a
-  value, Enter toggles or starts recording a chord, Backspace unbinds. Every change
-  applies live and is written to `config.json` with the keys the window does not own
-  preserved.
+- `⌘,` opens settings: terminal font, window font, font size, display scale,
+  theme, window opacity, compact sidebar, close on exit, socket mode, and all 18
+  shortcuts. Arrows adjust or cycle a value, Enter toggles or starts recording a
+  chord, Backspace unbinds. Every change applies live and is written to
+  `config.json` with the keys the window does not own preserved.
+- The painted menu bar (`Berth`, `Terminal`, `View`, `Window`) is a real menu:
+  click a title to open its dropdown, hover or arrow to move, click or Enter to
+  run, Escape to close. Each row shows its current chord and runs the same
+  command the chord table does. It is painted into the frame because winit has
+  no native menu API; on macOS it is not in the system menu bar yet.
 - Long panels scroll to follow the selection. Clicking outside a panel or
   focusing another window closes it.
 
@@ -241,8 +249,10 @@ full audited inventory.
   gets a gutter beside the grid: a green tick per prompt, red when the command above it
   failed, and a dim mark where output started. Click a tick to bring that command to the
   top of the pane, or walk them with the `previousPrompt`/`nextPrompt` chords.
-- **Two palettes.** `theme` picks `berth-dark` or `berth-light`, `opacity` fades the
-  window, and the zoom chords resize the font; ligatures render through shaping runs.
+- **System and fixed palettes.** `theme` follows the OS appearance (`system`,
+  the default) or forces `berth-dark`/`berth-light`, switching live on a
+  system appearance change; `opacity` fades the window, and the zoom chords
+  resize the font; ligatures render through shaping runs.
 - **Copy mode and paste history are in; command blocks are not.** `Cmd+Shift+C` opens a
   vi-style modal selection (`h`/`j`/`k`/`l`, `w`/`b`/`e`, `0`/`$`, `g`/`G`, `Ctrl+D`/`U`,
   counts, `v`, `y`), and `Cmd+Shift+V` picks from the last twelve copies, held in memory

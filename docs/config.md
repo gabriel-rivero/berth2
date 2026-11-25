@@ -66,11 +66,18 @@ when the window moves to a display with a different scale factor.
   An unknown name is skipped. An empty list, or no installed match, uses the
   first installed face from a built-in ligature list (JetBrains Mono, Fira Code,
   MesloLGS NF, Cascadia Code, Hack, Victor Mono, Iosevka and a few others)
-  before the system monospace. Terminal and chrome (tabs, sidebar) use the same
-  list. Settings → **Font** cycles the default and every installed monospace
-  face, applies the choice without a relaunch, and writes it here; the default
-  keeps any fallbacks already in the list. The row names the resolved default,
-  for example `Default (Monaco)` when no ligature face is installed.
+  before the system monospace. Settings → **Font** cycles the default and every
+  installed monospace face, applies the choice without a relaunch, and writes it
+  here; the default keeps any fallbacks already in the list. The row names the
+  resolved default, for example `Default (Monaco)` when no ligature face is
+  installed.
+- `uiFontFamily` takes the same shape and sets the **window** font: tabs, the
+  sidebar, the menu bar and the status strip. Terminal cells keep `fontFamily`.
+  An empty list uses the system sans-serif and skips the monospace ligature
+  list, so the default is the platform interface face. Settings → **Window
+  font** cycles the default and every installed family (not just monospaced
+  ones) and applies the choice without a relaunch. Changing it never resets the
+  terminal zoom.
 - `fontWeight` is the normal-text weight, a number `100…900` or a name such as
   `"medium"` or `"semi-bold"`. Bold cells use at least 700.
 - `lineHeight` is the line height as a multiple of the font size, clamped to
@@ -90,9 +97,11 @@ style are shaped as one string, so a face with `calt`/`liga` draws them.
 
 ## Appearance
 
-- `theme` selects the palette: `berth-dark` (the default) or `berth-light`. An
-  unknown name keeps the dark palette. The settings panel cycles the list and
-  writes the choice back.
+- `theme` selects the palette. `system` (the default when the key is absent)
+  follows the OS light/dark appearance and switches live when the system setting
+  changes; `berth-dark` and `berth-light` force a palette regardless of the OS.
+  An unknown name keeps the dark palette. The settings panel cycles `system`,
+  `berth-dark` and `berth-light` and writes the choice back.
 - `opacity` is the window opacity, `0.3…1.0`. One is opaque. The portable window
   applies it on macOS; Linux and Windows keep the window opaque because winit does
   not expose it there. The AppKit shell applies `opacity` and `backgroundBlur` only

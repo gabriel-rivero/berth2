@@ -376,6 +376,9 @@ pub struct Config {
     /// Preferred terminal faces, first installed one wins. Empty keeps the
     /// system monospace.
     pub font_family: Vec<String>,
+    /// Preferred window/chrome faces, first installed one wins. Empty keeps
+    /// the system sans-serif.
+    pub ui_font_family: Vec<String>,
     /// Base weight for normal text, 100..=900. Bold cells use at least 700.
     pub font_weight: u16,
     /// Line height as a multiple of the font size.
@@ -438,6 +441,7 @@ impl Default for Config {
             font_size: DEFAULT_FONT_SIZE,
             font_scale: 0.0,
             font_family: Vec::new(),
+            ui_font_family: Vec::new(),
             font_weight: 400,
             line_height: 1.35,
             font_features: Vec::new(),
@@ -604,6 +608,7 @@ struct FileConfig {
     font_size: Option<f32>,
     font_scale: Option<f32>,
     font_family: Option<FamilyNames>,
+    ui_font_family: Option<FamilyNames>,
     font_weight: Option<WeightValue>,
     line_height: Option<f32>,
     font_features: Option<Vec<String>>,
@@ -712,6 +717,10 @@ impl Config {
                 .font_family
                 .map(FamilyNames::into_names)
                 .unwrap_or_default(),
+            ui_font_family: file
+                .ui_font_family
+                .map(FamilyNames::into_names)
+                .unwrap_or_default(),
             font_weight: file
                 .font_weight
                 .map(WeightValue::into_weight)
@@ -812,9 +821,38 @@ impl Config {
         }
     }
 
-    /// The palette this config selects. An unknown name keeps the dark theme.
+    /// Pick the primary face for the window chrome. `None` returns to the
+    /// system sans-serif; a name moves to the front and keeps the fallbacks.
+    pub fn set_ui_font_family(&mut self, primary: Option<String>) {
+        match primary {
+            None => self.ui_font_family.clear(),
+            Some(name) => {
+                self.ui_font_family
+                    .retain(|existing| !existing.eq_ignore_ascii_case(&name));
+                self.ui_font_family.insert(0, name);
+            }
+        }
+    }
+
+    /// The palette this config selects with the OS appearance unknown. An
+    /// unknown name keeps the dark theme and an unset one follows the system.
     pub fn theme(&self) -> crate::theme::Theme {
-        crate::theme::Theme::named(&self.theme).unwrap_or_default()
+        self.theme_with(false)
+    }
+
+    /// The palette this config selects. An empty name and `system` follow the
+    /// OS appearance; a named palette overrides it; an unknown name keeps the
+    /// dark theme.
+    pub fn theme_with(&self, system_light: bool) -> crate::theme::Theme {
+        crate::theme::Theme::resolve(&self.theme, system_light)
+    }
+
+    /// The renderer options for the window chrome. Same weight and metrics as
+    /// the terminal, but resolved against the interface font.
+    pub fn ui_font_options(&self) -> crate::font::Options {
+        let mut options = self.font_options();
+        options.ui = true;
+        options
     }
 
     /// Pixel size for the terminal font on this display. Mirrors the macOS
@@ -854,6 +892,7 @@ impl Config {
                     )
                 })
                 .collect(),
+            ui: false,
         }
     }
 
@@ -899,6 +938,14 @@ impl Config {
             object.remove("fontFamily");
         } else {
             object.insert("fontFamily".into(), serde_json::json!(self.font_family));
+        }
+        if self.ui_font_family.is_empty() {
+            object.remove("uiFontFamily");
+        } else {
+            object.insert(
+                "uiFontFamily".into(),
+                serde_json::json!(self.ui_font_family),
+            );
         }
         object.insert(
             "compactSidebar".into(),
@@ -1442,6 +1489,54 @@ mod tests {
         assert_eq!(
             config.font_family,
             vec!["VictorMono NFM".to_string(), "Monaco".to_string()]
+        );
+    }
+
+    #[test]
+    fn given_a_ui_font_family_when_saved_then_it_round_trips_and_clears() {
+        let path = temp_path("uifamily");
+        let mut config = Config {
+            ui_font_family: vec!["Avenir Next".to_string()],
+            ..Config::default()
+        };
+        config.save_to(&path).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved["uiFontFamily"][0], "Avenir Next");
+        assert_eq!(
+            Config::parse(&std::fs::read_to_string(&path).unwrap())
+                .unwrap()
+                .ui_font_family,
+            vec!["Avenir Next".to_string()]
+        );
+        config.set_ui_font_family(None);
+        config.save_to(&path).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(saved.get("uiFontFamily").is_none());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn given_an_unset_or_system_theme_then_it_follows_the_os_appearance() {
+        let dark = Config::parse("{}").unwrap();
+        assert_eq!(
+            dark.theme_with(false).terminal_bg,
+            crate::theme::Theme::default().terminal_bg
+        );
+        assert_eq!(
+            dark.theme_with(true).terminal_bg,
+            crate::theme::Theme::resolve("berth-light", false).terminal_bg
+        );
+        let system = Config::parse(r#"{"theme": "system"}"#).unwrap();
+        assert_eq!(
+            system.theme_with(true).terminal_bg,
+            dark.theme_with(true).terminal_bg
+        );
+        let forced = Config::parse(r#"{"theme": "berth-dark"}"#).unwrap();
+        assert_eq!(
+            forced.theme_with(true).terminal_bg,
+            crate::theme::Theme::default().terminal_bg
         );
     }
 
