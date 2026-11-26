@@ -1,9 +1,10 @@
 # Portable window (Linux, Windows, macOS)
 
-Status: fourth slice. One window with real text, tabs, dividers, a sidebar with
-groups and agent rows, selection, clipboard and scrollback. It is the shell the
-portable half of the project is built on, and the place where feature parity
-with the macOS app is tracked.
+Status: through 0.21.1. One window per core window (several can be open), with real text,
+tabs, dividers, a sidebar with groups and agent rows, selection, clipboard, scrollback,
+shell integration, copy mode, paste history, a quick terminal, wallpaper and native menus
+on macOS. It is the shell the portable half of the project is built on, and the place where
+feature parity with the macOS app is tracked.
 
 ```
 berth-core  ──  AppState + dispatch (panes, tabs, workspaces, agents)
@@ -105,6 +106,11 @@ correctly.
   links, dividers, the sidebar edge and terminal text.
 - A thin scrollbar appears in a pane while its view is scrolled, so the position
   in the scrollback is visible.
+- `wallpaper` draws a picture behind the terminal — `wallpaperFollowDesktop` uses the
+  desktop's own on macOS — blended *over* the theme background at `wallpaperOpacity`,
+  so the palette stays the dominant term and text keeps its contrast. One image covers
+  the window, so a split shows a continuous picture rather than a copy per pane, and
+  chrome stays solid. Settings → **Wallpaper image…** opens the platform's own picker.
 - iTerm2 inline images (`OSC 1337 File=...`) render at the cursor cell, scaled to
   their requested cell or pixel size, clipped to the pane, and scroll with the
   text. `graphics` turns decoding off; each surface keeps at most eight images
@@ -167,39 +173,44 @@ correctly.
 
 **Panels**
 
-- `⌘⇧P` opens the command palette: a fuzzy-matched list of all 18 configurable
+- `⌘⇧P` opens the command palette: a fuzzy-matched list of all 34 configurable
   actions with their current chord, arrow keys to move, Enter to run, Escape to
   close. `Ctrl+Shift+P` outside macOS.
 - `⌘I` opens the attention list: unacknowledged notifications newest first, with
   the level colour, body and workspace. Enter acknowledges the notification,
   selects its workspace and focuses the surface that raised it.
 - `⌘,` opens settings: terminal font, window font, font size, display scale,
-  theme, window opacity, compact sidebar, close on exit, socket mode, and all 18
-  shortcuts. Arrows adjust or cycle a value, Enter toggles or starts recording a
-  chord, Backspace unbinds. Every change applies live and is written to
-  `config.json` with the keys the window does not own preserved.
-- The menu bar has the same four menus (`Berth`, `Terminal`, `View`, `Window`) on
-  every platform, and every row runs the same command the chord table does. On
-  macOS they are real `NSMenu`s in the system menu bar, appended to the
-  application menu winit installs; the app menu's Quit is routed through Berth so
-  it saves the session before exiting, and the window reserves no row for a
-  painted bar. On Linux and Windows the bar is painted into the frame because
-  winit exposes no menu API there: click a title, hover or arrow to move, click
-  or Enter to run, Escape to close, with each row showing its chord. The macOS
-  items do not show key equivalents yet; the chords still work through the
-  window.
+  theme, window opacity, wallpaper source and strength, bell, shell, VT engine,
+  compact sidebar, close on exit, restore launch flags, Claude bypass, copy on
+  select, hook reinstall, socket mode, and all 34 shortcuts. Arrows adjust or
+  cycle a value, Enter toggles or starts recording a chord, Backspace unbinds.
+  Every change applies live and is written to `config.json` with the keys the
+  window does not own preserved.
+- The menu bar has `Berth`, `File`, `Edit`, `Terminal`, `View`, `Window` and
+  `Help` on every platform, and every row runs the same command the chord table
+  does. On macOS they are real `NSMenu`s in the system menu bar, appended to the
+  application menu winit installs, and each row carries its chord as an AppKit
+  key equivalent so the system draws the shortcut beside the label. The app
+  menu's Quit is routed through Berth so it saves the session before exiting, and
+  the window reserves no row for a painted bar. On Linux and Windows the bar is
+  painted into the frame because winit exposes no menu API there: click a title,
+  hover or arrow to move, click or Enter to run, Escape to close, with each row
+  showing its chord.
 - Long panels scroll to follow the selection. Clicking outside a panel or
   focusing another window closes it.
 
 **Window actions**
 
-Defaults come from the macOS table on macOS and from a Ctrl+Shift table on
-Linux and Windows (see [docs/config.md](config.md)); every entry can be
-rebound in `config.json`:
+All 34 entries can be rebound in `config.json`. Defaults come from the macOS table
+on macOS and from a Ctrl+Shift table on Linux and Windows (see
+[docs/config.md](config.md)):
 
-split right/down, new tab, close tab, next/previous tab, next/previous pane,
-new workspace, workspace 1–9, jump to attention, toggle sidebar, copy, paste,
-scroll top/bottom. `Super+1…9` always selects a workspace.
+split right/down, new tab, close tab, next/previous tab, next/previous pane, focus
+pane left/right/up/down, new workspace, new window, next window, zoom pane, broadcast
+input, duplicate tab, restart tab, filter sidebar, palette, jump to attention,
+attention list, toggle sidebar, settings, search, previous/next prompt, copy mode,
+paste history, quick terminal, and zoom in/out/reset. `Super+1…9` always selects a
+workspace, and `Super+C`/`Super+V` copy and paste.
 
 ## Run it
 
@@ -247,7 +258,8 @@ full audited inventory.
 
 - **Multiple windows and pane zoom are in.** `window.create/list/close/select`,
   per-window sidebar selection, persisted geometry and a maximised pane all come from the
-  core, so both shells share them. Tab tear-off and broadcast input land on the same model.
+  core, so both shells share them. Tab tear-off, broadcast input and geometric focus run on
+  the same model; `quick` windows are excluded from the session file.
 - **The protocol floor is otherwise complete.** Synchronized output (DECSET 2026), the
   Kitty keyboard protocol, styled text, OSC 8 hyperlinks, cursor shapes, focus reporting,
   OSC 52 read and OSC 133/633 prompt marks are supported. A shell that emits prompt marks
@@ -267,13 +279,14 @@ full audited inventory.
 - **Detection is process-name only**, and a Windows notification is not raised.
 - **Linux/X11 is the only scripted path.** Windows and Wayland are compile coverage
   (Wayland now has a smoke); macOS runs the same code path and is the development host.
-- **Single-instance handoff is partial.** A second launch connects, selects an existing
-  window and exits, so it raises the running app instead of opening a second one.
+- **Single-instance handoff is absent.** A second launch finds the live endpoint, logs
+  `endpoint busy` and exits with advice to close the other instance or pass `--socket`;
+  it does not raise the running window.
 - **Window geometry is persisted** as a protocol `Window.bounds` value and restored on
   launch.
 
 ## Next
 
-Owned by [docs/04-roadmap.md](04-roadmap.md): 0.15 is the protocol floor above, 0.16 the
-window model, 0.17 shell integration and recall, 0.18 durability. Platform packaging moved
-to 1.0.
+Owned by [docs/04-roadmap.md](04-roadmap.md): 0.15 was the protocol floor, 0.16 the
+window model, 0.17 shell integration and recall, and 0.18 durability and agent depth.
+Platform packaging moved to 1.0.

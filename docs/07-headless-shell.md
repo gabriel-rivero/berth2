@@ -1,8 +1,8 @@
 # Headless shell (Linux/Windows spike)
 
-Status: first slice landed. Real PTYs, a VT screen and the full protocol run
-without a window, and the same host backs the portable window — see
-[docs/08-minimal-window.md](08-minimal-window.md).
+Status: still the first slice, but no longer a spike in practice. Real PTYs, a VT screen
+and the full protocol run without a window, and the same host backs the portable window —
+see [docs/08-minimal-window.md](08-minimal-window.md).
 
 This is the "Linux shell spike" from [docs/04-roadmap.md](04-roadmap.md), split
 so the expensive, unproven part — a portable terminal host behind `SurfaceOps`
@@ -82,26 +82,19 @@ session, and `--no-workspace` to boot empty.
 - It runs in CI and on a headless box, so the protocol criterion is checked on
   every commit. A GTK window is a manual check.
 - A future GUI shell can reuse `PtyHost` as-is and add a view. The renderer
-  decision (GTK4 + `libghostty-vt`, or a Rust window + `vt100` grid) does not
-  block the engine.
+  decision does not block the engine; it is settled in the next section.
 
 ## Stack decision for the renderer
 
-The roadmap target remains **GTK4 + libghostty-vt** with a minimal renderer. It
-was not built in this slice because the development box has no GTK4 development
-headers, no `libghostty-vt`, and no display; adding an unbuildable dependency
-would have broken `cargo test --workspace`.
+Settled: **winit + softbuffer + cosmic-text** over the `vt100` grid (or
+`alacritty_terminal`), with a side-channel scanner for graphics. That is what
+`berth-gui` ships; see [docs/08-minimal-window.md](08-minimal-window.md). There is no
+planned move to GTK4 + `libghostty-vt`.
 
 `vt100` is intentionally the spike's screen model: pure Rust, no C, and good
-enough for readback and tests. A GUI can either:
-
-1. render the `vt100` grid (fastest path to pixels, but a second terminal
-   implementation next to Ghostty), or
-2. keep `PtyHost` for process/lifecycle and feed the PTY stream to
-   `libghostty-vt` for the renderer (matches the macOS engine, more bootstrap).
-
-Do not decide from the spike alone; build the smallest window that can show a
-prompt and type into it, then compare input latency and packaging cost.
+enough for readback and tests. Keeping `PtyHost` for process/lifecycle and feeding the
+PTY stream to `libghostty-vt` would match the macOS engine, but it needs a Zig-built
+`libghostty-vt`, and 1.0's flat API has no renderer.
 
 ## Known gaps
 
@@ -115,8 +108,9 @@ across the GUI, headless shell, core/server/CLI and macOS app is
 - **Terminal events are polled, not pushed.** `screen_meta` carries OSC title,
   cwd, bell count, progress, clipboard and notification requests; a shell reads
   it after processing output.
-- **No mouse reporting or IME.** The host encodes keys only; a GUI must send
-  mouse escapes itself.
+- **No mouse reporting or IME in the host.** The host encodes keys only; `berth-gui`
+  sends mouse escapes and drives the platform IME itself (composition, commit and the
+  candidate window), so a different shell must do the same.
 - **Windows/macOS PTY paths are compile-tested and CI-tested, not manually
   smoke-tested.** ConPTY output and key encoding deserve a real Windows run.
 - `berth-gui` saves on SIGTERM and Ctrl+C and clears the journal, but the
@@ -135,6 +129,7 @@ across the GUI, headless shell, core/server/CLI and macOS app is
    dragging remains.
 4. ~~Add divider dragging, scrollback, selection and clipboard.~~ Landed in
    `berth-gui`, along with OSC events and the exit banner.
-5. Decide `vt100` vs `libghostty-vt` from measured input latency and packaging.
+5. ~~Decide `vt100` vs `libghostty-vt` from measured input latency and packaging.~~
+   Settled: `vt100`/`alacritty_terminal` in `berth-gui`.
 6. Add the child-exit callback to `SurfaceOps`, then wire agent exit states
    without polling.

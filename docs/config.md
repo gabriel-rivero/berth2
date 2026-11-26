@@ -25,11 +25,12 @@ socket mode is read at launch.
   "fontSize": 14,
   "fontScale": 0,
   "fontFamily": ["MesloLGS NF", "JetBrains Mono"],
+  "uiFontFamily": [],
   "fontWeight": 400,
   "lineHeight": 1.35,
   "fontFeatures": ["calt", "liga"],
   "fontMetrics": {"MesloLGS NF": {"width": 9, "height": 20}},
-  "theme": "berth-dark",
+  "theme": "system",
   "opacity": 1.0,
   "wallpaperFollowDesktop": false,
   "wallpaper": "/Users/me/Pictures/peaks.jpg",
@@ -43,6 +44,10 @@ socket mode is read at launch.
   "copyOnSelect": true,
   "scrollbackLines": 4000,
   "graphics": true,
+  "terminalBackend": "builtin",
+  "quickHotkey": "cmd+shift+`",
+  "quickPlacement": "top",
+  "quickHeight": 0.45,
   "resumeArgs": {"codex": ["--sandbox", "read-only"]},
   "muteProviders": [],
   "socket": "local"
@@ -157,7 +162,15 @@ capture, so the window ships a Ctrl-based default table instead:
 | `previousTab` | `cmd+shift+[` | `ctrl+shift+[` |
 | `nextPane` | `cmd+]` | `ctrl+alt+]` |
 | `previousPane` | `cmd+[` | `ctrl+alt+[` |
+| `focusLeft` / `focusRight` / `focusUp` / `focusDown` | `cmd+opt+left` / `right` / `up` / `down` | `ctrl+alt+left` / `right` / `up` / `down` |
 | `newWorkspace` | `cmd+n` | `ctrl+shift+n` |
+| `newWindow` | `cmd+shift+n` | `ctrl+alt+n` |
+| `nextWindow` | ``cmd+` `` | ``ctrl+alt+` `` |
+| `togglePaneZoom` | `cmd+shift+enter` | `ctrl+shift+enter` |
+| `toggleBroadcast` | `cmd+shift+b` | `ctrl+shift+b` |
+| `duplicateTab` | `cmd+shift+k` | `ctrl+shift+k` |
+| `restartTab` | `cmd+shift+r` | `ctrl+shift+r` |
+| `sidebarFilter` | `cmd+opt+f` | `ctrl+alt+f` |
 | `palette` | `cmd+shift+p` | `ctrl+shift+p` |
 | `jumpAttention` | `cmd+shift+u` | `ctrl+shift+u` |
 | `showAttention` | `cmd+i` | `ctrl+shift+i` |
@@ -168,7 +181,8 @@ capture, so the window ships a Ctrl-based default table instead:
 | `nextPrompt` | `cmd+shift+down` | `ctrl+shift+down` |
 | `copyMode` | `cmd+shift+c` | `ctrl+shift+space` |
 | `pasteHistory` | `cmd+shift+v` | `ctrl+alt+v` |
-| `quickTerminal` | `cmd+shift+backquote` | `ctrl+shift+backquote` |
+| `quickTerminal` | ``cmd+shift+` `` | ``ctrl+shift+` `` |
+| `zoomIn` / `zoomOut` / `zoomReset` | `cmd+=` / `cmd+-` / `cmd+0` | `ctrl+=` / `ctrl+-` / `ctrl+0` |
 
 Copy mode is vi-style keyboard selection over the pane's scrollback. The chord opens
 it on the focused pane with the cursor on the newest line; press it again (or `q`,
@@ -428,7 +442,7 @@ settings row is labelled **VT engine (relaunch)**.
 ## Scrollback
 
 - `scrollbackLines` is how many rows of history each surface keeps, with a
-  default of `10000` and a ceiling of `100000`. It is read at launch and applies
+  default of `4000` and a ceiling of `100000`. It is read at launch and applies
   to every surface spawned after it, including restored ones.
 - The scrollback lives in memory in the terminal parser, per surface. It is not
   written to disk and is not part of the session snapshot, so a relaunch starts

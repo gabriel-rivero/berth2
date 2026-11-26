@@ -312,23 +312,24 @@ These are the gaps that remain on the macOS path; the ordering and ownership are
 [docs/04-roadmap.md](04-roadmap.md), and the consolidated inventory is
 [docs/09-known-gaps.md](09-known-gaps.md). Closed since this list was written: token-file
 auth with a peer-uid check, the group management UI (portable window), the Instruments
-trace against the §9 budgets, and the portable window's search, rename/reorder, graphics
-and accessibility tree.
+trace against the §9 budgets, the portable window's search, rename/reorder, graphics
+and accessibility tree, multiple windows, pane zoom, and geometric arrow-key focus in
+both shells.
 
 1. **Headless app-test mode.** The acceptance script needs the GUI app running;
    there is no windowless app loop for CI.
 2. **Journal semantics.** `journal.ndjson` stores whole snapshots (newest wins)
    rather than replayable structural events, because events cannot recreate
    PTYs. A crash loses at most the last 500 ms debounce window.
-3. **Geometric focus.** ⌘] / ⌘[ move between panes in tree order; rectangle-based
-   arrow navigation is not implemented.
-4. **Agent mute and multi-agent rows.** Banners are suppressed for the focused
+3. **Agent mute and multi-agent rows.** Banners are suppressed for the focused
    workspace, and `muteProviders` silences providers, but there is no Settings row
    and a workspace row shows one primary agent when several share it.
-5. **AppKit parity.** Search, tab rename/reorder, the group UI and geometric focus
-   exist only in the portable window.
-6. **Multiple windows and pane zoom.** One window, no zoom, no tab tear-off, in
-   both shells.
+4. **AppKit parity.** Search with toggles across panes, prompt gutter, paste history,
+   profiles/commands and layout pickers, output rules, session logging, scrollback
+   restore, file drops, an OS-wide quick hotkey, tab tear-off and overflow exist only in
+   the portable window; the Swift shell's find bar is Ghostty's, focused-surface only.
+5. **A second launch does not raise the first window.** `berth-gui` exits with
+   `endpoint busy` and points at `--socket`; there is no handoff.
 
 Done since the scaffold: key routing, IME and dead keys, mouse (wheel
 scrollback, drag selection, terminal mouse reporting, right/middle buttons),

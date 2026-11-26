@@ -2,7 +2,15 @@
 
 A native macOS terminal workspace for running coding agents side by side — built on Ghostty's renderer, with a typed agent lifecycle and a push-based protocol.
 
-Status: 0.16.0. 0.16 adds a selectable VT engine (`terminalBackend`: the builtin
+Status: 0.21.1. 0.17–0.21 finish the portable window as a daily terminal: OSC 133/633
+prompt marks with a gutter, jump-to-prompt and measured command timing; search across every
+pane with regex and whole-word toggles; vi-style copy mode; a paste-history picker; an
+OS-wide quick terminal; launch profiles, custom commands, named layouts and per-window
+palette recency; output rules and per-pane session logs; opt-in scrollback restore; file
+drops quoted per shell; a window font, `theme: system` following the OS appearance, and a
+wallpaper composited behind the terminal; working menus with their chords shown beside each
+label, real `NSMenu`s on macOS; and command duration plus recent-choice ranking in 0.21.1.
+0.16 adds a selectable VT engine (`terminalBackend`: the builtin
 `vt100` grid or Alacritty) and the Command Code (`cmd`) agent provider. The terminal floor landed across 0.15: synchronized output, the Kitty
 keyboard protocol, styled text and OSC 8 hyperlinks, cursor shapes and focus reporting,
 font weights and per-face metrics with ligatures and blink, a light/dark theme list,
@@ -19,7 +27,7 @@ make fetch-engine # macOS, Command Line Tools only: download the CI-built Ghostt
 make run          # macOS: bundle + launch
 ```
 
-The Rust half — `berth-core`, `berth-transport`, `berth-server`, `berth-headless`, `berth-gui` and the `berth` CLI — builds and tests on Linux, macOS and Windows, all at 0.16.0. `berth-headless` is the portable PTY/protocol shell; `berth-gui` is the visible window (winit + softbuffer + cosmic-text, no GPU): a config-selectable VT engine (`terminalBackend`: `vt100` builtin or Alacritty), real system fonts with Unicode and emoji, scrollback, selection, clipboard, OSC title/cwd/bell/progress, draggable dividers, per-pane tabs and a workspace sidebar with groups, agent rows and progress, plus
+The Rust half — `berth-core`, `berth-transport`, `berth-server`, `berth-headless`, `berth-gui` and the `berth` CLI — builds and tests on Linux, macOS and Windows, all at 0.21.1. `berth-headless` is the portable PTY/protocol shell; `berth-gui` is the visible window (winit + softbuffer + cosmic-text, no GPU): a config-selectable VT engine (`terminalBackend`: `vt100` builtin or Alacritty), real system fonts with Unicode and emoji, scrollback, selection, clipboard, OSC title/cwd/bell/progress, draggable dividers, per-pane tabs and a workspace sidebar with groups, agent rows and progress, plus
 mouse reporting, links, the command palette, attention list and settings panel.
 See [docs/07-headless-shell.md](docs/07-headless-shell.md) and [docs/08-minimal-window.md](docs/08-minimal-window.md). Feature parity with the Swift/AppKit shell is tracked in [docs/09-known-gaps.md](docs/09-known-gaps.md); the Swift shell remains the macOS default, and both shells speak the same protocol.
 
@@ -54,7 +62,7 @@ app/            Swift 6 + AppKit shell, hosts GhosttyKit (Package.swift + Source
 core/           cargo workspace: berth-core (portable domain) · berth-transport (sockets/pipes) · berth-server (NDJSON server) · berth-headless (PTY/VT shell) · berth-gui (portable window) · berth-cli (`berth`)
 vendor/ghostty  git submodule, pinned to v1.4.0
 scripts/        bootstrap.sh (engine) · fetch-engine.sh (CI-built engine) · bundle.sh (.app)
-docs/           00 teardown · 01 vision · 02 architecture · 03 protocol · 04 roadmap · 05 build · 07 headless shell · 08 minimal window · 09 known gaps
+docs/           00 teardown · 01 vision · 02 architecture · 03 protocol · 04 roadmap · 05 build · 07 headless shell · 08 minimal window · 09 known gaps · 10 graphics · 11 competitive gaps · config
 ```
 
 
@@ -68,4 +76,5 @@ docs/           00 teardown · 01 vision · 02 architecture · 03 protocol · 04
 
 ## Non-goals for v1
 
-Browser panes, SSH, iOS, cloud VMs, teams, plugins, TUI, Windows/Linux builds.
+Browser panes, SSH, iOS, cloud VMs, teams, plugins, TUI. Windows and Linux builds are no
+longer a non-goal: the portable window is the third shell and ships archives for both.

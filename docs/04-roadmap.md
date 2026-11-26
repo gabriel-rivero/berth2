@@ -2,10 +2,11 @@
 
 Schedule assumes one developer, evenings + weekends, on an Apple Silicon Mac. Dates are *ordering*, not promises. Each milestone ends with a demoable app; no milestone may leave `main` unable to run a terminal.
 
-M0–M4 are closed at **0.14.1**. What is left is not architecture: it is the terminal
-floor, the window model, shell integration, durability and distribution. The evidence
-for every item below, including what competitors ship and what the code actually does,
-is [docs/11-competitive-gaps.md](11-competitive-gaps.md).
+M0–M4 are closed at **0.14.1**, and the pull-forward milestones have shipped since: 0.15
+(the terminal floor), 0.16 (the window model), and 0.17 (shell integration and recall,
+finished by 0.21.1). What is left is durability and agent depth (0.18) and distribution
+(1.0). The evidence for every item below, including what competitors ship and what the
+code actually does, is [docs/11-competitive-gaps.md](11-competitive-gaps.md).
 
 ## Shipped
 
@@ -432,7 +433,7 @@ they are the 1.0 AppKit parity work, recorded here so the gap is visible in one 
 | Paste history | `pasteHistory` picker over the last twelve clipboards | Not read; `Cmd+Shift+V` pastes through Ghostty |
 | Profiles and commands | `profiles`/`commands` indexed in the palette and openable | Pushed to the core with `launch.configure`, but there is no menu or picker to open one |
 | Named layouts | `layout.save`/`layout.open` from the palette and CLI | No menu entry or picker |
-| Palette | Indexes actions, launches, layouts and the live session, ranked by recency | Fixed list of 18 actions; no launches, layouts or session rows, and no recency |
+| Palette | Indexes actions, launches, layouts and the live session, ranked by recency | Fixed list of 29 actions; no launches, layouts or session rows, and no recency |
 | Output rules | `outputRules` tints matching rows | Not read |
 | Session logging | `sessionLog` appends each pane to `sessions/<id>.log` | Not read |
 | Scrollback restore | `scrollbackRestore` replays the last screen on relaunch | Not read; Ghostty owns the surface |

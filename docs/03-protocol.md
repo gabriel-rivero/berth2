@@ -94,8 +94,9 @@ Event:
 ### launch and layout
 | method | params | result |
 | --- | --- | --- |
-| `launch.list` | `{}` | `{profiles:[{name,label,argv,cwd,has_command}], commands:[…]}` |
-| `launch.open` | `{name, kind?: "tab"\|"workspace", pane_id?, cwd?, focus?}` | `{surface_id}` or `{workspace_id}` — resolves a configured profile; the shell pushes `profiles`/`commands` into the core from `config.json` |
+| `launch.configure` | `{profiles:[Launch], commands:[Launch]}` | `{profiles:N, commands:M}` — the shell pushes its `config.json` launches in; names are validated |
+| `launch.list` | `{}` | `{profiles:[{name,label,argv,cwd,has_command}], commands:[…]}` — ordered by the core's recent choices, newest first |
+| `launch.open` | `{name, kind?: "tab"\|"workspace", pane_id?, cwd?, focus?}` | `{surface_id}` or `{workspace_id}` — resolves a configured profile; the shell pushes `profiles`/`commands` into the core from `config.json` and the core remembers which was opened last |
 | `layout.save` | `{name, workspace_id?}` | `{name}` — captures the workspace's tree, each pane's cwd and command |
 | `layout.list` | `{}` | `{layouts:[name]}` |
 | `layout.open` | `{name}` | `{workspace_id}` — restores the tree with fresh pane ids |
@@ -317,8 +318,10 @@ Events are derived from Ghostty actions where possible: `SET_TITLE`, `PWD`, `PRO
 4. macOS notification, deduped per agent per 60 s, suppressed when the tab is focused.
 5. `⌘⇧U` jumps to the newest unacked attention item; repeat to cycle through them.
 
-No sound in v1. Per-provider mute is not implemented; macOS banners are
-suppressed for the workspace currently being viewed.
+No notification sound in v1. Per-provider mute is `muteProviders` (or the `agent.mute`
+method with a provider list): the sidebar row, ring and attention list still update, only
+the desktop banner is skipped, and macOS banners are also suppressed for the workspace
+currently being viewed.
 
 ## 7. Integration paths
 

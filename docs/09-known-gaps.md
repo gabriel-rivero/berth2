@@ -1,10 +1,12 @@
 # Known gaps and missing behavior
 
-Last audited: 2026-11-24, code at the 0.16.0 release; 0.15 items are marked as they land.
-The audit covers real text, scrollback,
-selection with auto-scroll, clipboard, mouse reporting, IME, links, OSC events,
-divider and sidebar dragging, the palette, attention and settings panels, agent
-detection, autosave, journal, accessibility, logs and per-platform archives. This is the
+Last audited: 2026-11-26, code at the 0.21.1 release. The audit covers real text,
+scrollback, selection with auto-scroll, clipboard, mouse reporting, IME, links, OSC events,
+prompt marks and command timing, copy mode, paste history, search across panes, output
+rules, session logging, scrollback restore, file drops, quality-of-life window work
+(wallpaper, window font, system theme, menus), divider and sidebar dragging, the palette,
+attention and settings panels, agent detection, autosave, journal, accessibility, logs and
+per-platform archives. This is the
 honest inventory of what is **not** in the tree. It separates missing UI, missing
 platform work, and deliberate non-goals so the three do not get confused. The
 competitive view, and which milestone owns each item, is
@@ -24,18 +26,21 @@ app itself has the gaps listed in
   keyboard protocol, styled text, OSC 8 hyperlinks, cursor shapes, focus in/out, OSC 52
   read and OSC 133/633 prompt marks are in. The AppKit shell inherits the floor from
   Ghostty. Prompt marks are a gutter, jump-to-prompt and a per-command timing shown in the
-  status line: there are no collapsible command blocks, the duration is only what the
-  shell reports on OSC 133 `D` (never measured locally), and a pane spends gutter columns
-  only once its shell emits a mark.
+  status line: there are no collapsible command blocks, and a pane spends gutter columns
+  only once its shell emits a mark. The reader times the gap between the `C` and `D` marks
+  itself because no documented dialect puts a duration on `D`; a `D` that carries one is
+  honoured as milliseconds.
 - **Font options, ligatures and zoom.** `fontFamily` picks the face at `fontSize` ×
-  `fontScale`; `fontWeight`, `lineHeight`, `fontFeatures` and per-face `fontMetrics`
-  tune it. Adjacent cells with the same style are shaped as one run, so ligatures
-  render, and the default prefers an installed ligature face. Settings → **Font**
-  cycles the installed monospace faces. `Cmd/Ctrl + =`, `-` and `0` zoom.
-- **Two palettes.** `theme` selects `berth-dark` or `berth-light`, and `opacity` fades
-  the window on macOS. The terminal's 16-colour ANSI table is still fixed, and the
-  portable window cannot blur what is behind it: its software renderer writes opaque
-  pixels, so `backgroundBlur` applies only to the AppKit shell.
+  `fontScale`; `uiFontFamily` sets the chrome face; `fontWeight`, `lineHeight`,
+  `fontFeatures` and per-face `fontMetrics` tune it. Adjacent cells with the same style are
+  shaped as one run, so ligatures render, and the default prefers an installed ligature
+  face. Settings → **Font** cycles the installed monospace faces, and **Window font** cycles
+  every installed family. `Cmd/Ctrl + =`, `-` and `0` zoom.
+- **Two palettes, or the system's.** `theme` follows the OS light/dark appearance
+  (`system`, the default) or forces `berth-dark`/`berth-light`, switching live on a system
+  appearance change; `opacity` fades the window on macOS. The terminal's 16-colour ANSI
+  table is still fixed, and the portable window cannot blur what is behind it: its software
+  renderer writes opaque pixels, so `backgroundBlur` applies only to the AppKit shell.
 - **Wallpaper is composited, not transparent.** `wallpaper` / `wallpaperFollowDesktop`
   draw a picture behind the terminal in the portable window by blending it over the
   theme background; the AppKit shell leaves this to Ghostty's `background-image`. The
@@ -64,9 +69,12 @@ app itself has the gaps listed in
 - **Accessibility covers the terminal only.** The focused pane is a `Terminal`
   node with its text; the sidebar, tabs and panels are not in the tree, and there
   is no high-contrast mode.
-- **Settings stops at appearance and shortcuts.** The `⌘,` panel edits font size,
-  display scale, sidebar density, exit/restore, socket mode and every shortcut; font
-  family, theme, profiles and per-provider mute stay in `config.json`.
+- **Settings covers appearance, launches and shortcuts — not everything.** The `⌘,` panel
+  edits terminal and window font, font size, display scale, theme, opacity, wallpaper,
+  bell, shell, VT engine, sidebar density and width, exit/restore, copy-on-select, hook
+  reinstall, socket mode and every shortcut. `fontWeight`, `lineHeight`, `fontFeatures`,
+  `fontMetrics`, profiles, commands, output rules, session logging, mute providers and
+  `quickHotkey` stay in `config.json`.
 - **The quick terminal is portable-only for the OS-wide chord.** `quickHotkey` is
   registered globally by `berth-gui`; the AppKit shell opens the same window from the
   Terminal menu and the `quickTerminal` shortcut but registers no system-wide hotkey.
@@ -100,9 +108,13 @@ app itself has the gaps listed in
 
 ### Output and logs
 
-- **No output rules or session log.** Nothing styles matching lines (ConEmu's Highlight,
-  iTerm2's Triggers), and a pane's output cannot be written to a file; scrollback lives in
-  memory only.
+- **Output rules tint but neither rewrite nor wrap.** `outputRules` colours a row whose
+  text matches a regex (first rule wins, invalid rules reported and skipped), like ConEmu's
+  Highlight and iTerm2's Triggers. A rule cannot substitute text or match across a wrapped
+  line, and it cannot change a glyph or its size.
+- **Session logging is one rotated file per pane.** `sessionLog` appends each pane's output
+  to `sessions/<surface id>.log` with a single rotation at 8 MiB; scrollback itself stays in
+  memory, and the AppKit shell reads neither key.
 
 ### Layout, workspaces and tabs
 
@@ -115,9 +127,11 @@ app itself has the gaps listed in
   row per agent; there is no free-form colour or icon picker.
 - **Tab overflow lands as a scrollable strip.** The strip scrolls with the wheel and a
   `»` button opens the hidden tabs. Rename and drag-reorder are in.
-- **Menus live in the window.** The portable shell draws an in-window menu strip and a
-  right-click action menu; the AppKit shell uses the native menu bar, and its
-  right-click menu offers only Copy, Paste and Select All (no tab/pane actions).
+- **Menus are native only on macOS.** `berth-gui` puts real `NSMenu`s in the macOS system
+  menu bar with the chords drawn beside each label; Linux and Windows keep the painted
+  in-window bar because winit exposes no menu API there. The AppKit shell uses the native
+  menu bar, and its right-click menu offers only Copy, Paste and Select All (no tab/pane
+  actions).
 - **One icon, three formats.** `packaging/berth.svg` is the master; `make icon` turns it
   into `packaging/Berth.icns` for the macOS bundles, and `packaging/berth-icon.png` and
   `packaging/berth.ico` are generated from it for Windows and Linux. The portable window
@@ -127,8 +141,9 @@ app itself has the gaps listed in
   build host; CI builds on `windows-latest`, where it is present.
 - **No divider cursor change in AppKit.** The portable window switches to a resize cursor
   over dividers; the AppKit split views keep the arrow.
-- **Window geometry is persisted** in `Window.bounds`; a second launch hands off to the
-  running instance and raises a window.
+- **Window geometry is persisted** in `Window.bounds`. A second launch does not hand off:
+  it finds the busy endpoint and exits, telling you to close the other instance or pass
+  `--socket`.
 - **Copy mode is vi-only.** `copyMode` opens a modal selection
   with `h`/`j`/`k`/`l`, words, counts, `g`/`G`, paging, visual selection and `y`; there
   is no `/` search, no block selection and no `vi` operator-pending grammar (`d`/`c`).
@@ -169,8 +184,8 @@ app itself has the gaps listed in
 - **Scrollback restore is opt-in and clean-exit only.** `scrollbackRestore` saves each
   pane's screen (capped at 64 KiB) and replays it; the capture runs on a clean exit, so a
   crash restores the previous screen or none. The AppKit shell does not read the key.
-- **A relaunch respawns each terminal from its saved cwd and
-  argv; the buffer it had on screen is gone.
+- **A relaunch respawns each terminal from its saved cwd and argv.** The buffer it had
+  on screen is gone unless `scrollbackRestore` captured it.
 - **Autosave is debounced.** A change is written 500 ms after the last event, and
   the same snapshot is appended to `journal.ndjson` (five kept). A crash inside
   the debounce loses the last interaction; a corrupt newest entry falls back to
@@ -194,7 +209,8 @@ app itself has the gaps listed in
 ## 2. `berth-headless` (portable shell)
 
 - Spike binary, not a packaged service; no GUI, tray or window.
-- Fixed 10,000-line scrollback; no scrollback restore.
+- Scrollback defaults to 10,000 lines per surface and is configurable; no scrollback
+  restore.
 - **Exited children are polled, not pushed.** `PtyHost::is_alive` reports it and
   `berth-gui` dispatches `surface.exited`, but `SurfaceOps` still has no
   `surface_exited` callback, so a different shell must poll the same way.

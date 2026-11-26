@@ -1,6 +1,6 @@
 # Competitive gap analysis
 
-Audited 2026-11-24 at 0.16.0; 0.15 items are marked as they land. Berth's column is read
+Audited 2026-11-26 at 0.21.1; earlier items are marked as they land. Berth's column is read
 from source in this tree; the competitor columns come from vendor docs and release notes of
 the same month, not from memory. The purpose is to separate three things that get
 confused: **already shipped**, **missing and worth building**, and **deliberately not
@@ -18,9 +18,10 @@ the split:
 
 - **AppKit shell**: Ghostty owns emulation, rendering and input, so it inherits the whole
   modern protocol set. Berth's gaps there are UI, not VT.
-- **Portable window (`berth-gui`)**: its own renderer over the `vt100` crate, with
-  shaping runs for ligatures. Synchronized output, the Kitty keyboard protocol, styled
-  text and OSC 8 hyperlinks are in as of 0.15.
+- **Portable window (`berth-gui`)**: its own renderer over the `vt100` crate (or
+  `alacritty_terminal`), with shaping runs for ligatures. Synchronized output, the Kitty
+  keyboard protocol, styled text, OSC 8 hyperlinks and OSC 133/633 prompt marks with
+  command timing are in as of 0.15–0.21.1.
 
 That split is the single most important fact in this document: every VT-level gap below
 is portable-only, and every macOS gap is UI-only.
@@ -45,27 +46,27 @@ is portable-only, and every macOS gap is UI-only.
 | | resize reflow of wrapped lines | ● | ● | ● | ● |
 | | audio bell option | ● | ● | ● | ● |
 | **Scrollback** | configurable depth, wheel, scrollbar | ● | ● | ● | ● |
-| | search | ● | ○ | ● | ● |
-| | scrollback restore on relaunch | ○ | ○ | ● | iTerm2, kitty |
-| | vi copy mode / keyboard selection | ○ | ○ | ● | iTerm2, WezTerm, Alacritty |
-| | paste history | ○ | ○ | ○ | iTerm2, kitty |
+| | search | ● | ○ (focused pane, no toggles) | ● | ● |
+| | scrollback restore on relaunch | ● (opt-in) | ○ | ● | iTerm2, kitty |
+| | vi copy mode / keyboard selection | ● | ● (Ghostty's) | ● | iTerm2, WezTerm, Alacritty |
+| | paste history | ● | ○ | ○ | iTerm2, kitty |
 | **Layout** | tabs, nested splits, drag dividers | ● | ● | ● | ● |
 | | tabs inside a pane | ● | ● | ● | cmux only |
-| | multiple windows | ○ | ○ | ● | ● |
-| | pane zoom / maximise | ○ | ○ | ● | Ghostty, WezTerm, kitty |
-| | tab tear-off, cross-window drag | ○ | ○ | ● | Ghostty, kitty |
-| | tab overflow menu | ○ | ○ | ● | kitty, Warp |
-| | broadcast input to all panes | ○ | ○ | ○ | kitty, tmux |
-| | geometric (arrow-key) pane focus | ○ | ○ | ● | cmux, iTerm2 |
+| | multiple windows | ● | ● | ● | ● |
+| | pane zoom / maximise | ● | ● | ● | Ghostty, WezTerm, kitty |
+| | tab tear-off, cross-window drag | ● | ○ | ● | Ghostty, kitty |
+| | tab overflow menu | ● | ○ | ● | kitty, Warp |
+| | broadcast input to all panes | ● | ◐ (flag not wired to keys) | ○ | kitty, tmux |
+| | geometric (arrow-key) pane focus | ● | ● | ● | cmux, iTerm2 |
 | | workspace groups, reorder, colours | ● | ◐ (no create UI) | ● | — |
-| | quake / dropdown hotkey window | ○ | ○ | ● | Ghostty, iTerm2, kitty |
-| **Workflow** | command palette | ● (18 verbs) | ● (13 verbs) | ● (indexes everything) | ● |
-| | shell integration (OSC 133), jump to prompt | ○ | ○ | ● | ● |
+| | quake / dropdown hotkey window | ● | ◐ (menu only) | ● | Ghostty, iTerm2, kitty |
+| **Workflow** | command palette | ● (34 verbs) | ● (29 verbs) | ● (indexes everything) | ● |
+| | shell integration (OSC 133), jump to prompt | ● | ● (Ghostty's, no gutter) | ● | ● |
 | | command blocks / per-command status | ○ | ○ | ◐ | Warp, kitty marks |
-| | declarative layouts, custom commands | ○ | ○ | ● | WezTerm, kitty, Warp |
-| | profiles / automatic profile switching | ○ | ○ | ○ | iTerm2 |
-| | triggers on output | ○ | ○ | ○ | iTerm2, Alacritty |
-| | file drag-and-drop | ○ | ○ | ○ | iTerm2, kitty |
+| | declarative layouts, custom commands | ● | ○ | ● | WezTerm, kitty, Warp |
+| | profiles / automatic profile switching | ◐ (no auto switching) | ○ | ○ | iTerm2 |
+| | triggers on output | ● | ○ | ○ | iTerm2, Alacritty |
+| | file drag-and-drop | ● | ○ | ○ | iTerm2, kitty |
 | **Agents** | typed lifecycle, attention, events | ● | ● | ◐ (free-form) | Berth only |
 | | hook install for providers | ● (5) | ● (4) | ● (13) | — |
 | | resume across relaunch | ● | ● | ● | — |
@@ -78,7 +79,7 @@ is portable-only, and every macOS gap is UI-only.
 | | agent resume | ● | ● | ● | — |
 | | live processes survive quit/update | ○ | ○ | ◐ (tmux/zellij) | WezTerm mux |
 | | single-instance handoff | ○ | ○ | ● | ● |
-| | window geometry persisted | ○ | ● | ● | ● |
+| | window geometry persisted | ● | ● | ● | ● |
 | **Platform** | macOS / Linux / Windows | ● | ● (macOS) | ○ | — |
 | | installers | ◐ (.deb, PKGBUILD) | ◐ (ad-hoc) | ● | ● |
 | | auto-update | ○ | ○ | ● (Sparkle) | iTerm2, Warp |
@@ -90,30 +91,27 @@ is portable-only, and every macOS gap is UI-only.
 
 ## 3. The gaps that matter, in order
 
-1. **The portable terminal is behind on protocol, not features.** OSC 133 shell
-   integration is the remaining floor item; synchronized output, the kitty keyboard
-   protocol, styled text, OSC 8, cursor shapes, focus reporting and OSC 52 read have
-   landed. This is a bounded parsing and painting job, and it is the cheapest way to stop
-   the portable window feeling like a different product.
-2. **Multiple windows, pane zoom, tab tear-off.** Every competitor has them; Berth has one
-   window and no zoom. This is the most frequent shape of "I can't work like this" for a
-   terminal workspace, and the protocol already models the tree, so it is a model and
-   snapshot change rather than a rewrite.
-3. **Shell integration.** OSC 133 is table stakes in 2026: prompt marks, exit status,
-   jump-to-prompt and per-command metadata. Berth consumes titles, cwd, bell and progress,
-   so it has the plumbing and none of the payload.
-4. **Live process durability.** cmux's answer is bolting on tmux; WezTerm owns a mux
+The protocol floor is closed: synchronized output, the kitty keyboard protocol, styled
+text, OSC 8, cursor shapes, focus reporting, OSC 52 read and OSC 133 shell integration
+with prompt marks, jump-to-prompt and command timing all ship in the portable window, and
+the AppKit shell inherits them from Ghostty. What remains, in order:
+
+1. **Live process durability.** cmux's answer is bolting on tmux; WezTerm owns a mux
    server. Berth's architecture already separates the domain core from the shell, so a
    detachable PTY host is the honest version of this and the one item that changes the
    process model.
-5. **Agent depth is the differentiator that is still half-built.** The typed state machine
+2. **Agent depth is the differentiator that is still half-built.** The typed state machine
    and event stream exist; there is no inbox, no history beyond the live notification
    list, no workspace-level cost meter, and five providers against cmux's thirteen.
-6. **Search and recall.** The portable window searches; the AppKit shell does not, and
-   neither has copy mode, paste history or a search across workspaces.
-7. **Distribution.** .deb and PKGBUILD exist, the notarization script is written but
+3. **AppKit parity.** The Swift shell is behind the portable window on search toggles, the
+   prompt gutter, paste history, profiles, layouts, output rules, session logging,
+   scrollback restore, file drops and the OS-wide quick hotkey, and it has no tab tear-off
+   or overflow.
+4. **Distribution.** .deb and PKGBUILD exist, the notarization script is written but
    unused, and there is no auto-update. This is the difference between a repo and a
    product, and it is mostly CI work.
+5. **Single-instance handoff and accessibility depth.** A second launch exits rather than
+   raising the first window, and the AccessKit tree covers the focused pane only.
 
 Every row of the matrix above is mapped to a milestone, or to a documented decision, in
 the coverage ledger at the end of [docs/04-roadmap.md](04-roadmap.md).
