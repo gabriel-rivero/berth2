@@ -2,7 +2,7 @@
 
 A native macOS terminal workspace for running coding agents side by side — built on Ghostty's renderer, with a typed agent lifecycle and a push-based protocol.
 
-Status: 0.21.2. 0.17–0.21 finish the portable window as a daily terminal: OSC 133/633
+Status: 0.21.3. 0.17–0.21 finish the portable window as a daily terminal: OSC 133/633
 prompt marks with a gutter, jump-to-prompt and measured command timing; search across every
 pane with regex and whole-word toggles; vi-style copy mode; a paste-history picker; an
 OS-wide quick terminal; launch profiles, custom commands, named layouts and per-window
@@ -11,7 +11,8 @@ drops quoted per shell; a window font, `theme: system` following the OS appearan
 wallpaper composited behind the terminal; working menus with their chords shown beside each
 label, real `NSMenu`s on macOS; command duration plus recent-choice ranking in 0.21.1;
 and in 0.21.2 each window's sidebar and palette are scoped to that window's own
-workspaces instead of listing every workspace in the session.
+workspaces instead of listing every workspace in the session; 0.21.3 scales the
+sidebar header so its label is no longer clipped on a Retina display.
 0.16 adds a selectable VT engine (`terminalBackend`: the builtin
 `vt100` grid or Alacritty) and the Command Code (`cmd`) agent provider. The terminal floor landed across 0.15: synchronized output, the Kitty
 keyboard protocol, styled text and OSC 8 hyperlinks, cursor shapes and focus reporting,
@@ -29,7 +30,7 @@ make fetch-engine # macOS, Command Line Tools only: download the CI-built Ghostt
 make run          # macOS: bundle + launch
 ```
 
-The Rust half — `berth-core`, `berth-transport`, `berth-server`, `berth-headless`, `berth-gui` and the `berth` CLI — builds and tests on Linux, macOS and Windows, all at 0.21.2. `berth-headless` is the portable PTY/protocol shell; `berth-gui` is the visible window (winit + softbuffer + cosmic-text, no GPU): a config-selectable VT engine (`terminalBackend`: `vt100` builtin or Alacritty), real system fonts with Unicode and emoji, scrollback, selection, clipboard, OSC title/cwd/bell/progress, draggable dividers, per-pane tabs and a workspace sidebar with groups, agent rows and progress, plus
+The Rust half — `berth-core`, `berth-transport`, `berth-server`, `berth-headless`, `berth-gui` and the `berth` CLI — builds and tests on Linux, macOS and Windows, all at 0.21.3. `berth-headless` is the portable PTY/protocol shell; `berth-gui` is the visible window (winit + softbuffer + cosmic-text, no GPU): a config-selectable VT engine (`terminalBackend`: `vt100` builtin or Alacritty), real system fonts with Unicode and emoji, scrollback, selection, clipboard, OSC title/cwd/bell/progress, draggable dividers, per-pane tabs and a workspace sidebar with groups, agent rows and progress, plus
 mouse reporting, links, the command palette, attention list and settings panel.
 See [docs/07-headless-shell.md](docs/07-headless-shell.md) and [docs/08-minimal-window.md](docs/08-minimal-window.md). Feature parity with the Swift/AppKit shell is tracked in [docs/09-known-gaps.md](docs/09-known-gaps.md); the Swift shell remains the macOS default, and both shells speak the same protocol.
 

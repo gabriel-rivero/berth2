@@ -1,6 +1,6 @@
 # Portable window (Linux, Windows, macOS)
 
-Status: through 0.21.2. One window per core window (several can be open), with real text,
+Status: through 0.21.3. One window per core window (several can be open), with real text,
 tabs, dividers, a sidebar with groups and agent rows, selection, clipboard, scrollback,
 shell integration, copy mode, paste history, a quick terminal, wallpaper and native menus
 on macOS. It is the shell the portable half of the project is built on, and the place where

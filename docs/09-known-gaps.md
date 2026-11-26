@@ -1,6 +1,6 @@
 # Known gaps and missing behavior
 
-Last audited: 2026-11-26, code at the 0.21.2 release. The audit covers real text,
+Last audited: 2026-11-26, code at the 0.21.3 release. The audit covers real text,
 scrollback, selection with auto-scroll, clipboard, mouse reporting, IME, links, OSC events,
 prompt marks and command timing, copy mode, paste history, search across panes, output
 rules, session logging, scrollback restore, file drops, quality-of-life window work
