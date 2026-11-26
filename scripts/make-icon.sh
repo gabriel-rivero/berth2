@@ -6,6 +6,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 SVG="packaging/berth.svg"
 OUT="packaging/Berth.icns"
+PNG="packaging/berth-icon.png"
+ICO="packaging/berth.ico"
 
 command -v rsvg-convert >/dev/null 2>&1 || {
   echo "icon: rsvg-convert missing (brew install librsvg)" >&2
@@ -35,3 +37,18 @@ done
 
 iconutil -c icns "$iconset" -o "$OUT"
 echo "ok: $OUT"
+
+# The portable window embeds the PNG at runtime and the executable carries the
+# ICO resource, which is what Explorer and the taskbar read.
+rsvg-convert -w 256 -h 256 "$SVG" -o "$PNG"
+echo "ok: $PNG"
+
+if command -v magick >/dev/null 2>&1; then
+  magick "$SVG" -background none -define icon:auto-resize=256,128,64,48,32,16 "$ICO"
+  echo "ok: $ICO"
+elif command -v convert >/dev/null 2>&1; then
+  convert "$SVG" -background none -define icon:auto-resize=256,128,64,48,32,16 "$ICO"
+  echo "ok: $ICO"
+else
+  echo "icon: ImageMagick missing, skipped $ICO (brew install imagemagick)" >&2
+fi

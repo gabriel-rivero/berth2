@@ -23,7 +23,7 @@ help:
 	@echo "make gui-app     wrap it in build/BerthGui.app (macOS, ad-hoc signed)"
 	@echo "make gui-notarize sign with DEVELOPER_ID and notarize (macOS)"
 	@echo "make perf-trace  record a symbolized startup trace (macOS)"
-	@echo "make icon        regenerate packaging/Berth.icns from packaging/berth.svg"
+	@echo "make icon        regenerate the .icns, .png and .ico from packaging/berth.svg"
 	@echo "make gui-smoke   render the window under Xvfb and exit (headless check)"
 	@echo "make acceptance  run the M2 protocol check against the running app"
 	@echo "make m3          run the M3 agent check against the running app"
