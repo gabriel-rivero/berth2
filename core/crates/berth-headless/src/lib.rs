@@ -2035,6 +2035,23 @@ mod meta_tests {
     }
 
     #[test]
+    fn given_a_timed_command_then_the_view_carries_the_duration() {
+        let fixture = ScannerFixture::new();
+        let mut scanner = SideChannelScanner::default();
+        fixture.feed(&mut scanner, b"\x1b]133;A\x07$ sleep 2\r\n");
+        fixture.feed(&mut scanner, b"\x1b]133;C\x07");
+        fixture.feed(&mut scanner, b"\x1b]133;D;0;2010\x07");
+        fixture.feed(&mut scanner, b"\x1b]133;A\x07$ ");
+        let marks = lock(&fixture.prompts);
+        let timed: Vec<_> = marks
+            .all()
+            .filter(|mark| mark.kind == prompt::PromptKind::Prompt)
+            .map(|mark| (mark.line, mark.status, mark.duration_ms))
+            .collect();
+        assert_eq!(timed, vec![(0, None, None), (1, Some(0), Some(2010))]);
+    }
+
+    #[test]
     fn given_a_terminated_command_and_a_new_prompt_then_the_prompt_carries_the_status() {
         let fixture = ScannerFixture::new();
         let mut scanner = SideChannelScanner::default();

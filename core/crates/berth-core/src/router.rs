@@ -216,9 +216,10 @@ fn handle(
         }
         "launch.list" => {
             let launches = &state.launches;
-            let profiles: Vec<_> = launches
-                .profiles
-                .iter()
+            let profiles: Vec<_> = state
+                .recent_launches
+                .rank(&launches.profiles)
+                .into_iter()
                 .map(|launch| {
                     json!({
                         "name": launch.name,
@@ -229,9 +230,10 @@ fn handle(
                     })
                 })
                 .collect();
-            let commands: Vec<_> = launches
-                .commands
-                .iter()
+            let commands: Vec<_> = state
+                .recent_launches
+                .rank(&launches.commands)
+                .into_iter()
                 .map(|launch| {
                     json!({
                         "name": launch.name,
@@ -298,6 +300,7 @@ fn handle(
                     format!("unknown launch kind {other:?}: expected tab or workspace"),
                 )),
             }
+            .inspect(|_| state.recent_launches.record(&launch.name))
         }
         // A shell reads back a pane's screen text and hands it here before a
         // session save, so a relaunch can replay it. Off by default: the shell
@@ -2007,6 +2010,34 @@ mod tests {
         assert_eq!(surface.argv, vec!["/bin/sh", "-c", "true"]);
         assert_eq!(surface.user_title.as_deref(), Some("Build"));
         assert_eq!(surface.cwd, "/tmp/berth-launch-test");
+    }
+
+    #[test]
+    fn given_opened_profiles_then_launch_list_puts_the_most_recent_first() {
+        use crate::launch::{Launch, Program};
+        let profile = |name: &str| Launch {
+            name: name.into(),
+            command: Some(Program::One("/bin/sh".into())),
+            args: Vec::new(),
+            env: Default::default(),
+            cwd: None,
+            shell: None,
+            label: None,
+        };
+        let mut st = AppState::default();
+        st.launches.profiles = vec![profile("a"), profile("b"), profile("c")];
+        call(&mut st, "workspace.create", json!({"name": "shell"}));
+        call(&mut st, "launch.open", json!({"name": "c"}));
+        call(&mut st, "launch.open", json!({"name": "a"}));
+        let listed = call(&mut st, "launch.list", json!({}));
+        let names: Vec<&str> = listed["profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|launch| launch["name"].as_str())
+            .collect();
+        // Newest pick first, then the configured order for the ones never opened.
+        assert_eq!(names, vec!["a", "c", "b"]);
     }
 
     #[test]

@@ -36,6 +36,10 @@ pub struct PromptMark {
     /// The exit status of the command that ran above this prompt, when the
     /// shell reported one and there was a command to report on.
     pub status: Option<i32>,
+    /// How long the command above this prompt took, in milliseconds, when the
+    /// shell reported it. OSC 133 `D` may carry a duration after the status
+    /// (`133;D;0;1234`), and OSC 633 always does.
+    pub duration_ms: Option<u64>,
 }
 
 impl PromptMark {
@@ -45,6 +49,15 @@ impl PromptMark {
     }
 }
 
+/// What `D` reported about the command that just finished.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CommandReport {
+    pub status: Option<i32>,
+    /// Wall-clock duration in milliseconds. OSC 633 puts it after the status
+    /// (`633;D;0;1234`); a plain OSC 133 `D` usually carries only the status.
+    pub duration_ms: Option<u64>,
+}
+
 /// One OSC 133/633 sequence, before it is placed on a line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Event {
@@ -52,8 +65,8 @@ pub enum Event {
     PromptStart,
     /// `C`.
     CommandStart,
-    /// `D`, with the exit status the shell reported.
-    CommandEnd(Option<i32>),
+    /// `D`, with the exit status and duration the shell reported.
+    CommandEnd(CommandReport),
 }
 
 /// Prompt marks for one surface, keyed by absolute line so scrollback keeps
@@ -63,7 +76,7 @@ pub enum Event {
 pub struct PromptMarks {
     marks: BTreeMap<usize, PromptMark>,
     /// The last `D`, waiting for the prompt that follows it.
-    pending: Option<Option<i32>>,
+    pending: Option<CommandReport>,
     pruned_below: usize,
 }
 
@@ -72,17 +85,21 @@ impl PromptMarks {
     pub fn record(&mut self, line: usize, event: Event) {
         match event {
             Event::PromptStart => {
-                let status = self.pending.take().flatten();
+                let report = self.pending.take().unwrap_or_default();
                 let entry = self.marks.entry(line).or_insert(PromptMark {
                     line,
                     kind: PromptKind::Prompt,
-                    status,
+                    status: report.status,
+                    duration_ms: report.duration_ms,
                 });
                 // `A` and `B` land on the same row; keep the row a prompt and
                 // keep the status the first of them claimed.
                 entry.kind = PromptKind::Prompt;
                 if entry.status.is_none() {
-                    entry.status = status;
+                    entry.status = report.status;
+                }
+                if entry.duration_ms.is_none() {
+                    entry.duration_ms = report.duration_ms;
                 }
             }
             Event::CommandStart => {
@@ -92,9 +109,10 @@ impl PromptMarks {
                     line,
                     kind: PromptKind::CommandStart,
                     status: None,
+                    duration_ms: None,
                 });
             }
-            Event::CommandEnd(status) => self.pending = Some(status),
+            Event::CommandEnd(report) => self.pending = Some(report),
         }
     }
 
@@ -152,13 +170,18 @@ pub fn parse(payload: &[u8]) -> Option<Event> {
     match fields.next()? {
         b"A" | b"B" => Some(Event::PromptStart),
         b"C" => Some(Event::CommandStart),
-        // `D` carries the exit status first (`D;1`). A VS Code `D` may put the
-        // status after a duration, so take the first field that parses.
-        b"D" => Some(Event::CommandEnd(
-            fields
+        // `D` carries the exit status first (`D;1`), then an optional duration
+        // in milliseconds (`D;1;1234`).
+        b"D" => {
+            let mut numbers = fields
                 .filter_map(|field| std::str::from_utf8(field).ok())
-                .find_map(|field| field.trim().parse::<i32>().ok()),
-        )),
+                .filter_map(|field| field.trim().parse::<u64>().ok());
+            let status = numbers.next().map(|status| status as i32);
+            Some(Event::CommandEnd(CommandReport {
+                status,
+                duration_ms: numbers.next(),
+            }))
+        }
         _ => None,
     }
 }
@@ -176,18 +199,59 @@ mod tests {
 
     #[test]
     fn given_a_finished_command_then_its_exit_status_is_read() {
-        assert_eq!(parse(b"133;D;0"), Some(Event::CommandEnd(Some(0))));
-        assert_eq!(parse(b"133;D;127"), Some(Event::CommandEnd(Some(127))));
+        assert_eq!(
+            parse(b"133;D;0"),
+            Some(Event::CommandEnd(CommandReport {
+                status: Some(0),
+                duration_ms: None
+            }))
+        );
+        assert_eq!(
+            parse(b"133;D;127"),
+            Some(Event::CommandEnd(CommandReport {
+                status: Some(127),
+                duration_ms: None
+            }))
+        );
     }
 
     #[test]
-    fn given_a_vs_code_mark_with_a_duration_then_the_status_is_still_found() {
-        assert_eq!(parse(b"633;D;0;1234"), Some(Event::CommandEnd(Some(0))));
+    fn given_a_finished_command_with_a_duration_then_both_fields_are_read() {
+        assert_eq!(
+            parse(b"133;D;0;1234"),
+            Some(Event::CommandEnd(CommandReport {
+                status: Some(0),
+                duration_ms: Some(1234)
+            }))
+        );
+        assert_eq!(
+            parse(b"633;D;2;45"),
+            Some(Event::CommandEnd(CommandReport {
+                status: Some(2),
+                duration_ms: Some(45)
+            }))
+        );
+    }
+
+    #[test]
+    fn given_a_vs_code_mark_with_a_non_numeric_field_then_the_duration_is_skipped() {
+        // A field that is not a number is not a duration, so the report keeps
+        // the status and no timing rather than shifting the wrong field in.
+        assert_eq!(
+            parse(b"133;D;7;none"),
+            Some(Event::CommandEnd(CommandReport {
+                status: Some(7),
+                duration_ms: None
+            }))
+        );
     }
 
     #[test]
     fn given_a_command_that_reported_no_status_then_the_end_event_has_none() {
-        assert_eq!(parse(b"133;D"), Some(Event::CommandEnd(None)));
+        assert_eq!(
+            parse(b"133;D"),
+            Some(Event::CommandEnd(CommandReport::default()))
+        );
     }
 
     #[test]
@@ -207,7 +271,8 @@ mod tests {
             vec![PromptMark {
                 line: 0,
                 kind: PromptKind::Prompt,
-                status: None
+                status: None,
+                duration_ms: None
             }]
         );
     }
@@ -217,7 +282,13 @@ mod tests {
         let mut marks = PromptMarks::default();
         marks.record(0, Event::PromptStart);
         marks.record(1, Event::CommandStart);
-        marks.record(1, Event::CommandEnd(Some(0)));
+        marks.record(
+            1,
+            Event::CommandEnd(CommandReport {
+                status: Some(0),
+                duration_ms: None,
+            }),
+        );
         marks.record(2, Event::PromptStart);
         let all: Vec<_> = marks.all().copied().collect();
         assert_eq!(
@@ -226,17 +297,20 @@ mod tests {
                 PromptMark {
                     line: 0,
                     kind: PromptKind::Prompt,
-                    status: None
+                    status: None,
+                    duration_ms: None
                 },
                 PromptMark {
                     line: 1,
                     kind: PromptKind::CommandStart,
-                    status: None
+                    status: None,
+                    duration_ms: None
                 },
                 PromptMark {
                     line: 2,
                     kind: PromptKind::Prompt,
-                    status: Some(0)
+                    status: Some(0),
+                    duration_ms: None
                 },
             ]
         );
@@ -246,18 +320,31 @@ mod tests {
     fn given_a_failed_command_then_the_next_prompt_carries_its_status() {
         let mut marks = PromptMarks::default();
         marks.record(0, Event::PromptStart);
-        marks.record(1, Event::CommandEnd(Some(1)));
+        marks.record(
+            1,
+            Event::CommandEnd(CommandReport {
+                status: Some(1),
+                duration_ms: Some(2500),
+            }),
+        );
         marks.record(1, Event::PromptStart);
         let all: Vec<_> = marks.all().copied().collect();
         assert_eq!(all.len(), 2);
         assert_eq!(all[1].status, Some(1));
+        assert_eq!(all[1].duration_ms, Some(2500));
         assert!(all[1].failed());
     }
 
     #[test]
     fn given_the_prompt_start_after_a_command_end_on_the_same_row_then_the_row_is_a_prompt() {
         let mut marks = PromptMarks::default();
-        marks.record(4, Event::CommandEnd(Some(130)));
+        marks.record(
+            4,
+            Event::CommandEnd(CommandReport {
+                status: Some(130),
+                duration_ms: None,
+            }),
+        );
         marks.record(4, Event::PromptStart);
         marks.record(4, Event::PromptStart);
         let all: Vec<_> = marks.all().copied().collect();
@@ -283,6 +370,26 @@ mod tests {
         marks.prune(250, 100);
         let lines: Vec<_> = marks.all().map(|mark| mark.line).collect();
         assert_eq!(lines, vec![200]);
+    }
+
+    #[test]
+    fn given_a_timed_command_then_the_next_prompt_carries_its_duration() {
+        let mut marks = PromptMarks::default();
+        marks.record(0, Event::PromptStart);
+        marks.record(1, Event::CommandStart);
+        marks.record(
+            1,
+            Event::CommandEnd(CommandReport {
+                status: Some(0),
+                duration_ms: Some(900),
+            }),
+        );
+        marks.record(2, Event::PromptStart);
+        let all: Vec<_> = marks.all().copied().collect();
+        assert_eq!(all[2].status, Some(0));
+        assert_eq!(all[2].duration_ms, Some(900));
+        // A command start has no timing of its own.
+        assert_eq!(all[1].duration_ms, None);
     }
 
     #[test]

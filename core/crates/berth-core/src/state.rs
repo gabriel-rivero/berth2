@@ -32,6 +32,9 @@ pub struct AppState {
     /// Launch profiles and custom commands, pushed in by the shell from
     /// `config.json`. The core never reads a config file.
     pub launches: crate::launch::Launches,
+    /// The launches opened this run, most recent first, so `launch.list` can
+    /// order a picker by what the user actually reaches for.
+    pub recent_launches: crate::launch::Recent,
     /// Repositories the user saved with `layout.save`, by name.
     pub layouts: std::collections::BTreeMap<String, crate::launch::SavedLayout>,
     /// Minted lazily; identifies this app run in `system.hello`.

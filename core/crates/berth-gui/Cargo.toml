@@ -33,6 +33,10 @@ rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal", 
 regex.workspace = true
 global-hotkey = "0.10.0"
 
+[build-dependencies]
+# Embeds packaging/berth.ico as the executable's icon resource on Windows.
+winresource = "0.1"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = [

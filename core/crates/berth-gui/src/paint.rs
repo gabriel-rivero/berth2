@@ -2185,6 +2185,7 @@ mod tests {
             line: 0,
             kind: PromptKind::Prompt,
             status: Some(1),
+            duration_ms: None,
         }]);
         // The tick starts two pixels down, so the row's first line is clear.
         assert!(buffer[..4].iter().all(|pixel| *pixel == 0));
@@ -2201,6 +2202,7 @@ mod tests {
             line: 0,
             kind: PromptKind::Prompt,
             status: Some(0),
+            duration_ms: None,
         }]);
         assert!(buffer[..4].contains(&theme.success));
         assert!(!buffer.contains(&theme.attention_error));

@@ -78,6 +78,8 @@ use ui::{Cell, PaneView, Selection};
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(33);
 const FLASH_DURATION: Duration = Duration::from_millis(1200);
+/// How long a command's timing stays in the status line after a prompt jump.
+const PROMPT_TIMING_DURATION: Duration = Duration::from_secs(4);
 const BLINK_INTERVAL: Duration = Duration::from_millis(530);
 
 /// Print a startup phase time when `BERTH_TRACE` is set. The first-frame line
@@ -472,6 +474,7 @@ fn main() {
         last_selection: None,
         search_marks: SearchMarks::default(),
         hooks_notice: None,
+        prompt_timing: None,
         scroll: HashMap::new(),
         last_meta: HashMap::new(),
         flashes: HashMap::new(),
@@ -948,6 +951,9 @@ struct Gui {
     search_marks: SearchMarks,
     /// Last result of the Settings "reinstall hooks" row.
     hooks_notice: Option<String>,
+    /// How long the command above the prompt the user just jumped to took,
+    /// shown in the status line for a moment. Cleared when it expires.
+    prompt_timing: Option<(String, Instant)>,
     scroll: HashMap<String, usize>,
     last_meta: HashMap<String, AppliedMeta>,
     flashes: HashMap<String, Instant>,
@@ -1428,6 +1434,36 @@ impl Gui {
         if self.flashes.len() != before {
             self.request_redraw();
         }
+        if self
+            .prompt_timing
+            .as_ref()
+            .is_some_and(|(_, at)| at.elapsed() >= PROMPT_TIMING_DURATION)
+        {
+            self.prompt_timing = None;
+            self.request_redraw();
+        }
+    }
+
+    /// Show a command's duration in the status line after a jump. Only a prompt
+    /// the shell timed has anything to say; an untimed prompt clears the notice
+    /// rather than leaving the previous command's timing up.
+    fn show_prompt_timing(&mut self, mark: Option<&prompt::PromptMark>) {
+        let Some(mark) = mark else {
+            return;
+        };
+        let timing = match (mark.duration_ms, mark.status) {
+            (Some(ms), status) => {
+                let outcome = if status.is_some_and(|status| status != 0) {
+                    "failed"
+                } else {
+                    "ok"
+                };
+                format!("{} · {outcome}", format_duration(ms))
+            }
+            (None, Some(status)) if status != 0 => format!("exit {status}"),
+            (None, _) => return,
+        };
+        self.prompt_timing = Some((timing, Instant::now()));
     }
 
     /// When the loop next has to run with nothing else waking it: the blink
@@ -1446,6 +1482,12 @@ impl Gui {
         }
         for at in self.flashes.values() {
             let end = *at + FLASH_DURATION;
+            if end > now {
+                consider(end);
+            }
+        }
+        if let Some((_, at)) = &self.prompt_timing {
+            let end = *at + PROMPT_TIMING_DURATION;
             if end > now {
                 consider(end);
             }
@@ -1791,6 +1833,7 @@ impl Gui {
         let surface = softbuffer::Surface::new(&context, window.clone())
             .map_err(|error| format!("softbuffer surface: {error}"))?;
         window.set_ime_allowed(true);
+        set_window_icon(&window);
         self.a11y = Some(accesskit_winit::Adapter::with_event_loop_proxy(
             &window,
             self.proxy.clone(),
@@ -2242,6 +2285,13 @@ impl Gui {
         }
         if broadcast {
             parts.push("BROADCAST".to_string());
+        }
+        if let Some((timing, _)) = self
+            .prompt_timing
+            .as_ref()
+            .filter(|(_, at)| at.elapsed() < PROMPT_TIMING_DURATION)
+        {
+            parts.push(timing.clone());
         }
         if let Some(mode) = self.copy_mode.as_ref() {
             // The chip tells the user the shell is not receiving their keys.
@@ -3681,6 +3731,7 @@ impl Gui {
         let offset = view.scrollback_len.saturating_sub(target);
         if let Ok(applied) = self.host.set_scrollback(surface_id, offset) {
             self.scroll.insert(surface_id.to_string(), applied);
+            self.show_prompt_timing(Some(mark));
             self.request_redraw();
         }
     }
@@ -5050,10 +5101,27 @@ impl Gui {
         // stay the app commands people reach for.
         // Each row is matched against the label it shows, so typing what the
         // palette prints finds it.
-        for launch in &self.config.launches.profiles {
+        // The core ranks them by what was opened last, which is the same order
+        // `berth profiles` prints, so the two shells cannot disagree.
+        let (profiles, commands) = {
+            let state = lock(&self.state);
+            let names = |launches: &[berth_core::launch::Launch]| {
+                state
+                    .recent_launches
+                    .rank(launches)
+                    .into_iter()
+                    .map(|launch| launch.name.clone())
+                    .collect::<Vec<_>>()
+            };
+            (
+                names(&state.launches.profiles),
+                names(&state.launches.commands),
+            )
+        };
+        for name in profiles {
             for workspace in [false, true] {
                 let entry = PaletteEntry::Launch {
-                    name: launch.name.clone(),
+                    name: name.clone(),
                     workspace,
                 };
                 if panel::fuzzy_match(query, &entry.label()) {
@@ -5061,8 +5129,8 @@ impl Gui {
                 }
             }
         }
-        for command in &self.config.launches.commands {
-            let entry = PaletteEntry::Command(command.name.clone());
+        for name in commands {
+            let entry = PaletteEntry::Command(name);
             if panel::fuzzy_match(query, &entry.label()) {
                 entries.push(entry);
             }
@@ -5870,6 +5938,12 @@ impl Gui {
         if let Ok(applied) = self.host.set_scrollback(&surface_id, offset) {
             self.scroll.insert(surface_id, applied);
         }
+        let mark = view
+            .prompt_marks
+            .iter()
+            .find(|mark| mark.line == target)
+            .copied();
+        self.show_prompt_timing(mark.as_ref());
         self.request_redraw();
     }
 
@@ -7246,6 +7320,40 @@ fn write_png(
     Ok(())
 }
 
+/// A command duration for the status line: sub-second commands read in
+/// milliseconds, then seconds, then minutes and seconds so a long build does
+/// not read as `413s`.
+fn format_duration(ms: u64) -> String {
+    if ms < 1000 {
+        return format!("{ms}ms");
+    }
+    let seconds = ms / 1000;
+    if seconds < 60 {
+        let tenths = (ms % 1000) / 100;
+        return if tenths == 0 {
+            format!("{seconds}s")
+        } else {
+            format!("{seconds}.{tenths}s")
+        };
+    }
+    format!("{}m{:02}s", seconds / 60, seconds % 60)
+}
+
+/// Set the window icon from the packaged PNG. Windows and X11 draw it in the
+/// title bar and taskbar; Wayland and macOS ignore it, where the `.app` or the
+/// `.desktop` file supplies the icon instead.
+fn set_window_icon(window: &Window) {
+    static ICON: std::sync::OnceLock<Option<winit::window::Icon>> = std::sync::OnceLock::new();
+    let icon = ICON.get_or_init(|| {
+        let bytes = include_bytes!("../../../../packaging/berth-icon.png");
+        let image = image::load_from_memory(bytes).ok()?;
+        use image::GenericImageView;
+        let (width, height) = image.dimensions();
+        winit::window::Icon::from_rgba(image.into_rgba8().into_raw(), width, height).ok()
+    });
+    window.set_window_icon(icon.clone());
+}
+
 /// The lines a paste preview shows, capped so the panel stays readable.
 fn confirm_lines(text: &str) -> Vec<String> {
     const PREVIEW_LINES: usize = 12;
@@ -7452,6 +7560,22 @@ mod key_name_tests {
         assert_eq!(key_name(&Key::Named(NamedKey::Enter)), Some("enter"));
         assert_eq!(key_name(&Key::Character("é".into())), Some("é"));
         assert_eq!(key_name(&Key::Named(NamedKey::Shift)), None);
+    }
+}
+
+#[cfg(test)]
+mod duration_tests {
+    use super::format_duration;
+
+    #[test]
+    fn given_a_command_duration_then_it_reads_in_the_largest_useful_unit() {
+        assert_eq!(format_duration(0), "0ms");
+        assert_eq!(format_duration(999), "999ms");
+        assert_eq!(format_duration(1000), "1s");
+        assert_eq!(format_duration(1500), "1.5s");
+        assert_eq!(format_duration(59_900), "59.9s");
+        assert_eq!(format_duration(60_000), "1m00s");
+        assert_eq!(format_duration(413_000), "6m53s");
     }
 }
 
