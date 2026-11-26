@@ -186,6 +186,13 @@ macOS the chord sits on the fixed paste binding, so with an empty history it fal
 to an ordinary paste instead of doing nothing; a multi-line entry still asks for the
 paste confirmation.
 
+`previousPrompt` and `nextPrompt` walk the prompts a shell marks with OSC 133/633, and
+clicking a gutter tick brings that command's output to the top of the pane. A shell that
+reports a duration (`133;D;0;1234`) also gets that timing in the status line for a few
+seconds after the jump — `1.5s · ok`, or `4m12s · failed` — and a non-zero exit shows as
+`exit N` even when no duration was reported. The gutter only takes columns once a pane's
+shell emits a mark, so a shell without integration keeps the full grid.
+
 Search also takes two toggles while the panel is open: `Cmd/Ctrl+R` switches to a
 regular expression, and `Cmd/Ctrl+W` restricts the match to whole words. A query
 is literal unless the regex toggle is on, so a search for `a[` finds those two
@@ -339,7 +346,8 @@ a name.
 They are reachable from three places, all resolving the same core definition:
 the command palette (`Launch <name>`, `<name> Workspace`, `Command <name>`),
 `berth new --profile NAME` / `berth new-tab --profile NAME`, and `berth profiles`
-to list them.
+to list them. The core remembers which one was opened last, so `berth profiles` and the
+palette both put recent picks first; the order is per app run and lives in memory.
 
 ## Layouts
 

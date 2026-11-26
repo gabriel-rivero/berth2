@@ -149,9 +149,11 @@ Goal: the prompt becomes a place in the buffer, not a string in a stream.
   its absolute grid line, `screen_view` carries the visible ones, the portable window
   draws a green or red tick per prompt plus a dim mark where output began, a gutter
   click brings that command to the top of the pane, and `previousPrompt`/`nextPrompt`
-  walk them (`Cmd+Shift+Up`/`Down`, `Ctrl+Shift+Up`/`Down`). Duration is not parsed, the
-  gutter costs columns only in a pane whose shell emits marks, and the AppKit shell
-  inherits Ghostty's own shell integration rather than this gutter.
+  walk them (`Cmd+Shift+Up`/`Down`, `Ctrl+Shift+Up`/`Down`). **Finished in 0.21.1**:
+  `D` also carries a duration (`133;D;0;1234`), which is kept on the prompt below it and
+  shown in the status line as `1.5s · ok` for a few seconds when a jump or a gutter click
+  lands there. The gutter costs columns only in a pane whose shell emits marks, and the
+  AppKit shell inherits Ghostty's own shell integration rather than this gutter.
 - **Search parity**: search in the AppKit shell; regex and whole-word toggles; search
   across the panes of a workspace, not just the focused scrollback. **Landed in 0.17.0**:
   the portable panel compiles a literal or regex query once per keystroke, applies a
@@ -184,7 +186,10 @@ Goal: the prompt becomes a place in the buffer, not a string in a stream.
   **Landed in 0.17.0** as the shared `launch` module: profiles and commands parse in the
   core, so the palette, `berth new --profile` and `berth profiles` all resolve the same
   definition; `layout.save`/`layout.open` round-trip a workspace tree with fresh pane
-  ids. Recent-choice ranking and the AppKit palette are not wired yet.
+  ids. **Finished in 0.21.1**: the core remembers which launch was opened last, so
+  `launch.list` — and therefore `berth profiles` and the portable palette — orders
+  profiles and commands by what the user reaches for, without either shell keeping its
+  own copy of that ordering. The AppKit palette is still not wired.
 - **Output rules and logging**: regex rules that style matching lines, as ConEmu's
   Highlight and iTerm2's Triggers do, and a per-pane session log written to a file.
   **Landed in 0.17.0** for the portable window: `outputRules` tint a whole visible row
@@ -208,7 +213,9 @@ Goal: the prompt becomes a place in the buffer, not a string in a stream.
 
 **Done when:** a failing command can be found by jumping prompt to prompt and reading its
 status, a search in one pane reaches the others, a selection can be made without the
-mouse, and a WSL/Git Bash/admin preset starts in one click.
+mouse, and a WSL/Git Bash/admin preset starts in one click. The first three hold; the
+fourth is met for WSL and Git Bash through `profiles`, while an admin preset is an
+elevated launch and stays at 1.0 with [the rest of the elevated-pane work](#known-gaps-after-0170).
 
 ## 0.18 — Durability and agent depth (≈3 weeks)
 
@@ -307,9 +314,9 @@ not an oversight.
 | Themes, opacity and blur, font zoom | 0.15 |
 | Resize reflow, audio bell | 0.15 |
 | Scrollback restore, paste history, copy mode, search parity and cross-pane search | 0.17 |
-| OSC 133 prompt marks, jump-to-prompt, exit status | 0.17 |
+| OSC 133 prompt marks, jump-to-prompt, exit status and duration | 0.17, duration 0.21.1 |
 | Output highlight rules, session logging | 0.17 |
-| Launch profiles, custom commands, named layouts, palette depth | 0.17 |
+| Launch profiles, custom commands, named layouts, palette depth, recent-choice ranking | 0.17, ranking 0.21.1 |
 | Quake dropdown, file drops | 0.17 |
 | Multiple windows, pane zoom, pane swap, tab tear-off, tab overflow, restart and duplicate | 0.16 |
 | Broadcast input, geometric focus | 0.16 |
@@ -371,18 +378,17 @@ stand.
 | --- | --- |
 | The AppKit right-click menu is terminal-only: no tab/pane actions, no separators, no search or paste-as-plain-text | 0.16.x follow-up |
 | The portable right-click panel is one flat list: Copy cannot be greyed out when the pane has no selection, and there are no separators between groups | 0.16.x follow-up |
-| Windows executables carry no icon; only the macOS bundles and the Linux packages do | 1.0 |
 
 ## Known gaps after 0.17.0
 
-The 0.17 items that shipped partially, recorded so they are decisions and not oversights.
+The 0.17 items that shipped partially or only in one shell, recorded so they are
+decisions and not oversights. Two items closed in 0.21.1 (command duration,
+recent-choice ranking) are no longer listed here.
 
 | Gap | Where it goes |
 | --- | --- |
-| OSC 133 `D` may carry a command duration; it is not parsed, so there is no per-command timing | 0.18 inbox |
 | Paste history is portable-only; the AppKit shell ignores the key and `Cmd+Shift+V` pastes through Ghostty | 1.0 AppKit parity |
 | Profiles and commands are offered in the portable palette only; the AppKit palette does not index them | 1.0 AppKit parity |
-| Recent-choice ranking for profiles is implemented in the core but no shell records picks into it | 0.18 |
 | The palette's session rows are core-global, so a window's palette can list and switch to another window's workspace | 0.18 |
 | Palette rows are rebuilt on every paint; the list is uncapped, so a very large session makes each frame allocate | 0.18 |
 | AppKit has no palette entry for profiles, commands, layouts or session rows | 1.0 AppKit parity |
@@ -408,3 +414,27 @@ The 0.17 items that shipped partially, recorded so they are decisions and not ov
 | The AppKit find bar is focused-surface only and has no regex or whole-word toggles (Ghostty owns the matching) | 1.0 AppKit parity |
 | Copy mode has no `vi` operator-pending grammar (`d`/`c`), no block selection and no in-mode `/` search | After 1.0 |
 | Copy mode captures its buffer on entry, so output that arrives mid-session is not selectable | 0.18 |
+
+## Not implemented in the Swift (AppKit) shell
+
+The Swift shell in `app/` is the macOS-native front end; it drives Ghostty for the grid
+and shares the Rust core over the socket. The portable window (`core/crates/berth-gui`)
+implemented much of 0.17 first, so the list below is what the Swift shell still does not
+do. Each row names the portable behaviour it is missing. None of these blocks a release;
+they are the 1.0 AppKit parity work, recorded here so the gap is visible in one place.
+
+| Area | Portable window | Swift (AppKit) shell |
+| --- | --- | --- |
+| Prompt gutter | Draws a per-prompt tick, red on failure, plus the output mark | No gutter; inherits Ghostty's marks and `jump_to_prompt`, and now shows the duration in its status text on a jump |
+| Paste history | `pasteHistory` picker over the last twelve clipboards | Not read; `Cmd+Shift+V` pastes through Ghostty |
+| Profiles and commands | `profiles`/`commands` indexed in the palette and openable | Pushed to the core with `launch.configure`, but there is no menu or picker to open one |
+| Named layouts | `layout.save`/`layout.open` from the palette and CLI | No menu entry or picker |
+| Palette | Indexes actions, launches, layouts and the live session, ranked by recency | No command palette |
+| Output rules | `outputRules` tints matching rows | Not read |
+| Session logging | `sessionLog` appends each pane to `sessions/<id>.log` | Not read |
+| Scrollback restore | `scrollbackRestore` replays the last screen on relaunch | Not read; Ghostty owns the surface |
+| File drops | Types a dropped path, quoted per shell | Does not accept a dropped file |
+| Quick terminal | OS-wide `quickHotkey` dropdown | Menu and chord only; no system-wide hotkey |
+| Copy mode | Modal vi-style selection and yank | Uses Ghostty's own copy-mode bindings |
+| Find bar | Regex and whole-word toggles, search across every pane of the workspace | `Cmd+F` over Ghostty's search: focused surface only, no toggles |
+| Elevated panes | n/a | No elevated instance; see the 1.0 Windows note |

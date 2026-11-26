@@ -130,21 +130,21 @@ not run there; the portable window is the only terminal of this shape that does.
 | ConEmu feature | Berth today |
 | --- | --- |
 | Tabs, splits and nested panes, drag resize | ● both shells |
-| Quake dropdown on a global hotkey | ○ planned, 0.17 |
+| Quake dropdown on a global hotkey | ● portable, 0.17; menu-only in AppKit |
 | **Shell selection** (`shell`, settings cycle: Git Bash, pwsh, MSYS2, Cygwin, WSL) | ● 0.14.1 |
-| **Named task presets** (argv, env, cwd, shell, admin, hotkey) | ○ one shell per config |
-| **Elevated tabs** (`ConEmuC /sudo`) | ○ |
+| **Named task presets** (argv, env, cwd, shell, admin, hotkey) | ◐ `profiles`/`commands` from 0.17 (no admin) |
+| **Elevated tabs** (`ConEmuC /sudo`) | ○ parked at 1.0 as a separate instance |
 | **Replace the default Windows terminal** | ○ |
 | Session/layout restore | ● tabs, cwd, splits; no scrollback |
 | Unicode, 256/true colour, mouse reporting, clipboard, paste guard | ● |
 | Progress in tab/sidebar (OSC 9;4) | ● |
-| Search in the buffer | ● portable, ○ AppKit |
+| Search in the buffer | ● portable (regex, whole-word, all panes); ○ AppKit |
 | Tab rename / restart / duplicate | ◐ rename only |
 | Hotkey rebinding | ● |
 | **Automation API** (`GuiMacro`, `ConEmuC -GuiMacro`) | ● superseded by socket, CLI and events |
 | Link and file-path detection | ● |
-| **Output highlight rules** (regex → line style) | ○ |
-| **Log console output to a file** | ○ |
+| **Output highlight rules** (regex → line style) | ● portable, 0.17 |
+| **Log console output to a file** | ● portable, 0.17 (`sessionLog`) |
 | **Window transparency / background** | ○ |
 | **Status bar and toolbar** | ○ |
 | **Taskbar progress and jump lists** | ○ |

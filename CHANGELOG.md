@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- **Command timing.** OSC 133/633 `D` carries a duration after the exit status
+  (`133;D;0;1234`), which the reader now keeps on the prompt below it. Jumping to a
+  prompt with `previousPrompt`/`nextPrompt` or clicking its gutter tick shows how long
+  that command took in the status line (`1.5s · ok`, `4m12s · failed`) for a few
+  seconds. A shell that reports only a status still shows a non-zero exit as `exit N`,
+  and a shell that reports neither leaves the line alone.
+- **Recent-choice ranking for launches.** The core records which profile or command was
+  opened last, so `berth profiles`, `berth new --profile` and the portable palette list
+  them in that order. Both shells read the one ranking, so the palette and the CLI
+  cannot disagree about what "recent" means.
+
+### Fixes
+
+- **The Windows icon is visible.** The portable window sets its icon at runtime and the
+  executable carries the icon resource, so Explorer, the taskbar and the title bar no
+  longer show a blank default. `packaging/berth.ico` and `packaging/berth-icon.png` are
+  generated from `packaging/berth.svg`; `make icon` reproduces both.
+
 ## 0.21.0 — 2026-11-25
 
 ### Features

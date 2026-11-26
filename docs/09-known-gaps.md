@@ -23,8 +23,10 @@ app itself has the gaps listed in
 - **The protocol floor is nearly complete.** Synchronized output (DECSET 2026), the Kitty
   keyboard protocol, styled text, OSC 8 hyperlinks, cursor shapes, focus in/out, OSC 52
   read and OSC 133/633 prompt marks are in. The AppKit shell inherits the floor from
-  Ghostty. Prompt marks are a gutter and jump-to-prompt only: there are no collapsible
-  command blocks, and a pane spends gutter columns only once its shell emits a mark.
+  Ghostty. Prompt marks are a gutter, jump-to-prompt and a per-command timing shown in the
+  status line: there are no collapsible command blocks, the duration is only what the
+  shell reports on OSC 133 `D` (never measured locally), and a pane spends gutter columns
+  only once its shell emits a mark.
 - **Font options, ligatures and zoom.** `fontFamily` picks the face at `fontSize` ×
   `fontScale`; `fontWeight`, `lineHeight`, `fontFeatures` and per-face `fontMetrics`
   tune it. Adjacent cells with the same style are shaped as one run, so ligatures
@@ -79,8 +81,10 @@ app itself has the gaps listed in
 - **Right-to-left text is shaped in terminal panes only.** Sidebar rows, tab
   labels and panel text still draw one character at a time, so an RTL workspace
   name or OSC title is not reordered there.
-- **The palette lists actions only.** It has no workspace or session commands
-  beyond the 14 bound actions, and it does not remember recent choices.
+- **The palette is one list of everything.** It indexes actions, profiles, commands,
+  layouts and the live session, and remembers the keys picked in each window so an empty
+  palette opens on the last thing. Its session rows are still core-global, so a window's
+  palette can list another window's workspace, and the list is rebuilt on every paint.
 
 ### Terminal engine
 
@@ -114,9 +118,13 @@ app itself has the gaps listed in
 - **Menus live in the window.** The portable shell draws an in-window menu strip and a
   right-click action menu; the AppKit shell uses the native menu bar, and its
   right-click menu offers only Copy, Paste and Select All (no tab/pane actions).
-- **One icon, two formats.** `packaging/berth.svg` is the master (used by the Linux
-  packages) and `packaging/Berth.icns` is generated from it for the macOS bundles.
-  Windows executables still carry no icon.
+- **One icon, three formats.** `packaging/berth.svg` is the master; `make icon` turns it
+  into `packaging/Berth.icns` for the macOS bundles, and `packaging/berth-icon.png` and
+  `packaging/berth.ico` are generated from it for Windows and Linux. The portable window
+  sets the PNG as its window icon at runtime and `build.rs` embeds the `.ico` as the
+  executable's icon resource, so Explorer, the taskbar and the title bar all show it. A
+  cross-compiled Windows build needs `windres` (or the MSVC resource compiler) on the
+  build host; CI builds on `windows-latest`, where it is present.
 - **No divider cursor change in AppKit.** The portable window switches to a resize cursor
   over dividers; the AppKit split views keep the arrow.
 - **Window geometry is persisted** in `Window.bounds`; a second launch hands off to the
