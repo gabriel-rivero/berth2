@@ -2352,12 +2352,13 @@ impl Gui {
         state: &berth_core::AppState,
         area: crate::layout::Rect,
     ) -> Vec<ui::SidebarRow> {
+        let layout = self.sidebar_layout();
         match self.current_core_window() {
             Some(core_id) => ui::build_sidebar_for_window(
                 state,
                 &core_id,
                 area,
-                self.workspace_row_height(),
+                layout,
                 &self.theme,
                 self.sidebar_scroll,
                 self.sidebar_filter_arg(),
@@ -2365,7 +2366,7 @@ impl Gui {
             None => ui::build_sidebar_filtered(
                 state,
                 area,
-                self.workspace_row_height(),
+                layout,
                 &self.theme,
                 self.sidebar_scroll,
                 self.sidebar_filter_arg(),
@@ -2381,6 +2382,18 @@ impl Gui {
             ui::WORKSPACE_ROW_HEIGHT
         };
         logical * self.scale
+    }
+
+    /// The sidebar's scaled header and row height.
+    ///
+    /// Both are logical sizes multiplied by the window scale. The header used
+    /// to stay at a fixed pixel height while the rows grew, so at a 2× scale
+    /// the first row painted over the bottom of the "WORKSPACES" label.
+    fn sidebar_layout(&self) -> ui::SidebarLayout {
+        ui::SidebarLayout {
+            header: ui::sidebar_header(self.scale),
+            row_height: self.workspace_row_height(),
+        }
     }
 
     fn nav(&mut self) -> Nav {
@@ -3122,39 +3135,33 @@ impl Gui {
         } else {
             None
         };
+        let header = self.sidebar_layout().header;
         let font = self.chrome_font();
         let cell = font.cell();
+        // The label is centred in the scaled band rather than pinned to a fixed
+        // offset, which a taller header would leave stranded near the top.
+        let label_y = header.saturating_sub(cell.height) / 2;
         painter.text(
             font,
-            (12, 8),
+            (12, label_y),
             "WORKSPACES",
             font::TextStyle::BOLD,
             theme.text_tertiary,
             area.w.saturating_sub(24),
         );
-        let button = ui::new_workspace_button(area);
-        painter.text(
+        // Both header buttons draw a vector "+" instead of the glyph, so the
+        // icon grows with the header and stays crisp at a 2× scale.
+        let button = ui::new_workspace_button(area, header);
+        painter.plus_icon(ui::button_icon(button), theme.text_secondary);
+        let group_button = ui::new_group_button(area, header);
+        let icon = ui::button_icon(group_button);
+        painter.plus_icon(icon, theme.text_tertiary);
+        painter.glyph(
             font,
-            (
-                button.x + button.w.saturating_sub(cell.width) / 2,
-                button.y + button.h.saturating_sub(cell.height) / 2,
-            ),
-            "+",
-            font::TextStyle::NORMAL,
-            theme.text_secondary,
-            cell.width,
-        );
-        let group_button = ui::new_group_button(area);
-        painter.text(
-            font,
-            (
-                group_button.x + 2,
-                group_button.y + group_button.h.saturating_sub(cell.height) / 2,
-            ),
-            "+G",
+            (icon.right() + 1, label_y),
+            "G",
             font::TextStyle::NORMAL,
             theme.text_tertiary,
-            group_button.w.saturating_sub(2),
         );
         if let Some((text, active)) = &filter_text {
             painter.text(
@@ -3754,11 +3761,12 @@ impl Gui {
     }
 
     fn sidebar_pressed(&mut self, point: (usize, usize), nav: Nav) {
-        if ui::new_group_button(nav.sidebar).contains(point.0, point.1) {
+        let header = self.sidebar_layout().header;
+        if ui::new_group_button(nav.sidebar, header).contains(point.0, point.1) {
             self.new_group();
             return;
         }
-        if ui::new_workspace_button(nav.sidebar).contains(point.0, point.1) {
+        if ui::new_workspace_button(nav.sidebar, header).contains(point.0, point.1) {
             if let Err(error) = self.dispatch("workspace.create", serde_json::json!({})) {
                 eprintln!("berth-gui: workspace.create: {error}");
             }
@@ -3884,10 +3892,11 @@ impl Gui {
             })
             .unwrap_or((0, 0));
         let area = Rect::new(0, 0, self.sidebar_pixels(), height);
-        let row_height = self.workspace_row_height() as usize;
+        let layout = self.sidebar_layout();
+        let row_height = layout.row_height as usize;
         let capacity = area
             .h
-            .saturating_sub(ui::SIDEBAR_HEADER)
+            .saturating_sub(layout.header)
             .checked_div(row_height.max(1))
             .unwrap_or(1)
             .max(1);
@@ -3898,7 +3907,7 @@ impl Gui {
                     &state,
                     &core_id,
                     area,
-                    self.workspace_row_height(),
+                    layout,
                     &self.theme,
                     0,
                     self.sidebar_filter_arg(),
@@ -3906,7 +3915,7 @@ impl Gui {
                 None => ui::build_sidebar_filtered(
                     &state,
                     area,
-                    self.workspace_row_height(),
+                    layout,
                     &self.theme,
                     0,
                     self.sidebar_filter_arg(),

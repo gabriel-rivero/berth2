@@ -463,6 +463,22 @@ impl<'a> Painter<'a> {
         }
     }
 
+    /// Draw a "+" filling `rect`, two bars with a one-cell gap.
+    ///
+    /// A vector rather than the glyph: the header button is sized from the
+    /// scaled header, and the "+" has to grow with it instead of staying at the
+    /// chrome font's fixed size.
+    pub fn plus_icon(&mut self, rect: Rect, color: u32) {
+        let thickness = (rect.w / 5).max(1);
+        let mid_x = rect.x + rect.w / 2;
+        let mid_y = rect.y + rect.h / 2;
+        let half = thickness / 2;
+        let vertical = Rect::new(mid_x.saturating_sub(half), rect.y, thickness, rect.h);
+        let horizontal = Rect::new(rect.x, mid_y.saturating_sub(half), rect.w, thickness);
+        self.fill(vertical, color);
+        self.fill(horizontal, color);
+    }
+
     pub fn blend(&mut self, rect: Rect, color: u32, alpha: u8) {
         let Some(clip) = rect.intersect(self.bounds()) else {
             return;

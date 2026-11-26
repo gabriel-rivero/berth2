@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+
+- **The sidebar header no longer clips its label.** The header was a fixed 30
+  physical pixels while the row height scaled, so on a Retina display (35px of
+  chrome text) the first workspace row painted over the bottom of "WORKSPACES".
+  The header is now a logical height multiplied by the window scale, and the
+  label is centred in it.
+- **The header buttons scale with it.** The `+` and `+G` buttons were a fixed
+  28px box, so a 2× display left the icon the same size in a box twice as tall.
+  Both buttons are now sized from the scaled header, and the `+` is drawn as a
+  vector so it grows with them instead of staying at the chrome font's size.
+
 ## 0.21.2 — 2026-11-26
 
 ### Fixes

@@ -14,11 +14,31 @@ use crate::layout::{self, Divider, Rect};
 use crate::theme::Theme;
 
 pub const PANEL_PAD: usize = 2;
-pub const SIDEBAR_HEADER: usize = 30;
+/// The sidebar header height in logical points. It is scaled by the window
+/// before layout, like the row heights: the chrome font is sized in physical
+/// pixels, so a fixed physical header would be shorter than one line of its own
+/// label at a 2× scale and the first row would paint over it.
+pub const SIDEBAR_HEADER: f64 = 24.0;
 pub const TAB_HEIGHT: f64 = 28.0;
 pub const GROUP_ROW_HEIGHT: f64 = 26.0;
 pub const WORKSPACE_ROW_HEIGHT: f64 = 62.0;
 pub const WORKSPACE_ROW_COMPACT: f64 = 52.0;
+
+/// Header height in physical pixels for a window at `scale`.
+pub fn sidebar_header(scale: f64) -> usize {
+    (SIDEBAR_HEADER * scale).round() as usize
+}
+
+/// The sidebar's vertical measurements, both in physical pixels.
+///
+/// They travel together because both are logical sizes multiplied by the
+/// window scale; passing them separately let the header stay unscaled while the
+/// rows grew, which painted the first row over the header label.
+#[derive(Clone, Copy, Debug)]
+pub struct SidebarLayout {
+    pub header: usize,
+    pub row_height: f64,
+}
 
 /// One terminal cell in view coordinates. Rows count from the top of the
 /// visible screen; the window shifts them when the view scrolls.
@@ -224,22 +244,45 @@ pub struct Sidebar {
 }
 
 /// The header button that creates a workspace, matching the macOS "+".
-pub fn new_workspace_button(sidebar: Rect) -> Rect {
+///
+/// Both header buttons are sized from the scaled header height so they grow
+/// with the icon inside them; a fixed box left the glyph looking pinched on a
+/// Retina display.
+pub fn new_workspace_button(sidebar: Rect, header: usize) -> Rect {
+    let size = button_size(header);
     Rect::new(
-        sidebar.right().saturating_sub(30),
-        1,
-        28,
-        SIDEBAR_HEADER.saturating_sub(2),
+        sidebar.right().saturating_sub(size + 2),
+        0,
+        size,
+        header.max(size),
     )
 }
 
 /// The header button that creates a group, left of the workspace "+".
-pub fn new_group_button(sidebar: Rect) -> Rect {
+pub fn new_group_button(sidebar: Rect, header: usize) -> Rect {
+    let size = button_size(header);
     Rect::new(
-        sidebar.right().saturating_sub(60),
-        1,
-        28,
-        SIDEBAR_HEADER.saturating_sub(2),
+        sidebar.right().saturating_sub(size * 2 + 6),
+        0,
+        size,
+        header.max(size),
+    )
+}
+
+/// One header button's side: a square that fits the header, floored so the
+/// icon keeps a usable hit target at a 1× scale.
+fn button_size(header: usize) -> usize {
+    (header.saturating_sub(4)).max(20)
+}
+
+/// The square a header button's icon is drawn inside, centred in the button.
+pub fn button_icon(button: Rect) -> Rect {
+    let side = (button.w.min(button.h) * 2 / 5).max(7);
+    Rect::new(
+        button.x + button.w.saturating_sub(side) / 2,
+        button.y + button.h.saturating_sub(side) / 2,
+        side,
+        side,
     )
 }
 
@@ -416,7 +459,17 @@ pub fn build_sidebar(
     theme: &Theme,
     scroll: usize,
 ) -> Sidebar {
-    build_sidebar_filtered(state, area, row_height, theme, scroll, None)
+    build_sidebar_filtered(
+        state,
+        area,
+        SidebarLayout {
+            header: sidebar_header(2.0),
+            row_height,
+        },
+        theme,
+        scroll,
+        None,
+    )
 }
 
 fn workspace_matches_filter(
@@ -450,12 +503,12 @@ fn workspace_matches_filter(
 pub fn build_sidebar_filtered(
     state: &AppState,
     area: Rect,
-    row_height: f64,
+    layout: SidebarLayout,
     theme: &Theme,
     scroll: usize,
     filter: Option<&str>,
 ) -> Sidebar {
-    build_sidebar_scoped(state, None, area, row_height, theme, scroll, filter)
+    build_sidebar_scoped(state, None, area, layout, theme, scroll, filter)
 }
 
 /// The sidebar for one window: only the workspaces assigned to it.
@@ -468,20 +521,12 @@ pub fn build_sidebar_for_window(
     state: &AppState,
     window_id: &str,
     area: Rect,
-    row_height: f64,
+    layout: SidebarLayout,
     theme: &Theme,
     scroll: usize,
     filter: Option<&str>,
 ) -> Sidebar {
-    build_sidebar_scoped(
-        state,
-        Some(window_id),
-        area,
-        row_height,
-        theme,
-        scroll,
-        filter,
-    )
+    build_sidebar_scoped(state, Some(window_id), area, layout, theme, scroll, filter)
 }
 
 /// Whether a workspace belongs to the given window. `None` as the window means
@@ -499,13 +544,14 @@ fn build_sidebar_scoped(
     state: &AppState,
     window_id: Option<&str>,
     area: Rect,
-    row_height: f64,
+    layout: SidebarLayout,
     theme: &Theme,
     scroll: usize,
     filter: Option<&str>,
 ) -> Sidebar {
     let mut rows = Vec::new();
     let mut y = 0usize;
+    let row_height = layout.row_height;
     let group_height = (GROUP_ROW_HEIGHT * row_height / WORKSPACE_ROW_HEIGHT) as usize;
     let workspace_height = row_height as usize;
 
@@ -666,7 +712,7 @@ fn build_sidebar_scoped(
     // list area below the header.
     let total = rows.len();
     let offset = rows.get(scroll).map(|row| row.rect.y).unwrap_or(y);
-    let top = area.y.saturating_add(SIDEBAR_HEADER);
+    let top = area.y.saturating_add(layout.header);
     let mut visible = Vec::with_capacity(total.saturating_sub(scroll));
     for mut row in rows.into_iter().skip(scroll) {
         row.rect.y = top + row.rect.y.saturating_sub(offset);
@@ -835,6 +881,68 @@ mod tests {
     use super::*;
     use berth_core::model::{Orientation, PaneNode};
 
+    /// A 2× display, the scale the clipping was reported on.
+    fn test_layout() -> SidebarLayout {
+        SidebarLayout {
+            header: sidebar_header(2.0),
+            row_height: WORKSPACE_ROW_HEIGHT * 2.0,
+        }
+    }
+
+    /// The chrome font is sized in physical pixels (35px tall at 2×), so the
+    /// header has to be at least that tall or the first row paints over the
+    /// label. This is the bug the scaled header fixes.
+    #[test]
+    fn given_a_retina_scale_then_the_header_is_taller_than_the_chrome_text() {
+        let chrome_line = 35;
+        let layout = test_layout();
+        assert!(
+            layout.header >= chrome_line,
+            "header {} cannot hold a {chrome_line}px label",
+            layout.header
+        );
+        // And the scale has to matter: a fixed header would be identical here.
+        assert_eq!(sidebar_header(1.0) * 2, sidebar_header(2.0));
+    }
+
+    #[test]
+    fn given_a_header_when_rows_are_built_then_the_first_row_starts_below_it() {
+        let mut state = AppState::default();
+        state
+            .create_workspace(Some("one"), None, None, &berth_core::NullOps)
+            .unwrap();
+        let layout = test_layout();
+        let sidebar = build_sidebar(
+            &state,
+            Rect::new(0, 0, 200, 600),
+            layout.row_height,
+            &Theme::default(),
+            0,
+        );
+        assert_eq!(sidebar.rows[0].rect.y, layout.header);
+    }
+
+    /// The header buttons have to grow with the header, or a 2× display leaves
+    /// the icon the same size in a box twice as tall.
+    #[test]
+    fn given_a_retina_scale_then_the_header_buttons_grow_and_do_not_overlap() {
+        let area = Rect::new(0, 0, 200, 600);
+        let one = sidebar_header(1.0);
+        let two = sidebar_header(2.0);
+        let small = new_workspace_button(area, one);
+        let large = new_workspace_button(area, two);
+        assert!(large.w > small.w);
+        assert!(large.h > small.h);
+
+        let group = new_group_button(area, two);
+        assert!(
+            group.right() <= large.x,
+            "the group button {} overlaps the workspace button {}",
+            group.right(),
+            large.x
+        );
+    }
+
     #[test]
     fn given_a_tab_strip_then_the_drop_index_follows_the_pointer() {
         let tabs = vec![
@@ -993,7 +1101,7 @@ mod tests {
             &state,
             &first.id,
             Rect::new(0, 0, 200, 600),
-            WORKSPACE_ROW_HEIGHT,
+            test_layout(),
             &Theme::default(),
             0,
             None,
@@ -1014,7 +1122,7 @@ mod tests {
         let unscoped = build_sidebar_filtered(
             &state,
             Rect::new(0, 0, 200, 600),
-            WORKSPACE_ROW_HEIGHT,
+            test_layout(),
             &Theme::default(),
             0,
             None,
@@ -1068,7 +1176,7 @@ mod tests {
             &state,
             &window.id,
             Rect::new(0, 0, 200, 600),
-            WORKSPACE_ROW_HEIGHT,
+            test_layout(),
             &Theme::default(),
             0,
             None,
@@ -1108,7 +1216,7 @@ mod tests {
             &state,
             &first.id,
             Rect::new(0, 0, 200, 600),
-            WORKSPACE_ROW_HEIGHT,
+            test_layout(),
             &Theme::default(),
             0,
             None,
@@ -1296,7 +1404,7 @@ mod tests {
             0,
         );
         assert_eq!(sidebar.total, 1);
-        assert_eq!(sidebar.rows[0].rect.y, SIDEBAR_HEADER);
+        assert_eq!(sidebar.rows[0].rect.y, test_layout().header);
     }
 
     #[test]
@@ -1316,8 +1424,8 @@ mod tests {
         );
         assert_eq!(sidebar.total, 5);
         assert_eq!(sidebar.rows.len(), 3);
-        assert_eq!(sidebar.rows[0].rect.y, SIDEBAR_HEADER);
-        assert_eq!(sidebar.rows[1].rect.y, SIDEBAR_HEADER + 62);
+        assert_eq!(sidebar.rows[0].rect.y, test_layout().header);
+        assert_eq!(sidebar.rows[1].rect.y, test_layout().header + 62);
     }
 
     #[test]
