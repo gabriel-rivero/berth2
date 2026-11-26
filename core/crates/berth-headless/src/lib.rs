@@ -889,6 +889,21 @@ impl PtyHost {
         Ok(lock(&surface.prompts).prompt_lines())
     }
 
+    /// The prompt mark on one absolute line, if there is one. A jump targets a
+    /// line that is usually off screen, so the caller cannot read it from the
+    /// visible window of marks the screen view carries.
+    pub fn prompt_mark_at(
+        &self,
+        surface_id: &str,
+        line: usize,
+    ) -> Result<Option<prompt::PromptMark>, CoreError> {
+        let surface = self.surface(surface_id)?;
+        Ok(lock(&surface.prompts)
+            .all()
+            .find(|mark| mark.line == line)
+            .copied())
+    }
+
     /// Drain the raw output text that has accumulated since the last call.
     /// Empty when nothing has arrived, which is the common case: a shell only
     /// calls this when it is logging.
@@ -2040,7 +2055,7 @@ mod meta_tests {
         let mut scanner = SideChannelScanner::default();
         fixture.feed(&mut scanner, b"\x1b]133;A\x07$ sleep 2\r\n");
         fixture.feed(&mut scanner, b"\x1b]133;C\x07");
-        fixture.feed(&mut scanner, b"\x1b]133;D;0;2010\x07");
+        fixture.feed(&mut scanner, b"\x1b]133;D;0\x07");
         fixture.feed(&mut scanner, b"\x1b]133;A\x07$ ");
         let marks = lock(&fixture.prompts);
         let timed: Vec<_> = marks
@@ -2048,7 +2063,14 @@ mod meta_tests {
             .filter(|mark| mark.kind == prompt::PromptKind::Prompt)
             .map(|mark| (mark.line, mark.status, mark.duration_ms))
             .collect();
-        assert_eq!(timed, vec![(0, None, None), (1, Some(0), Some(2010))]);
+        let duration = timed[1].2.expect("the reader timed the command");
+        assert_eq!(timed[0].2, None);
+        assert_eq!(timed[1].1, Some(0));
+        // The shell reported no duration, so the reader measured C -> D.
+        assert!(
+            duration < 60_000,
+            "implausible measured duration: {duration}"
+        );
     }
 
     #[test]
@@ -2742,7 +2764,7 @@ fn record_prompt_mark(payload: &[u8], share: &ReaderShare) {
         return;
     }
     let mut marks = lock(&share.prompts);
-    marks.record(line, event);
+    marks.record(line, event, std::time::Instant::now());
     // Pruning keeps `capacity` lines of history behind the live screen, so a
     // mark survives scrolling; the view offset is not the bound.
     marks.prune(scrollback_len, share.scrollback);

@@ -226,8 +226,9 @@ impl Recent {
     }
 
     /// Rank `launches` for a picker: recently chosen first, in recency order,
-    /// then everything else in its configured order. A name that is no longer
-    /// configured is dropped rather than shown as a dead row.
+    /// then everything else in its configured order. A remembered name that is
+    /// no longer configured is skipped rather than shown as a dead row; it is
+    /// not forgotten here, so a renamed launch keeps its place if it comes back.
     pub fn rank<'a>(&self, launches: &'a [Launch]) -> Vec<&'a Launch> {
         let mut ordered: Vec<&Launch> = Vec::with_capacity(launches.len());
         for name in &self.names {

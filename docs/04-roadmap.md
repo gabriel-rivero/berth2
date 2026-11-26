@@ -149,10 +149,11 @@ Goal: the prompt becomes a place in the buffer, not a string in a stream.
   its absolute grid line, `screen_view` carries the visible ones, the portable window
   draws a green or red tick per prompt plus a dim mark where output began, a gutter
   click brings that command to the top of the pane, and `previousPrompt`/`nextPrompt`
-  walk them (`Cmd+Shift+Up`/`Down`, `Ctrl+Shift+Up`/`Down`). **Finished in 0.21.1**:
-  `D` also carries a duration (`133;D;0;1234`), which is kept on the prompt below it and
-  shown in the status line as `1.5s · ok` for a few seconds when a jump or a gutter click
-  lands there. The gutter costs columns only in a pane whose shell emits marks, and the
+  walk them (`Cmd+Shift+Up`/`Down`, `Ctrl+Shift+Up`/`Down`). **Finished in 0.21.1**: the
+  reader times the gap between `C` and `D` itself, because no documented dialect puts a
+  duration on `D` (FinalTerm, iTerm2, kitty and VS Code all define it as `D;[status]`),
+  and that timing is shown in the status line as `1.5s · ok` for a few seconds when a
+  jump or a gutter click lands there. The gutter costs columns only in a pane whose shell emits marks, and the
   AppKit shell inherits Ghostty's own shell integration rather than this gutter.
 - **Search parity**: search in the AppKit shell; regex and whole-word toggles; search
   across the panes of a workspace, not just the focused scrollback. **Landed in 0.17.0**:
@@ -213,9 +214,11 @@ Goal: the prompt becomes a place in the buffer, not a string in a stream.
 
 **Done when:** a failing command can be found by jumping prompt to prompt and reading its
 status, a search in one pane reaches the others, a selection can be made without the
-mouse, and a WSL/Git Bash/admin preset starts in one click. The first three hold; the
-fourth is met for WSL and Git Bash through `profiles`, while an admin preset is an
-elevated launch and stays at 1.0 with [the rest of the elevated-pane work](#known-gaps-after-0170).
+mouse, and a WSL/Git Bash/admin preset starts in one click. The first three hold in the
+portable window; the fourth holds there for WSL and Git Bash through `profiles`, while an
+admin preset is an elevated launch and stays at 1.0 with
+[the rest of the elevated-pane work](#known-gaps-after-0170). The AppKit shell reaches none
+of this through a picker yet; see [the Swift gap table](#not-implemented-in-the-swift-appkit-shell).
 
 ## 0.18 — Durability and agent depth (≈3 weeks)
 
@@ -425,11 +428,11 @@ they are the 1.0 AppKit parity work, recorded here so the gap is visible in one 
 
 | Area | Portable window | Swift (AppKit) shell |
 | --- | --- | --- |
-| Prompt gutter | Draws a per-prompt tick, red on failure, plus the output mark | No gutter; inherits Ghostty's marks and `jump_to_prompt`, and now shows the duration in its status text on a jump |
+| Prompt gutter | Draws a per-prompt tick, red on failure, plus the output mark, and shows the command's timing on a jump | No gutter and no status bar; inherits Ghostty's marks and `jump_to_prompt` |
 | Paste history | `pasteHistory` picker over the last twelve clipboards | Not read; `Cmd+Shift+V` pastes through Ghostty |
 | Profiles and commands | `profiles`/`commands` indexed in the palette and openable | Pushed to the core with `launch.configure`, but there is no menu or picker to open one |
 | Named layouts | `layout.save`/`layout.open` from the palette and CLI | No menu entry or picker |
-| Palette | Indexes actions, launches, layouts and the live session, ranked by recency | No command palette |
+| Palette | Indexes actions, launches, layouts and the live session, ranked by recency | Fixed list of 18 actions; no launches, layouts or session rows, and no recency |
 | Output rules | `outputRules` tints matching rows | Not read |
 | Session logging | `sessionLog` appends each pane to `sessions/<id>.log` | Not read |
 | Scrollback restore | `scrollbackRestore` replays the last screen on relaunch | Not read; Ghostty owns the surface |

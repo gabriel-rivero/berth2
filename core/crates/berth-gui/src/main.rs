@@ -952,8 +952,9 @@ struct Gui {
     /// Last result of the Settings "reinstall hooks" row.
     hooks_notice: Option<String>,
     /// How long the command above the prompt the user just jumped to took,
-    /// shown in the status line for a moment. Cleared when it expires.
-    prompt_timing: Option<(String, Instant)>,
+    /// shown in the status line for a moment. Keyed by surface so a switch to
+    /// another pane does not leave one pane's timing beside another's name.
+    prompt_timing: Option<(String, String, Instant)>,
     scroll: HashMap<String, usize>,
     last_meta: HashMap<String, AppliedMeta>,
     flashes: HashMap<String, Instant>,
@@ -1437,33 +1438,29 @@ impl Gui {
         if self
             .prompt_timing
             .as_ref()
-            .is_some_and(|(_, at)| at.elapsed() >= PROMPT_TIMING_DURATION)
+            .is_some_and(|(_, _, at)| at.elapsed() >= PROMPT_TIMING_DURATION)
         {
             self.prompt_timing = None;
             self.request_redraw();
         }
     }
 
-    /// Show a command's duration in the status line after a jump. Only a prompt
-    /// the shell timed has anything to say; an untimed prompt clears the notice
-    /// rather than leaving the previous command's timing up.
-    fn show_prompt_timing(&mut self, mark: Option<&prompt::PromptMark>) {
-        let Some(mark) = mark else {
-            return;
-        };
-        let timing = match (mark.duration_ms, mark.status) {
-            (Some(ms), status) => {
-                let outcome = if status.is_some_and(|status| status != 0) {
-                    "failed"
-                } else {
-                    "ok"
-                };
-                format!("{} · {outcome}", format_duration(ms))
+    /// Show a command's duration in the status line after a jump. A prompt
+    /// with nothing to report clears the notice, so a jump cannot leave the
+    /// previous command's timing beside a different prompt.
+    fn show_prompt_timing(&mut self, surface_id: &str, mark: Option<&prompt::PromptMark>) {
+        let timing = mark.and_then(|mark| match (mark.duration_ms, mark.status) {
+            (Some(ms), Some(status)) => {
+                let outcome = if status == 0 { "ok" } else { "failed" };
+                Some(format!("{} · {outcome}", format_duration(ms)))
             }
-            (None, Some(status)) if status != 0 => format!("exit {status}"),
-            (None, _) => return,
-        };
-        self.prompt_timing = Some((timing, Instant::now()));
+            // No status was reported, so the outcome is unknown: show only the
+            // time rather than claiming success.
+            (Some(ms), None) => Some(format_duration(ms)),
+            (None, Some(status)) if status != 0 => Some(format!("exit {status}")),
+            (None, _) => None,
+        });
+        self.prompt_timing = timing.map(|timing| (surface_id.to_string(), timing, Instant::now()));
     }
 
     /// When the loop next has to run with nothing else waking it: the blink
@@ -1486,7 +1483,7 @@ impl Gui {
                 consider(end);
             }
         }
-        if let Some((_, at)) = &self.prompt_timing {
+        if let Some((_, _, at)) = &self.prompt_timing {
             let end = *at + PROMPT_TIMING_DURATION;
             if end > now {
                 consider(end);
@@ -2286,10 +2283,13 @@ impl Gui {
         if broadcast {
             parts.push("BROADCAST".to_string());
         }
+        let active = self.active_surface();
         if let Some((timing, _)) = self
             .prompt_timing
             .as_ref()
-            .filter(|(_, at)| at.elapsed() < PROMPT_TIMING_DURATION)
+            .filter(|(_, _, at)| at.elapsed() < PROMPT_TIMING_DURATION)
+            .filter(|(surface, _, _)| active.as_deref() == Some(surface.as_str()))
+            .map(|(_, timing, at)| (timing, at))
         {
             parts.push(timing.clone());
         }
@@ -3731,7 +3731,7 @@ impl Gui {
         let offset = view.scrollback_len.saturating_sub(target);
         if let Ok(applied) = self.host.set_scrollback(surface_id, offset) {
             self.scroll.insert(surface_id.to_string(), applied);
-            self.show_prompt_timing(Some(mark));
+            self.show_prompt_timing(surface_id, Some(mark));
             self.request_redraw();
         }
     }
@@ -5097,12 +5097,11 @@ impl Gui {
             .filter(|action| panel::fuzzy_match(query, action.label()))
             .map(PaletteEntry::Action)
             .collect();
-        // Launches come last and in config order, so the palette's first rows
-        // stay the app commands people reach for.
-        // Each row is matched against the label it shows, so typing what the
-        // palette prints finds it.
-        // The core ranks them by what was opened last, which is the same order
-        // `berth profiles` prints, so the two shells cannot disagree.
+        // Launches come after the actions, so the palette's first rows stay the
+        // app commands people reach for. Each row is matched against the label
+        // it shows, so typing what the palette prints finds it. The core ranks
+        // them by what was opened last, which is the order `berth profiles`
+        // prints too.
         let (profiles, commands) = {
             let state = lock(&self.state);
             let names = |launches: &[berth_core::launch::Launch]| {
@@ -5936,14 +5935,12 @@ impl Gui {
         };
         let offset = view.scrollback_len.saturating_sub(target);
         if let Ok(applied) = self.host.set_scrollback(&surface_id, offset) {
-            self.scroll.insert(surface_id, applied);
+            self.scroll.insert(surface_id.clone(), applied);
         }
-        let mark = view
-            .prompt_marks
-            .iter()
-            .find(|mark| mark.line == target)
-            .copied();
-        self.show_prompt_timing(mark.as_ref());
+        // The jump target is usually off screen, so it is not in the view's
+        // visible marks: ask the host for the mark on that line.
+        let mark = self.host.prompt_mark_at(&surface_id, target).ok().flatten();
+        self.show_prompt_timing(&surface_id, mark.as_ref());
         self.request_redraw();
     }
 

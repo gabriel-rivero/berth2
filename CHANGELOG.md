@@ -4,16 +4,18 @@
 
 ### Features
 
-- **Command timing.** OSC 133/633 `D` carries a duration after the exit status
-  (`133;D;0;1234`), which the reader now keeps on the prompt below it. Jumping to a
-  prompt with `previousPrompt`/`nextPrompt` or clicking its gutter tick shows how long
-  that command took in the status line (`1.5s · ok`, `4m12s · failed`) for a few
-  seconds. A shell that reports only a status still shows a non-zero exit as `exit N`,
-  and a shell that reports neither leaves the line alone.
+- **Command timing.** The reader times each command between the `C` and `D` prompt marks
+  its shell emits, because no documented dialect carries a duration on `D`
+  (`133;D;[status]` is the whole of it in FinalTerm, iTerm2, kitty and VS Code). Jumping
+  to a prompt with `previousPrompt`/`nextPrompt` or clicking its gutter tick shows the
+  timing in the status line (`1.5s · ok`, `4m12s · failed`) for a few seconds; a failed
+  command with no `C` to time still reads as `exit N`.
+- **A shell that does report a duration is honoured.** If a `D` does carry a second
+  number, it is taken as milliseconds and used instead of the measured gap.
 - **Recent-choice ranking for launches.** The core records which profile or command was
-  opened last, so `berth profiles`, `berth new --profile` and the portable palette list
-  them in that order. Both shells read the one ranking, so the palette and the CLI
-  cannot disagree about what "recent" means.
+  opened last, so `berth profiles` and the portable palette list them in that order. Both
+  read the one ranking the core keeps, so they cannot disagree about what "recent" means;
+  the AppKit shell pushes its profiles to the same core but has no picker yet.
 
 ### Fixes
 

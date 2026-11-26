@@ -2041,6 +2041,45 @@ mod tests {
     }
 
     #[test]
+    fn given_opened_commands_then_launch_list_ranks_them_too() {
+        use crate::launch::{Launch, Program};
+        let command = |name: &str| Launch {
+            name: name.into(),
+            command: Some(Program::One("/bin/true".into())),
+            args: Vec::new(),
+            env: Default::default(),
+            cwd: None,
+            shell: None,
+            label: None,
+        };
+        let mut st = AppState::default();
+        st.launches.commands = vec![command("one"), command("two"), command("three")];
+        call(&mut st, "workspace.create", json!({"name": "shell"}));
+        call(&mut st, "launch.open", json!({"name": "three"}));
+        let listed = call(&mut st, "launch.list", json!({}));
+        let names: Vec<&str> = listed["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|launch| launch["name"].as_str())
+            .collect();
+        assert_eq!(names, vec!["three", "one", "two"]);
+    }
+
+    #[test]
+    fn given_a_failed_launch_then_nothing_is_recorded_as_recent() {
+        let mut st = AppState::default();
+        call(&mut st, "workspace.create", json!({"name": "shell"}));
+        let r = dispatch(
+            &mut st,
+            &NullOps,
+            &req("launch.open", json!({"name": "nope"})),
+        );
+        assert!(!r.ok);
+        assert_eq!(st.recent_launches.names(), &[] as &[String]);
+    }
+
+    #[test]
     fn given_an_unknown_launch_then_opening_it_is_a_not_found() {
         let mut st = AppState::default();
         let r = dispatch(

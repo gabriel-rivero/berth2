@@ -18,6 +18,7 @@
 //! command above it failed.
 
 use std::collections::BTreeMap;
+use std::time::Instant;
 
 /// What a program said about a row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,8 +38,8 @@ pub struct PromptMark {
     /// shell reported one and there was a command to report on.
     pub status: Option<i32>,
     /// How long the command above this prompt took, in milliseconds, when the
-    /// shell reported it. OSC 133 `D` may carry a duration after the status
-    /// (`133;D;0;1234`), and OSC 633 always does.
+    /// shell went beyond the spec and reported one. FinalTerm, iTerm2, kitty and
+    /// VS Code all define `D` as `D;[status]` only, so this is usually `None`.
     pub duration_ms: Option<u64>,
 }
 
@@ -53,8 +54,8 @@ impl PromptMark {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct CommandReport {
     pub status: Option<i32>,
-    /// Wall-clock duration in milliseconds. OSC 633 puts it after the status
-    /// (`633;D;0;1234`); a plain OSC 133 `D` usually carries only the status.
+    /// A duration in milliseconds, read from a second `D` field. No documented
+    /// dialect sends one, so this only fills in for a shell that extends `D`.
     pub duration_ms: Option<u64>,
 }
 
@@ -77,12 +78,18 @@ pub struct PromptMarks {
     marks: BTreeMap<usize, PromptMark>,
     /// The last `D`, waiting for the prompt that follows it.
     pending: Option<CommandReport>,
+    /// When the reader saw the last `C`, so a command's duration can be
+    /// measured here. No documented shell reports one, so the terminal times
+    /// the gap between `C` and `D` itself.
+    started: Option<std::time::Instant>,
     pruned_below: usize,
 }
 
 impl PromptMarks {
-    /// Record one event at `line`.
-    pub fn record(&mut self, line: usize, event: Event) {
+    /// Record one event at `line`, seen at `now`. The instant is passed in
+    /// rather than read here so the module stays a pure function of its input:
+    /// a test can time a command without sleeping.
+    pub fn record(&mut self, line: usize, event: Event, now: Instant) {
         match event {
             Event::PromptStart => {
                 let report = self.pending.take().unwrap_or_default();
@@ -111,8 +118,20 @@ impl PromptMarks {
                     status: None,
                     duration_ms: None,
                 });
+                self.started = Some(now);
             }
-            Event::CommandEnd(report) => self.pending = Some(report),
+            Event::CommandEnd(report) => {
+                // A shell that reported its own duration wins; otherwise the
+                // gap this reader measured between `C` and `D` is the timing.
+                let measured = self
+                    .started
+                    .take()
+                    .map(|started| now.saturating_duration_since(started).as_millis() as u64);
+                self.pending = Some(CommandReport {
+                    duration_ms: report.duration_ms.or(measured),
+                    ..report
+                });
+            }
         }
     }
 
@@ -156,6 +175,9 @@ impl PromptMarks {
     pub fn clear(&mut self) {
         self.marks.clear();
         self.pending = None;
+        // A restart must not carry a `C` from the old shell, or the first `D`
+        // would report the whole gap as one command's duration.
+        self.started = None;
         self.pruned_below = 0;
     }
 }
@@ -170,16 +192,22 @@ pub fn parse(payload: &[u8]) -> Option<Event> {
     match fields.next()? {
         b"A" | b"B" => Some(Event::PromptStart),
         b"C" => Some(Event::CommandStart),
-        // `D` carries the exit status first (`D;1`), then an optional duration
-        // in milliseconds (`D;1;1234`).
+        // The documented form is `D` or `D;<status>`. Fields are read by
+        // position, and an unparseable one ends the scan: letting later
+        // numbers slide left would make `D;none;7` report status 7.
         b"D" => {
-            let mut numbers = fields
-                .filter_map(|field| std::str::from_utf8(field).ok())
-                .filter_map(|field| field.trim().parse::<u64>().ok());
-            let status = numbers.next().map(|status| status as i32);
+            let mut rest = fields.map(|field| std::str::from_utf8(field).ok());
+            let status = rest
+                .next()
+                .flatten()
+                .and_then(|field| field.trim().parse::<i32>().ok());
+            let duration_ms = rest
+                .next()
+                .flatten()
+                .and_then(|field| field.trim().parse::<u64>().ok());
             Some(Event::CommandEnd(CommandReport {
                 status,
-                duration_ms: numbers.next(),
+                duration_ms,
             }))
         }
         _ => None,
@@ -189,6 +217,12 @@ pub fn parse(payload: &[u8]) -> Option<Event> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A fixed clock base. `record` only takes the difference between two
+    /// instants, so the tests advance this by hand instead of sleeping.
+    fn t(ms: u64) -> Instant {
+        Instant::now() + std::time::Duration::from_millis(ms)
+    }
 
     #[test]
     fn given_an_osc_133_sequence_then_it_parses_as_an_event() {
@@ -216,7 +250,9 @@ mod tests {
     }
 
     #[test]
-    fn given_a_finished_command_with_a_duration_then_both_fields_are_read() {
+    fn given_a_second_numeric_field_then_it_is_read_as_a_duration() {
+        // No documented dialect sends this, but a shell that extends `D` costs
+        // nothing to support as long as the status keeps its position.
         assert_eq!(
             parse(b"133;D;0;1234"),
             Some(Event::CommandEnd(CommandReport {
@@ -234,13 +270,47 @@ mod tests {
     }
 
     #[test]
-    fn given_a_vs_code_mark_with_a_non_numeric_field_then_the_duration_is_skipped() {
+    fn given_a_finished_command_with_a_non_numeric_field_then_the_duration_is_skipped() {
         // A field that is not a number is not a duration, so the report keeps
         // the status and no timing rather than shifting the wrong field in.
         assert_eq!(
             parse(b"133;D;7;none"),
             Some(Event::CommandEnd(CommandReport {
                 status: Some(7),
+                duration_ms: None
+            }))
+        );
+    }
+
+    #[test]
+    fn given_a_non_numeric_status_then_the_duration_does_not_become_the_status() {
+        // Fields are positional. A later number must never slide into the
+        // status slot, or a shell that omits the status could report success.
+        assert_eq!(
+            parse(b"133;D;none;7"),
+            Some(Event::CommandEnd(CommandReport {
+                status: None,
+                // `7` is in the duration slot, which is where it was sent.
+                duration_ms: Some(7)
+            }))
+        );
+        assert_eq!(
+            parse(b"133;D;-1"),
+            Some(Event::CommandEnd(CommandReport {
+                status: Some(-1),
+                duration_ms: None
+            }))
+        );
+    }
+
+    #[test]
+    fn given_an_exit_status_past_i32_then_it_is_not_wrapped_into_success() {
+        // iTerm2 defines the status as 0-255, but a truncated cast would turn
+        // 2^32 into 0 and paint a failed command green.
+        assert_eq!(
+            parse(b"133;D;4294967296"),
+            Some(Event::CommandEnd(CommandReport {
+                status: None,
                 duration_ms: None
             }))
         );
@@ -264,7 +334,7 @@ mod tests {
     #[test]
     fn given_a_prompt_with_no_command_before_it_then_it_has_no_status() {
         let mut marks = PromptMarks::default();
-        marks.record(0, Event::PromptStart);
+        marks.record(0, Event::PromptStart, t(0));
         let all: Vec<_> = marks.all().copied().collect();
         assert_eq!(
             all,
@@ -280,16 +350,17 @@ mod tests {
     #[test]
     fn given_a_prompt_then_a_command_start_then_output_then_a_prompt_then_the_marks_split_by_row() {
         let mut marks = PromptMarks::default();
-        marks.record(0, Event::PromptStart);
-        marks.record(1, Event::CommandStart);
+        marks.record(0, Event::PromptStart, t(0));
+        marks.record(1, Event::CommandStart, t(0));
         marks.record(
             1,
             Event::CommandEnd(CommandReport {
                 status: Some(0),
                 duration_ms: None,
             }),
+            t(0),
         );
-        marks.record(2, Event::PromptStart);
+        marks.record(2, Event::PromptStart, t(0));
         let all: Vec<_> = marks.all().copied().collect();
         assert_eq!(
             all,
@@ -310,7 +381,8 @@ mod tests {
                     line: 2,
                     kind: PromptKind::Prompt,
                     status: Some(0),
-                    duration_ms: None
+                    // The reader measured both marks at the same instant.
+                    duration_ms: Some(0)
                 },
             ]
         );
@@ -319,15 +391,16 @@ mod tests {
     #[test]
     fn given_a_failed_command_then_the_next_prompt_carries_its_status() {
         let mut marks = PromptMarks::default();
-        marks.record(0, Event::PromptStart);
+        marks.record(0, Event::PromptStart, t(0));
         marks.record(
             1,
             Event::CommandEnd(CommandReport {
                 status: Some(1),
                 duration_ms: Some(2500),
             }),
+            t(0),
         );
-        marks.record(1, Event::PromptStart);
+        marks.record(1, Event::PromptStart, t(0));
         let all: Vec<_> = marks.all().copied().collect();
         assert_eq!(all.len(), 2);
         assert_eq!(all[1].status, Some(1));
@@ -344,9 +417,10 @@ mod tests {
                 status: Some(130),
                 duration_ms: None,
             }),
+            t(0),
         );
-        marks.record(4, Event::PromptStart);
-        marks.record(4, Event::PromptStart);
+        marks.record(4, Event::PromptStart, t(0));
+        marks.record(4, Event::PromptStart, t(0));
         let all: Vec<_> = marks.all().copied().collect();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].kind, PromptKind::Prompt);
@@ -356,8 +430,8 @@ mod tests {
     #[test]
     fn given_a_command_start_on_the_prompt_row_then_the_prompt_is_kept() {
         let mut marks = PromptMarks::default();
-        marks.record(0, Event::PromptStart);
-        marks.record(0, Event::CommandStart);
+        marks.record(0, Event::PromptStart, t(0));
+        marks.record(0, Event::CommandStart, t(0));
         let all: Vec<_> = marks.all().copied().collect();
         assert_eq!(all[0].kind, PromptKind::Prompt);
     }
@@ -365,8 +439,8 @@ mod tests {
     #[test]
     fn given_a_scrolled_prompt_then_pruning_drops_marks_past_the_scrollback() {
         let mut marks = PromptMarks::default();
-        marks.record(10, Event::PromptStart);
-        marks.record(200, Event::PromptStart);
+        marks.record(10, Event::PromptStart, t(0));
+        marks.record(200, Event::PromptStart, t(0));
         marks.prune(250, 100);
         let lines: Vec<_> = marks.all().map(|mark| mark.line).collect();
         assert_eq!(lines, vec![200]);
@@ -375,28 +449,43 @@ mod tests {
     #[test]
     fn given_a_timed_command_then_the_next_prompt_carries_its_duration() {
         let mut marks = PromptMarks::default();
-        marks.record(0, Event::PromptStart);
-        marks.record(1, Event::CommandStart);
+        marks.record(0, Event::PromptStart, t(0));
+        marks.record(1, Event::CommandStart, t(0));
         marks.record(
             1,
             Event::CommandEnd(CommandReport {
                 status: Some(0),
-                duration_ms: Some(900),
+                duration_ms: None,
             }),
+            t(900),
         );
-        marks.record(2, Event::PromptStart);
+        marks.record(2, Event::PromptStart, t(900));
         let all: Vec<_> = marks.all().copied().collect();
         assert_eq!(all[2].status, Some(0));
+        // Nothing on the wire reported a duration, so this is the gap the
+        // reader measured between `C` and `D`.
         assert_eq!(all[2].duration_ms, Some(900));
         // A command start has no timing of its own.
         assert_eq!(all[1].duration_ms, None);
     }
 
     #[test]
+    fn given_a_restart_then_the_old_command_start_is_forgotten() {
+        let mut marks = PromptMarks::default();
+        marks.record(0, Event::CommandStart, t(0));
+        marks.clear();
+        marks.record(1, Event::CommandEnd(CommandReport::default()), t(60_000));
+        marks.record(2, Event::PromptStart, t(60_000));
+        let all: Vec<_> = marks.all().copied().collect();
+        // Without clearing `started`, the restart would report a minute.
+        assert_eq!(all[0].duration_ms, None);
+    }
+
+    #[test]
     fn given_a_visible_window_then_only_its_marks_are_returned() {
         let mut marks = PromptMarks::default();
         for line in [0, 5, 9, 10, 20] {
-            marks.record(line, Event::PromptStart);
+            marks.record(line, Event::PromptStart, t(0));
         }
         let visible: Vec<_> = marks.visible(5, 5).iter().map(|mark| mark.line).collect();
         assert_eq!(visible, vec![5, 9]);

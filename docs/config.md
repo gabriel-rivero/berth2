@@ -187,11 +187,12 @@ to an ordinary paste instead of doing nothing; a multi-line entry still asks for
 paste confirmation.
 
 `previousPrompt` and `nextPrompt` walk the prompts a shell marks with OSC 133/633, and
-clicking a gutter tick brings that command's output to the top of the pane. A shell that
-reports a duration (`133;D;0;1234`) also gets that timing in the status line for a few
-seconds after the jump — `1.5s · ok`, or `4m12s · failed` — and a non-zero exit shows as
-`exit N` even when no duration was reported. The gutter only takes columns once a pane's
-shell emits a mark, so a shell without integration keeps the full grid.
+clicking a gutter tick brings that command's output to the top of the pane. The window
+times the command itself, between the `C` and `D` marks the shell emits, and shows the
+result in the status line for a few seconds after the jump — `1.5s · ok`, or
+`4m12s · failed`. A pane that emitted no `C` has nothing to time, so its prompt shows
+only the outcome. The gutter takes columns only once a pane's shell emits a mark, so a
+shell without integration keeps the full grid.
 
 Search also takes two toggles while the panel is open: `Cmd/Ctrl+R` switches to a
 regular expression, and `Cmd/Ctrl+W` restricts the match to whole words. A query
