@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Tests
+
+- **The tab and workspace chord swap is pinned.** Ghostty's `Cmd+T` opens a new
+  tab; in Berth's model that is a workspace with its own split tree, while
+  `Cmd+T` was bound to the tab-in-pane command, so splitting afterwards halved
+  the same pane. Rebinding `newWorkspace` to `cmd+t` and `newTab` to
+  `cmd+shift+t` restores the familiar behaviour, and a test now covers the
+  override both ways so the two chords cannot silently resolve to each other
+  (the shortcut table is searched in order, so a duplicate lets the first
+  action win without a word). No default changes: the swap is a `config.json`
+  preference, so it needs no new build to take effect.
+
 ## 0.21.3 — 2026-11-26
 
 ### Fixes
