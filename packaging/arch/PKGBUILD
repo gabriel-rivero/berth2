@@ -1,6 +1,6 @@
 # Maintainer: Gabriel Rivero <gabriel.rivero.sa@gmail.com>
 pkgname=berth
-pkgver=0.21.1
+pkgver=0.21.2
 pkgrel=1
 pkgdesc="Terminal workspace for running coding agents side by side"
 arch=('x86_64' 'aarch64')
