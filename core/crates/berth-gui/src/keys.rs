@@ -493,6 +493,36 @@ mod tests {
         assert!(chord_for(&Key::Named(NamedKey::Shift), ModifiersState::SHIFT).is_none());
     }
 
+    /// Ghostty muscle memory: `Cmd+T` should open a new "tab", which in Berth's
+    /// model is a workspace with its own split tree, not a second surface in
+    /// one pane. The tab-in-pane action moves aside to `Cmd+Shift+T`. This
+    /// pins that a config override of both chords resolves to the swapped
+    /// commands rather than to each other.
+    #[test]
+    fn given_the_tab_and_workspace_chords_swapped_then_each_resolves_to_its_action() {
+        let mut overrides = HashMap::new();
+        overrides.insert("newTab".to_string(), "cmd+shift+t".to_string());
+        overrides.insert("newWorkspace".to_string(), "cmd+t".to_string());
+        let shortcuts = Shortcuts::build(&overrides);
+
+        let key = Key::Character("t".into());
+        assert_eq!(
+            resolve(&key, ModifiersState::SUPER, false, &shortcuts),
+            Some(Command::for_action(Action::NewWorkspace)),
+            "Cmd+T must create a workspace, which is Berth's new tab"
+        );
+        assert_eq!(
+            resolve(
+                &key,
+                ModifiersState::SUPER | ModifiersState::SHIFT,
+                false,
+                &shortcuts
+            ),
+            Some(Command::for_action(Action::NewTab)),
+            "Cmd+Shift+T must be the tab-in-pane action"
+        );
+    }
+
     #[test]
     fn given_a_digit_when_primary_is_held_then_it_selects_a_workspace() {
         let command = resolve(
