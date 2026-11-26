@@ -1,6 +1,6 @@
 # Known gaps and missing behavior
 
-Last audited: 2026-11-26, code at the 0.21.1 release. The audit covers real text,
+Last audited: 2026-11-26, code at the 0.21.2 release. The audit covers real text,
 scrollback, selection with auto-scroll, clipboard, mouse reporting, IME, links, OSC events,
 prompt marks and command timing, copy mode, paste history, search across panes, output
 rules, session logging, scrollback restore, file drops, quality-of-life window work
@@ -91,8 +91,9 @@ app itself has the gaps listed in
   name or OSC title is not reordered there.
 - **The palette is one list of everything.** It indexes actions, profiles, commands,
   layouts and the live session, and remembers the keys picked in each window so an empty
-  palette opens on the last thing. Its session rows are still core-global, so a window's
-  palette can list another window's workspace, and the list is rebuilt on every paint.
+  palette opens on the last thing. Its session rows are scoped to the window that opened
+  it, so a window cannot list or switch to another window's workspace; the list is still
+  rebuilt on every paint.
 
 ### Terminal engine
 

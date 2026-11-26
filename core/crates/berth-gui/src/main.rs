@@ -2341,6 +2341,39 @@ impl Gui {
         }
     }
 
+    /// The sidebar rows for this window.
+    ///
+    /// Painting and hit-testing must build the same list: a row that is drawn
+    /// has to be clickable, and a row that is not drawn must not be. Each
+    /// window sees only its own workspaces, so this resolves the window first
+    /// and never falls back to the global selection.
+    fn sidebar_rows(
+        &self,
+        state: &berth_core::AppState,
+        area: crate::layout::Rect,
+    ) -> Vec<ui::SidebarRow> {
+        match self.current_core_window() {
+            Some(core_id) => ui::build_sidebar_for_window(
+                state,
+                &core_id,
+                area,
+                self.workspace_row_height(),
+                &self.theme,
+                self.sidebar_scroll,
+                self.sidebar_filter_arg(),
+            ),
+            None => ui::build_sidebar_filtered(
+                state,
+                area,
+                self.workspace_row_height(),
+                &self.theme,
+                self.sidebar_scroll,
+                self.sidebar_filter_arg(),
+            ),
+        }
+        .rows
+    }
+
     fn workspace_row_height(&self) -> f64 {
         let logical = if self.config.compact_sidebar {
             ui::WORKSPACE_ROW_COMPACT
@@ -2622,15 +2655,7 @@ impl Gui {
         };
         let rows = if area.x > 0 {
             let state = lock(&self.state);
-            ui::build_sidebar_filtered(
-                &state,
-                Rect::new(0, 0, area.x, height),
-                self.workspace_row_height(),
-                &theme,
-                self.sidebar_scroll,
-                self.sidebar_filter_arg(),
-            )
-            .rows
+            self.sidebar_rows(&state, Rect::new(0, 0, area.x, height))
         } else {
             Vec::new()
         };
@@ -3523,15 +3548,7 @@ impl Gui {
     fn middle_pressed(&mut self, point: (usize, usize)) {
         let nav = self.nav();
         let state = lock(&self.state);
-        let rows = ui::build_sidebar_filtered(
-            &state,
-            Rect::new(0, 0, nav.area.x, nav.height),
-            self.workspace_row_height(),
-            &self.theme,
-            self.sidebar_scroll,
-            self.sidebar_filter_arg(),
-        )
-        .rows;
+        let rows = self.sidebar_rows(&state, Rect::new(0, 0, nav.area.x, nav.height));
         drop(state);
         if let Some(row) = rows.iter().find(|row| row.rect.contains(point.0, point.1))
             && let ui::RowKind::Workspace(workspace) = &row.kind
@@ -3756,15 +3773,7 @@ impl Gui {
         }
         let rows = {
             let state = lock(&self.state);
-            ui::build_sidebar_filtered(
-                &state,
-                Rect::new(0, 0, nav.area.x, nav.height),
-                self.workspace_row_height(),
-                &self.theme,
-                self.sidebar_scroll,
-                self.sidebar_filter_arg(),
-            )
-            .rows
+            self.sidebar_rows(&state, Rect::new(0, 0, nav.area.x, nav.height))
         };
         let Some(row) = rows.iter().find(|row| row.rect.contains(point.0, point.1)) else {
             if self.same_click(point, ClickTarget::SidebarEmpty) {
@@ -3884,14 +3893,25 @@ impl Gui {
             .max(1);
         let total = {
             let state = lock(&self.state);
-            ui::build_sidebar_filtered(
-                &state,
-                area,
-                self.workspace_row_height(),
-                &self.theme,
-                0,
-                self.sidebar_filter_arg(),
-            )
+            match self.current_core_window() {
+                Some(core_id) => ui::build_sidebar_for_window(
+                    &state,
+                    &core_id,
+                    area,
+                    self.workspace_row_height(),
+                    &self.theme,
+                    0,
+                    self.sidebar_filter_arg(),
+                ),
+                None => ui::build_sidebar_filtered(
+                    &state,
+                    area,
+                    self.workspace_row_height(),
+                    &self.theme,
+                    0,
+                    self.sidebar_filter_arg(),
+                ),
+            }
             .total
         };
         let max = total.saturating_sub(capacity);
@@ -3913,15 +3933,7 @@ impl Gui {
         }
         let rows = {
             let state = lock(&self.state);
-            ui::build_sidebar_filtered(
-                &state,
-                Rect::new(0, 0, nav.area.x, nav.height),
-                self.workspace_row_height(),
-                &self.theme,
-                self.sidebar_scroll,
-                self.sidebar_filter_arg(),
-            )
-            .rows
+            self.sidebar_rows(&state, Rect::new(0, 0, nav.area.x, nav.height))
         };
         let Some(target) = rows.iter().find_map(|row| match &row.kind {
             ui::RowKind::Workspace(workspace)
@@ -5190,18 +5202,25 @@ impl Gui {
         self.recent.truncate(12);
     }
 
-    /// Palette rows for the current session: every workspace, the tabs of the
-    /// visible workspace, and every group.
+    /// Palette rows for the current session, scoped to this window: the
+    /// workspaces assigned to it, the tabs of the one it is showing, and the
+    /// groups it uses. A row for another window's workspace would switch
+    /// content the user cannot see from here.
     fn session_entries(&self) -> Vec<PaletteEntry> {
+        let window_id = self.current_core_window();
         let state = lock(&self.state);
+        let scope = window_id.as_deref();
         let mut entries = Vec::new();
         for workspace in &state.workspaces {
+            if !ui::in_window(workspace, scope) {
+                continue;
+            }
             entries.push(PaletteEntry::Workspace {
                 id: workspace.id.clone(),
                 name: workspace.name.clone(),
             });
         }
-        if let Some(workspace_id) = ui::active_workspace(&state)
+        if let Some(workspace_id) = ui::active_workspace_in(&state, scope)
             && let Some(workspace) = state.workspace(&workspace_id)
         {
             // A workspace with three untitled shells would otherwise give three
@@ -5223,7 +5242,15 @@ impl Gui {
                 }
             }
         }
+        // A group is only reachable from a window that has a workspace in it.
         for group in &state.groups {
+            let used = state.workspaces.iter().any(|workspace| {
+                ui::in_window(workspace, scope)
+                    && workspace.group_id.as_deref() == Some(group.id.as_str())
+            });
+            if !used {
+                continue;
+            }
             entries.push(PaletteEntry::Group {
                 id: group.id.clone(),
                 name: group.name.clone(),

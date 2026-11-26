@@ -1,6 +1,6 @@
 # Portable window (Linux, Windows, macOS)
 
-Status: through 0.21.1. One window per core window (several can be open), with real text,
+Status: through 0.21.2. One window per core window (several can be open), with real text,
 tabs, dividers, a sidebar with groups and agent rows, selection, clipboard, scrollback,
 shell integration, copy mode, paste history, a quick terminal, wallpaper and native menus
 on macOS. It is the shell the portable half of the project is built on, and the place where
@@ -53,6 +53,11 @@ correctly.
   Shift-clicking a workspace or group cycles its colour),
   pinned-first ordering, then attention rank, with the active surface's title,
   the workspace name and cwd, an agent line and an OSC 9;4 progress bar.
+- Each window's sidebar lists only the workspaces assigned to it, and a group row
+  appears only when that window has a workspace in it; the palette follows the same
+  scope. Painting and hit-testing share one builder, so a row that is drawn is
+  clickable and a row that is not drawn is not. A workspace with no `window_id` stays
+  visible in every window rather than becoming unreachable.
 - The sidebar edge drags between 180 and 360 points; `+` and double-clicking
   empty space create a workspace; middle-click closes a workspace or tab.
 - The sidebar scrolls with the wheel, and dragging a row reorders workspaces

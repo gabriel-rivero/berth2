@@ -386,14 +386,14 @@ stand.
 ## Known gaps after 0.17.0
 
 The 0.17 items that shipped partially or only in one shell, recorded so they are
-decisions and not oversights. Two items closed in 0.21.1 (command duration,
-recent-choice ranking) are no longer listed here.
+decisions and not oversights. Items closed in 0.21.1 (command duration,
+recent-choice ranking) and 0.21.2 (the palette's cross-window session rows) are no
+longer listed here.
 
 | Gap | Where it goes |
 | --- | --- |
 | Paste history is portable-only; the AppKit shell ignores the key and `Cmd+Shift+V` pastes through Ghostty | 1.0 AppKit parity |
 | Profiles and commands are offered in the portable palette only; the AppKit palette does not index them | 1.0 AppKit parity |
-| The palette's session rows are core-global, so a window's palette can list and switch to another window's workspace | 0.18 |
 | Palette rows are rebuilt on every paint; the list is uncapped, so a very large session makes each frame allocate | 0.18 |
 | AppKit has no palette entry for profiles, commands, layouts or session rows | 1.0 AppKit parity |
 | File drops are portable-only; the AppKit shell does not accept a dropped file yet | 1.0 AppKit parity |

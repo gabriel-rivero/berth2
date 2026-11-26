@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+
+- **A window's sidebar and palette show only its own workspaces.** Both were built
+  from the whole session, so with two windows open each listed the other's
+  workspaces; picking one moved content the user could not see from where they
+  clicked. Each window now resolves its own scope, and a group row is drawn only
+  when this window has a workspace in it. A workspace with no `window_id` stays
+  visible in every window, so it cannot become unreachable.
+- **Painting and hit-testing build the same sidebar.** They were five independent
+  call sites, so a scoped paint would have left clicks landing on rows that were
+  not drawn. Both now go through one builder.
+
 ## 0.21.1 — 2026-11-26
 
 ### Features
