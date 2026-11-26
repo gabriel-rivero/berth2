@@ -444,13 +444,19 @@ pub fn adjust(config: &mut Config, field: Field, delta: i32) -> Change {
                     return Change::Wallpaper;
                 }
                 WallpaperChoice::Desktop => {
-                    if config.wallpaper.follow_desktop {
+                    if config.wallpaper.follow_desktop && config.wallpaper.active() {
                         return Change::None;
                     }
                     config.wallpaper.follow_desktop = true;
                 }
                 WallpaperChoice::Path(path) => {
-                    if !config.wallpaper.follow_desktop && config.wallpaper.path == *path {
+                    // Coming back round to the configured path after Off left it
+                    // at zero strength must restore it, so "already on this
+                    // source" only short-circuits when it is actually drawn.
+                    if !config.wallpaper.follow_desktop
+                        && config.wallpaper.path == *path
+                        && config.wallpaper.active()
+                    {
                         return Change::None;
                     }
                     config.wallpaper.follow_desktop = false;
@@ -684,6 +690,30 @@ mod tests {
             "the path was lost after a full cycle"
         );
         assert!(seen.iter().any(|label| label == "off"));
+    }
+
+    #[test]
+    fn given_off_then_picking_the_configured_path_again_restores_it() {
+        // On a platform without the desktop source the cycle is just
+        // Off <-> Path, so this ordering is the one Linux and Windows take.
+        // Off zeroes the strength but keeps the path, and the step back to the
+        // path must restore a drawn source rather than short-circuit.
+        let mut config = Config {
+            wallpaper: crate::config::Wallpaper {
+                path: "/tmp/peaks.jpg".into(),
+                follow_desktop: false,
+                opacity: 30,
+            },
+            ..Config::default()
+        };
+        adjust(&mut config, Field::Wallpaper, 1);
+        assert_eq!(wallpaper_label(&config), "off");
+        adjust(&mut config, Field::Wallpaper, -1);
+        assert_eq!(wallpaper_label(&config), "peaks.jpg");
+        assert!(
+            config.wallpaper.active(),
+            "coming back to the path must draw it again, not stay at zero strength"
+        );
     }
 
     #[test]
