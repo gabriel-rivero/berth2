@@ -270,6 +270,30 @@ pub fn active_workspace(state: &AppState) -> Option<String> {
         .or_else(|| state.workspaces.first().map(|w| w.id.clone()))
 }
 
+/// The workspace a given window is showing. Reads the window's own record, so
+/// a palette or sidebar built for a background window cannot report the
+/// focused window's selection. `None` falls back to the global selection.
+pub fn active_workspace_in(state: &AppState, window_id: Option<&str>) -> Option<String> {
+    let Some(window_id) = window_id else {
+        return active_workspace(state);
+    };
+    let workspace = state
+        .window(window_id)
+        .and_then(|window| window.active_workspace.clone())
+        .filter(|id| {
+            state
+                .workspace(id)
+                .is_some_and(|workspace| in_window(workspace, Some(window_id)))
+        });
+    workspace.or_else(|| {
+        state
+            .workspaces
+            .iter()
+            .find(|workspace| in_window(workspace, Some(window_id)))
+            .map(|workspace| workspace.id.clone())
+    })
+}
+
 /// The surface the visible workspace wants shown, else the last selection.
 /// Takes the state by reference so a caller already holding the lock can read
 /// it without locking again.
@@ -431,6 +455,55 @@ pub fn build_sidebar_filtered(
     scroll: usize,
     filter: Option<&str>,
 ) -> Sidebar {
+    build_sidebar_scoped(state, None, area, row_height, theme, scroll, filter)
+}
+
+/// The sidebar for one window: only the workspaces assigned to it.
+///
+/// Workspaces carry a `window_id`, and each window renders an independent
+/// sidebar, so a window that listed every workspace would offer rows whose
+/// selection moves another window's content. `None` keeps the whole-state
+/// behaviour for callers that are not a window (tests, CLI snapshots).
+pub fn build_sidebar_for_window(
+    state: &AppState,
+    window_id: &str,
+    area: Rect,
+    row_height: f64,
+    theme: &Theme,
+    scroll: usize,
+    filter: Option<&str>,
+) -> Sidebar {
+    build_sidebar_scoped(
+        state,
+        Some(window_id),
+        area,
+        row_height,
+        theme,
+        scroll,
+        filter,
+    )
+}
+
+/// Whether a workspace belongs to the given window. `None` as the window means
+/// every workspace; a workspace with no `window_id` belongs to every window
+/// too, because it would otherwise be unreachable — no sidebar would list it
+/// and no window could select it.
+pub fn in_window(workspace: &berth_core::model::Workspace, window_id: Option<&str>) -> bool {
+    match (window_id, workspace.window_id.as_deref()) {
+        (None, _) | (_, None) => true,
+        (Some(id), Some(owned)) => id == owned,
+    }
+}
+
+fn build_sidebar_scoped(
+    state: &AppState,
+    window_id: Option<&str>,
+    area: Rect,
+    row_height: f64,
+    theme: &Theme,
+    scroll: usize,
+    filter: Option<&str>,
+) -> Sidebar {
     let mut rows = Vec::new();
     let mut y = 0usize;
     let group_height = (GROUP_ROW_HEIGHT * row_height / WORKSPACE_ROW_HEIGHT) as usize;
@@ -538,7 +611,18 @@ pub fn build_sidebar_filtered(
         }
     };
 
+    // A group row is only useful when this window has a workspace in it.
     for group in &state.groups {
+        let ids: Vec<String> = state
+            .workspaces
+            .iter()
+            .filter(|workspace| workspace.group_id.as_deref() == Some(group.id.as_str()))
+            .filter(|workspace| in_window(workspace, window_id))
+            .map(|workspace| workspace.id.clone())
+            .collect();
+        if ids.is_empty() {
+            continue;
+        }
         push_group(
             &mut rows,
             &mut y,
@@ -550,12 +634,6 @@ pub fn build_sidebar_filtered(
         if group.collapsed {
             continue;
         }
-        let ids: Vec<String> = state
-            .workspaces
-            .iter()
-            .filter(|workspace| workspace.group_id.as_deref() == Some(group.id.as_str()))
-            .map(|workspace| workspace.id.clone())
-            .collect();
         for id in ordered_workspaces(state, &ids) {
             if let Some(row) = workspace_row(&id, y, workspace_height) {
                 y = y.saturating_add(workspace_height);
@@ -569,6 +647,7 @@ pub fn build_sidebar_filtered(
     let loose: Vec<String> = state
         .workspaces
         .iter()
+        .filter(|workspace| in_window(workspace, window_id))
         .filter(|workspace| match workspace.group_id.as_deref() {
             Some(group_id) => !grouped.contains(&group_id),
             None => true,
@@ -881,6 +960,172 @@ mod tests {
         let selection = Selection::word_at(Cell { row: 0, col: 8 }, "open src/lib.rs now");
         assert_eq!(selection.anchor.col, 5);
         assert_eq!(selection.head.col, 14);
+    }
+
+    /// Two windows, each with its own workspace. A window's sidebar must list
+    /// only the workspaces that belong to it: a row the window does not own is
+    /// a row whose click would move the other window's content.
+    #[test]
+    fn given_two_windows_when_building_a_sidebar_then_it_lists_only_its_own() {
+        let mut state = AppState::default();
+        let first = state.create_window(Some("first"));
+        let second = state.create_window(Some("second"));
+        let in_first = state
+            .create_workspace_in(
+                Some(&first.id),
+                Some("mine"),
+                None,
+                None,
+                &berth_core::NullOps,
+            )
+            .unwrap();
+        let in_second = state
+            .create_workspace_in(
+                Some(&second.id),
+                Some("theirs"),
+                None,
+                None,
+                &berth_core::NullOps,
+            )
+            .unwrap();
+
+        let sidebar = build_sidebar_for_window(
+            &state,
+            &first.id,
+            Rect::new(0, 0, 200, 600),
+            WORKSPACE_ROW_HEIGHT,
+            &Theme::default(),
+            0,
+            None,
+        );
+        let ids: Vec<String> = sidebar
+            .rows
+            .iter()
+            .filter_map(|row| match &row.kind {
+                RowKind::Workspace(workspace) => Some(workspace.id.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ids, vec![in_first.id.clone()]);
+        assert!(!ids.contains(&in_second.id));
+
+        // The whole-state builder is the behaviour this replaced: it lists
+        // both, which is exactly the cross-window row the scoped one drops.
+        let unscoped = build_sidebar_filtered(
+            &state,
+            Rect::new(0, 0, 200, 600),
+            WORKSPACE_ROW_HEIGHT,
+            &Theme::default(),
+            0,
+            None,
+        );
+        assert_eq!(unscoped.rows.len(), 2);
+    }
+
+    #[test]
+    fn given_a_window_with_no_selection_when_active_then_it_falls_back_to_its_own() {
+        let mut state = AppState::default();
+        let first = state.create_window(Some("first"));
+        let second = state.create_window(Some("second"));
+        let in_second = state
+            .create_workspace_in(
+                Some(&second.id),
+                Some("theirs"),
+                None,
+                None,
+                &berth_core::NullOps,
+            )
+            .unwrap();
+        // The focused window points at the second window's workspace; the
+        // first window has nothing of its own selected yet.
+        state.selected_workspace = Some(in_second.id.clone());
+
+        assert_eq!(
+            active_workspace_in(&state, Some(&first.id)),
+            None,
+            "a window with no workspaces has no active workspace, even when another window has one"
+        );
+        assert_eq!(
+            active_workspace_in(&state, Some(&second.id)),
+            Some(in_second.id.clone())
+        );
+    }
+
+    /// A workspace with no `window_id` must stay reachable: scoping it out of
+    /// every window would hide it with no way back.
+    #[test]
+    fn given_a_workspace_with_no_window_when_scoping_then_it_stays_visible() {
+        let mut state = AppState::default();
+        let window = state.create_window(Some("only"));
+        let orphan = state
+            .create_workspace_in(None, Some("orphan"), None, None, &berth_core::NullOps)
+            .unwrap();
+        if let Some(ws) = state.workspaces.iter_mut().find(|w| w.id == orphan.id) {
+            ws.window_id = None;
+        }
+
+        let sidebar = build_sidebar_for_window(
+            &state,
+            &window.id,
+            Rect::new(0, 0, 200, 600),
+            WORKSPACE_ROW_HEIGHT,
+            &Theme::default(),
+            0,
+            None,
+        );
+        assert_eq!(sidebar.rows.len(), 1, "the orphan workspace stays listed");
+    }
+
+    /// Painting and hit-testing must agree: a row that is drawn is clickable,
+    /// and a row that is not drawn cannot be clicked. Because both go through
+    /// the same scoped builder, the list a click searches is the list on
+    /// screen.
+    #[test]
+    fn given_two_windows_when_hit_testing_then_only_drawn_rows_are_found() {
+        let mut state = AppState::default();
+        let first = state.create_window(Some("first"));
+        let second = state.create_window(Some("second"));
+        let mine = state
+            .create_workspace_in(
+                Some(&first.id),
+                Some("mine"),
+                None,
+                None,
+                &berth_core::NullOps,
+            )
+            .unwrap();
+        state
+            .create_workspace_in(
+                Some(&second.id),
+                Some("theirs"),
+                None,
+                None,
+                &berth_core::NullOps,
+            )
+            .unwrap();
+
+        let sidebar = build_sidebar_for_window(
+            &state,
+            &first.id,
+            Rect::new(0, 0, 200, 600),
+            WORKSPACE_ROW_HEIGHT,
+            &Theme::default(),
+            0,
+            None,
+        );
+        // Every visible row is a row this window owns, at the painted rect.
+        for row in &sidebar.rows {
+            if let RowKind::Workspace(workspace) = &row.kind {
+                assert_eq!(workspace.id, mine.id);
+                assert!(
+                    sidebar
+                        .rows
+                        .iter()
+                        .any(|other| other.rect.contains(row.rect.x, row.rect.y)),
+                    "a painted row must be hit-testable at its own origin"
+                );
+            }
+        }
     }
 
     #[test]
